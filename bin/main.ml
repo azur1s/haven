@@ -16,7 +16,7 @@ let process path =
     match lex content ~file:path with
     | Ok xs ->
       (match parse xs ~file:path with
-      | Ok (exp, s) -> print_endline @@ show_cst exp ^ " @ " ^ show_span_no_file s
+      | Ok tops -> List.iter (fun (t, _) -> print_endline @@ show_cst_top t) tops
       | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc)
     | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc;
   with e ->

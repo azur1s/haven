@@ -20,11 +20,22 @@ type cst =
   | CLet of
     { name: string spanned
     ; body: cst spanned
-    ; args: (string spanned * typ option) list
+    ; args: (string spanned * typ option) list option
     ; ret: typ option
     ; in_: cst spanned
     }
   [@@deriving show]
+
+and cst_top =
+  | CTLet of
+    { name: string spanned
+    ; body: cst spanned
+    (* List option because if `args` is some and is an empty list then it is a
+       function with no arguments but if it is none then it is just a variable
+       definition *)
+    ; args: (string spanned * typ option) list option
+    ; ret: typ option
+    }
 
 type p =
   { input: token spanned list
@@ -32,6 +43,7 @@ type p =
   ; mutable loc: int
   }
 
+(* TODO location here mean the index to the input token array, not source characters *)
 let make_span p start =
   { file = p.file
   ; start = start
@@ -57,6 +69,9 @@ let advance p =
     Some (p.input @ (p.loc - 1))
   ) else
     None
+
+let rewind p loc =
+  p.loc <- loc
 
 let advance_return p r =
   let _ = advance p
@@ -96,6 +111,16 @@ let many_delim p f delim =
   in
   many_acc p []
 
+let many_of f p =
+  let rec aux acc =
+    match peek p, f p with
+    | Some _, Ok v ->
+      aux (v :: acc)
+    | Some _, Error e -> Error e
+    | None, _ -> Ok (List.rev acc)
+  in
+  aux []
+
 let many_cond p f =
   let rec many_cond_acc p acc =
     match peek p with
@@ -118,7 +143,7 @@ let parse_typ p =
   | Some (t, s) -> Error ("Expected type, found " ^ string_of_token t, s)
   | None -> Error ("Expected type, found end of file", make_span p p.loc)
 
-let parse_args p =
+let parse_let_args p =
   let rec parse_loop p acc =
     match peek p with
     | Some (TkSym s, span) ->
@@ -131,9 +156,18 @@ let parse_args p =
       let* typ = parse_typ p in
       let* _ = expect p @@ TkClose Paren in
       parse_loop p @@ (sym, Some typ) :: acc
-    | _ -> Ok (List.rev acc)
+    | _ ->
+      if acc = [] then
+        Ok None
+      else
+        Ok (Some (List.rev acc))
   in
-  parse_loop p []
+  (* Handle special form `let f () = ...` *)
+  match peek p with
+  | Some (TkUnit, _) ->
+    let _ = advance p in
+    Ok (Some [])
+  | _ -> parse_loop p []
 
 let rec parse_atom p =
   match peek p with
@@ -159,7 +193,7 @@ let rec parse_atom p =
     | TkLet ->
       let _ = advance p in
       let* sym = parse_sym p in
-      let* args = parse_args p in
+      let* args = parse_let_args p in
       let colon = maybe p TkColon in
       let* typ = if Option.is_some colon
         then Result.map Option.some (parse_typ p)
@@ -181,8 +215,8 @@ let rec parse_atom p =
       let* exprs = many_delim p (fun p -> parse_expr p 0) TkSemi in
       let* (_, end_span) = expect p (TkClose Brace) in
       Ok (CBlock exprs, span_union span end_span)
-    | t -> Error ("Expected atom, found " ^ string_of_token t, span))
-  | None -> Error ("Expected atom, found end of file", make_span p p.loc)
+    | t -> Error ("Expected expression, found " ^ string_of_token t, span))
+  | None -> Error ("Expected expression, found end of file", make_span p p.loc)
 
 and binding_power = function
   | Mul | Div | Mod -> 50, 51
@@ -193,6 +227,7 @@ and binding_power = function
 
 and parse_expr p min_bp =
   let rec parse_loop lhs =
+    let rewind_point = p.loc in
     match peek p with
     (* Binary operator *)
     | Some (TkBin bin, _) ->
@@ -208,17 +243,47 @@ and parse_expr p min_bp =
       (* Try parse, if goes wrong (e.g. found keywords) just return lhs *)
       (match parse_expr p min_bp with
       | Ok x -> parse_loop (CApp (lhs, x), span_union (snd lhs) (snd x))
-      | Error _ -> Ok lhs)
+      | Error _ ->
+        rewind p rewind_point;
+        Ok lhs)
     | None -> Ok lhs
   in
 
   let* lhs = parse_atom p in
   parse_loop lhs
 
+and parse_top p =
+  match peek p with
+  | Some (t, span) -> (match t with
+    | TkLet ->
+      let _ = advance p in
+      let* sym = parse_sym p in
+      let* args = parse_let_args p in
+      let colon = maybe p TkColon in
+      let* typ = if Option.is_some colon
+        then Result.map Option.some (parse_typ p)
+        else Ok None
+      in
+      let* _ = expect p TkAssign in
+      let* body = parse_expr p 0 in
+      Ok (CTLet
+        { name = sym
+        ; body = body
+        ; args = args
+        ; ret = typ
+        }, span_union span (snd body))
+    | t -> Error ("Expected top level statement, found " ^ string_of_token t, span))
+  | None -> Error ("Expected top level statement, found end of file", make_span p p.loc)
+
+and parse_tops p =
+  many_of parse_top p
+
 let parse ?(file="<anonymous>") tks =
   let p = { input = tks; file = file; loc = 0 } in
-  match parse_expr p 0 with
-  | Ok v -> if List.length p.input = p.loc - 1
+  let res = parse_tops p in
+  match res with
+  | Ok v ->
+    if List.length p.input = p.loc - 1
       then Ok v
       else let next = advance p in
         (match next with

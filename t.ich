@@ -1,5 +1,4 @@
-let add (a : int) (b : int) : int = a + b in
-let succ (i : int) : int = i + 1 in
-let a : int = 34 in
-let b : int = 35 in
-    print a + b
+let foo = 34
+let main () =
+  let succ i = i + 1 in
+   print foo + succ foo

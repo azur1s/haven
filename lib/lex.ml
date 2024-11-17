@@ -136,7 +136,7 @@ let bin_of_string = function
   | ">=" -> Gte
   | "&&" -> And
   | "||" -> Or
-  | _ -> unreachable __LOC__
+  | b -> unreachable @@ __LOC__ ^ " " ^ b
 
 let is_atom_char = function
   | 'a'..'z' | 'A'..'Z' | '_' -> true
@@ -158,6 +158,12 @@ let rec tokenize_acc l acc =
     match peek { l with loc = l.loc + 1 } with
     | Some c -> f c
     | None -> false
+  in
+
+  let when_peek_is_or_end f =
+    match peek { l with loc = l.loc + 1 } with
+    | Some c -> f c
+    | None -> true
   in
 
   match peek l with
@@ -190,7 +196,8 @@ let rec tokenize_acc l acc =
       let _ = advance l in
       let span = make_span l start in
       tokenize_acc l @@ (TkUnit, span) :: acc
-    | c when char_one_of ";:" c || (c = '=' && when_peek_is (fun x -> is_ws x)) ->
+    | c when char_one_of ";:" c
+    || (c = '=' && when_peek_is_or_end (fun x -> is_ws x)) ->
       let _ = advance l in
       let span = make_span l start in
       tokenize_acc l @@ (delim_of_string (String.make 1 c), span) :: acc
