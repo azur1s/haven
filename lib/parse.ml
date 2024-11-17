@@ -3,12 +3,15 @@ open Loc
 open Lex
 open Typed
 
-type cst =
-  | CUnit
-  | CBool  of bool
-  | CInt   of int
-  | CFloat of float
-  | CSym   of string
+type lit =
+  | LUnit
+  | LBool  of bool
+  | LInt   of int
+  | LFloat of float
+  | LSym   of string
+
+and cst =
+  | CLit   of lit
   | CBin   of cst spanned * bin * cst spanned
   | CApp   of cst spanned * cst spanned
   | CIf of
@@ -24,6 +27,15 @@ type cst =
     ; ret: typ option
     ; in_: cst spanned
     }
+  | CCase of
+    { value: cst spanned
+    ; pats: (pattern spanned * cst spanned) list
+    ; else_: cst spanned
+    }
+  [@@deriving show]
+
+and pattern =
+  | PatLit of lit
   [@@deriving show]
 
 and cst_top =
@@ -43,7 +55,7 @@ type p =
   ; mutable loc: int
   }
 
-(* TODO location here mean the index to the input token array, not source characters *)
+(* Location here mean the index to the input token array, not source characters *)
 let make_span p start =
   { file = p.file
   ; start = start
@@ -74,8 +86,21 @@ let rewind p loc =
   p.loc <- loc
 
 let advance_return p r =
-  let _ = advance p
-  in r
+  let _ = advance p in r
+
+(* NOTE `expect_then` already advances for you, don't do `let _ = advance p`
+   again inside the function to avoid skipping tokens *)
+let expect_then p f expect_str =
+  let rewind_pos = p.loc in
+  match peek p with
+  | Some t ->
+    let _ = advance p in
+    (match f t with
+    | Ok v -> Ok v
+    | Error e ->
+      rewind p rewind_pos;
+      Error e)
+  | None -> Error ("Expected " ^ expect_str ^ ", found end of file", make_span p p.loc)
 
 let expect_cond p f expect_str =
   match peek p with
@@ -111,11 +136,21 @@ let many_delim p f delim =
   in
   many_acc p []
 
-let many_of f p =
+let many_until f p end_token =
   let rec aux acc =
     match peek p, f p with
-    | Some _, Ok v ->
-      aux (v :: acc)
+    | Some (t, _), _ when t = end_token -> Ok (List.rev acc)
+    | Some _, Ok v -> aux (v :: acc)
+    | Some _, Error e -> Error e
+    (* TODO error instead of returing parsed *)
+    | None, _ -> Ok (List.rev acc)
+  in
+  aux []
+
+let many_until_end f p =
+  let rec aux acc =
+    match peek p, f p with
+    | Some _, Ok v -> aux (v :: acc)
     | Some _, Error e -> Error e
     | None, _ -> Ok (List.rev acc)
   in
@@ -169,14 +204,25 @@ let parse_let_args p =
     Ok (Some [])
   | _ -> parse_loop p []
 
+let parse_case_pat p =
+  let inf = "case pattern" in
+  expect_then p (fun (t, span) -> match t with
+  | TkUnit    -> Ok (PatLit LUnit, span)
+  | TkBool  x -> Ok (PatLit (LBool x), span)
+  | TkInt   x -> Ok (PatLit (LInt x), span)
+  | TkFloat x -> Ok (PatLit (LFloat x), span)
+  | TkSym   x -> Ok (PatLit (LSym x), span)
+  | t -> Error ("Expected " ^ inf ^ ", found " ^ string_of_token t, span))
+  inf
+
 let rec parse_atom p =
   match peek p with
   | Some (t, span) -> (match t with
-    | TkUnit -> advance_return p (Ok (CUnit, span))
-    | TkBool  x -> advance_return p (Ok (CBool x, span))
-    | TkInt   x -> advance_return p (Ok (CInt x, span))
-    | TkFloat x -> advance_return p (Ok (CFloat x, span))
-    | TkSym   x -> advance_return p (Ok (CSym x, span))
+    | TkUnit -> advance_return p (Ok (CLit LUnit, span))
+    | TkBool  x -> advance_return p (Ok (CLit (LBool x), span))
+    | TkInt   x -> advance_return p (Ok (CLit (LInt x), span))
+    | TkFloat x -> advance_return p (Ok (CLit (LFloat x), span))
+    | TkSym   x -> advance_return p (Ok (CLit (LSym x), span))
     | TkOpen Paren ->
       let _ = advance p in
       let* (exp, _) = parse_expr p 0 in
@@ -215,6 +261,38 @@ let rec parse_atom p =
       let* exprs = many_delim p (fun p -> parse_expr p 0) TkSemi in
       let* (_, end_span) = expect p (TkClose Brace) in
       Ok (CBlock exprs, span_union span end_span)
+    | TkCase ->
+      let parse_case_clause p =
+        let inf = "case clause" in
+        expect_then p (fun (t, span) -> match t with
+        | TkBar ->
+          let* pat = parse_case_pat p in
+          let* _ = expect p TkArrow in
+          let* exp = parse_expr p 0 in
+          Ok (pat, exp)
+        | t -> Error ("Expected " ^ inf ^ ", found " ^ string_of_token t, span))
+        inf
+      in
+      let parse_case_else_clause p =
+        let inf = "case else clause" in
+        expect_then p (fun (t, span) -> match t with
+        | TkBarElse ->
+          let* exp = parse_expr p 0 in
+          Ok exp
+        | t -> Error ("Expected " ^ inf ^ ", found " ^ string_of_token t, span))
+        inf
+      in
+
+      let _ = advance p in
+      let* value = parse_expr p 0 in
+      let* _ = expect p TkOf in
+      let* clauses = many_until (fun p -> parse_case_clause p) p TkBarElse in
+      let* else_ = parse_case_else_clause p in
+      Ok (CCase
+        { value = value
+        ; pats = clauses
+        ; else_ = else_
+        }, span_union span (snd else_))
     | t -> Error ("Expected expression, found " ^ string_of_token t, span))
   | None -> Error ("Expected expression, found end of file", make_span p p.loc)
 
@@ -276,7 +354,7 @@ and parse_top p =
   | None -> Error ("Expected top level statement, found end of file", make_span p p.loc)
 
 and parse_tops p =
-  many_of parse_top p
+  many_until_end parse_top p
 
 let parse ?(file="<anonymous>") tks =
   let p = { input = tks; file = file; loc = 0 } in

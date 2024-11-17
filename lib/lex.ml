@@ -14,11 +14,15 @@ type token =
   | TkAssign
   | TkSemi
   | TkColon
+  | TkBar
+  | TkBarElse
+  | TkArrow
   | TkOpen  of delim
   | TkClose of delim
   (* Keywords *)
   | TkIf  | TkThen | TkElse
   | TkLet | TkIn
+  | TkCase | TkOf
   [@@deriving show]
 
 and bin =
@@ -58,6 +62,9 @@ let string_of_token = function
   | TkAssign -> "="
   | TkSemi -> ";"
   | TkColon -> ":"
+  | TkBar -> "|"
+  | TkBarElse -> "\\"
+  | TkArrow -> "->"
   | TkOpen  x -> (match x with
     | Paren -> "("
     | Brack -> "["
@@ -72,6 +79,8 @@ let string_of_token = function
   | TkElse -> "else"
   | TkLet  -> "let"
   | TkIn   -> "in"
+  | TkCase -> "case"
+  | TkOf   -> "of"
 
 type l =
   { input: string
@@ -113,6 +122,8 @@ let delim_of_string = function
   | "=" -> TkAssign
   | ";" -> TkSemi
   | ":" -> TkColon
+  | "|" -> TkBar
+  | "\\" -> TkBarElse
   | _ -> unreachable __LOC__
 
 let char_one_of str c = List.exists ((=) c) (explode str)
@@ -196,8 +207,12 @@ let rec tokenize_acc l acc =
       let _ = advance l in
       let span = make_span l start in
       tokenize_acc l @@ (TkUnit, span) :: acc
-    | c when char_one_of ";:" c
-    || (c = '=' && when_peek_is_or_end (fun x -> is_ws x)) ->
+    | c when c = '-' && when_peek_is ((=) '>') ->
+      let _ = advance l in
+      let _ = advance l in
+      let span = make_span l start in
+      tokenize_acc l @@ (TkArrow, span) :: acc
+    | c when char_one_of "=;:|\\" c && when_peek_is_or_end (fun x -> is_ws x) ->
       let _ = advance l in
       let span = make_span l start in
       tokenize_acc l @@ (delim_of_string (String.make 1 c), span) :: acc
@@ -266,6 +281,8 @@ let rec tokenize_acc l acc =
           | "else"  -> TkElse
           | "let"   -> TkLet
           | "in"    -> TkIn
+          | "case"  -> TkCase
+          | "of"    -> TkOf
           | _ -> TkSym acc
       in
       let _ = advance l in
