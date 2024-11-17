@@ -1,5 +1,5 @@
+open Common
 open Loc
-open Lex
 
 type term =
   | TUnit
@@ -14,12 +14,18 @@ type term =
     ; t: term spanned
     ; f: term spanned
     }
-  | CBlock of term spanned list
-  | CLet of
+  | TBlock of term spanned list
+  | TLet of
     { name: string spanned
     ; body: term spanned * typ
-    ; args: (string * typ) spanned list
+    ; args: (string spanned * typ) list
+    ; ret: typ
     ; in_: term spanned
+    }
+  | TCase of
+    { value: term spanned
+    ; pats: (pattern spanned * term spanned) list
+    ; else_: term spanned
     }
   [@@deriving show]
 

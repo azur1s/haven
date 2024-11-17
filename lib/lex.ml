@@ -1,3 +1,4 @@
+open Common
 open Utils
 open Loc
 
@@ -23,12 +24,6 @@ type token =
   | TkIf  | TkThen | TkElse
   | TkLet | TkIn
   | TkCase | TkOf
-  [@@deriving show]
-
-and bin =
-  | Add | Sub | Mul | Div | Mod
-  | Eq  | Neq | Lt  | Lte | Gt | Gte
-  | And | Or
   [@@deriving show]
 
 and delim =

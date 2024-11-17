@@ -1,16 +1,10 @@
+open Common
 open Utils
 open Loc
 open Lex
 open Typed
 
-type lit =
-  | LUnit
-  | LBool  of bool
-  | LInt   of int
-  | LFloat of float
-  | LSym   of string
-
-and cst =
+type cst =
   | CLit   of lit
   | CBin   of cst spanned * bin * cst spanned
   | CApp   of cst spanned * cst spanned
@@ -32,10 +26,6 @@ and cst =
     ; pats: (pattern spanned * cst spanned) list
     ; else_: cst spanned
     }
-  [@@deriving show]
-
-and pattern =
-  | PatLit of lit
   [@@deriving show]
 
 and cst_top =

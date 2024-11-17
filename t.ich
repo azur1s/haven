@@ -1,9 +1,0 @@
-let foo x =
-  case x of
-  | 0 -> true
-  | 1 ->
-    if x - 1 == 0 then
-      true
-    else
-      false
-  \ false
