@@ -1,0 +1,6 @@
+(executable
+ (public_name ichor)
+ (name main)
+ (modules main)
+ (libraries ichor cmdliner)
+ (preprocess (pps ppx_deriving.show)))
