@@ -25,7 +25,7 @@ let process path =
 
 let path =
   let doc = "The input file" in
-  Arg.(value & pos 0 string "" & info [] ~docv:"INPUT" ~doc)
+  Arg.(required & pos 0 (some string) None & info [] ~docv:"INPUT" ~doc)
 let process_t = Term.(const process $ path)
 let cmd = Cmd.v (Cmd.info "input file") process_t
 
