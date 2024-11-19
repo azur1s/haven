@@ -1,4 +1,8 @@
-let test : list(int) = [1; 2; 3]
+let map (f : a -> b) (xs : a list) : b list = todo
+
+let succ (x : int) : int = x + 1
+
+let test : int list = map succ [1; 2; 3]
 
 let main () : unit =
   let val : int = 42 in

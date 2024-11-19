@@ -151,24 +151,33 @@ let many_cond p f =
   many_cond_acc p []
 
 let rec parse_typ p =
-  match peek p with
-  | Some (TkSym s, _) ->
-    let _ = advance p in
-    (match peek p with
-    | Some (TkOpen Paren, _) ->
-      let _ = advance p in
-      let* t = parse_typ p in
-      let* _ = expect p (TkClose Paren) in
-      Ok (TyConstructor (t, TyConst s))
-    | _ ->
-      (match s with
+  let parse_typ_atom p =
+    match peek p with
+    | Some (TkSym s, _) ->
+      advance_return p (match s with
       | "unit"  -> Ok (TyConst "unit")
       | "bool"  -> Ok (TyConst "bool")
       | "int"   -> Ok (TyConst "int")
       | "float" -> Ok (TyConst "float")
-      | s -> Ok (TyConst s)))
-  | Some (t, s) -> Error ("Expected type, found " ^ string_of_token t, s)
-  | None -> Error ("Expected type, found end of file", make_span p p.loc)
+      | s -> Ok (TyConst s))
+    | Some (t, s) -> Error ("Expected type, found " ^ string_of_token t, s)
+    | None -> Error ("Expected type, found end of file", make_span p p.loc)
+  in
+  let rec parse_typ_loop lhs =
+    match peek p with
+    | Some (TkArrow, _) ->
+      let _ = advance p in
+      let* rhs = parse_typ p in
+      parse_typ_loop (TyArrow (lhs, rhs))
+    | Some (TkSym f, _) ->
+      (match parse_typ_atom p with
+      | Ok x -> parse_typ_loop (TyConstructor (x, lhs))
+      | Error _ ->
+        Ok (TyConstructor (TyConst f, lhs)))
+    | _ -> Ok lhs
+  in
+  let* lhs = parse_typ_atom p in
+  parse_typ_loop lhs
 
 let parse_let_args p =
   let rec parse_loop p acc =

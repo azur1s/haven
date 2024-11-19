@@ -23,7 +23,6 @@ let process path =
         (* List.iter (fun (t, _) -> print_endline @@ show_cst_top t) tops; *)
         let (tops, errs) = infer tops in
         List.iter (fun (t, _) -> print_endline @@ show_term_top t) tops;
-        print_newline ();
         List.iter (fun (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc) errs;
       | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc)
     | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc;
