@@ -17,3 +17,7 @@ and bin =
   | Eq  | Neq | Lt  | Lte | Gt | Gte
   | And | Or
   [@@deriving show]
+
+and typ =
+  | TyConst of string
+  | TyArrow of typ * typ

@@ -1,0 +1,5 @@
+let main () : unit =
+  let val : int = 42 in
+  case val of
+  | 42 -> println 0
+  \ println val

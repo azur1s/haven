@@ -2,7 +2,6 @@ open Common
 open Utils
 open Loc
 open Lex
-open Typed
 
 type cst =
   | CLit   of lit
@@ -38,6 +37,7 @@ and cst_top =
     ; args: (string spanned * typ option) list option
     ; ret: typ option
     }
+  [@@deriving show]
 
 type p =
   { input: token spanned list
@@ -51,13 +51,6 @@ let make_span p start =
   ; start = start
   ; end_ = p.loc
   }
-
-let ( let* ) x f =
-  match x with
-  | Ok v -> f v
-  | Error e -> Error e
-
-let ( @ ) list i = List.nth list i
 
 let peek p =
   if p.loc < List.length p.input then
@@ -160,11 +153,13 @@ let parse_typ p =
   match peek p with
   | Some (TkSym s, _) ->
     let _ = advance p in (match s with
-    | "unit"  -> Ok TyUnit
-    | "bool"  -> Ok TyBool
-    | "int"   -> Ok TyInt
-    | "float" -> Ok TyFloat
-    | s -> Ok (TyCustom s))
+    | "unit"  -> Ok (TyConst "unit")
+    | "bool"  -> Ok (TyConst "bool")
+    | "int"   -> Ok (TyConst "int")
+    | "float" -> Ok (TyConst "float")
+    (* TODO custom types *)
+    | _ -> todo @@ __LOC__ ^ " custom types")
+    (* | s -> Ok (TyConst s)) *)
   | Some (t, s) -> Error ("Expected type, found " ^ string_of_token t, s)
   | None -> Error ("Expected type, found end of file", make_span p p.loc)
 
@@ -220,18 +215,18 @@ let rec parse_atom p =
       Ok (exp, span_union span end_span)
     | TkIf ->
       let _ = advance p in
-      let* exp = parse_expr p 0 in
+      let* cond = parse_expr p 0 in
       let* _ = expect p TkThen in
       let* t = parse_expr p 0 in
       let* _ = expect p TkElse in
       let* f = parse_expr p 0 in
-      Ok (CIf { cond = exp; t = t; f = f; }, span_union span (snd f))
+      Ok (CIf { cond; t; f; }, span_union span (snd f))
     | TkLet ->
       let _ = advance p in
-      let* sym = parse_sym p in
+      let* name = parse_sym p in
       let* args = parse_let_args p in
       let colon = maybe p TkColon in
-      let* typ = if Option.is_some colon
+      let* ret = if Option.is_some colon
         then Result.map Option.some (parse_typ p)
         else Ok None
       in
@@ -240,11 +235,11 @@ let rec parse_atom p =
       let* _ = expect p TkIn in
       let* in_ = parse_expr p 0 in
       Ok (CLet
-        { name = sym
-        ; body = body
-        ; args = args
-        ; ret = typ
-        ; in_ = in_
+        { name
+        ; body
+        ; args
+        ; ret
+        ; in_
         }, span_union span (snd in_))
     | TkOpen Brace ->
       let _ = advance p in
@@ -276,12 +271,12 @@ let rec parse_atom p =
       let _ = advance p in
       let* value = parse_expr p 0 in
       let* _ = expect p TkOf in
-      let* clauses = many_until (fun p -> parse_case_clause p) p TkBarElse in
+      let* pats = many_until (fun p -> parse_case_clause p) p TkBarElse in
       let* else_ = parse_case_else_clause p in
       Ok (CCase
-        { value = value
-        ; pats = clauses
-        ; else_ = else_
+        { value
+        ; pats
+        ; else_
         }, span_union span (snd else_))
     | t -> Error ("Expected expression, found " ^ string_of_token t, span))
   | None -> Error ("Expected expression, found end of file", make_span p p.loc)
