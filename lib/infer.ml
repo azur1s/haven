@@ -5,6 +5,7 @@ open Parse
 
 type term =
   | TLit   of lit
+  | TList  of term spanned list
   | TBin   of term spanned * bin * term spanned
   | TApp   of term spanned * term spanned
   | TIf of
@@ -43,6 +44,9 @@ let rec infer_unwrap cst =
 
   match (fst cst) with
   | CLit l -> oks @@ TLit l
+  | CList l ->
+    let* l = map_early_return infer_unwrap l in
+    oks @@ TList l
   | CBin (a, op, b) ->
     let* a = infer_unwrap a in
     let* b = infer_unwrap b in

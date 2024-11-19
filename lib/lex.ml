@@ -148,28 +148,11 @@ let is_atom_char = function
   | 'a'..'z' | 'A'..'Z' | '_' -> true
   | _ -> false
 
-let to_delim s =
-  let t = function
-    | '(' | ')' -> Paren
-    | '[' | ']' -> Brack
-    | '{' | '}' -> Brace
-    | _ -> unreachable __LOC__
-  in match s with
-    | '(' | '[' | '{' -> TkOpen (t s)
-    | ')' | ']' | '}' -> TkClose (t s)
-    | _ -> unreachable __LOC__
-
 let rec tokenize_acc l acc =
   let when_peek_is f =
     match peek { l with loc = l.loc + 1 } with
     | Some c -> f c
     | None -> false
-  in
-
-  let when_peek_is_or_end f =
-    match peek { l with loc = l.loc + 1 } with
-    | Some c -> f c
-    | None -> true
   in
 
   match peek l with
@@ -207,14 +190,33 @@ let rec tokenize_acc l acc =
       let _ = advance l in
       let span = make_span l start in
       tokenize_acc l @@ (TkArrow, span) :: acc
-    | c when char_one_of "=;:|\\" c && when_peek_is_or_end (fun x -> is_ws x) ->
+    | c when (c = '=' && when_peek_is ((!=) '='))
+    || char_one_of ";:|\\" c ->
       let _ = advance l in
       let span = make_span l start in
-      tokenize_acc l @@ (delim_of_string (String.make 1 c), span) :: acc
+      let delim =
+        match c with
+        | '=' -> TkAssign
+        | ';' -> TkSemi
+        | ':' -> TkColon
+        | '|' -> TkBar
+        | '\\' -> TkBarElse
+        | _ -> unreachable __LOC__
+      in
+      tokenize_acc l @@ (delim, span) :: acc
     | '(' | ')' | '[' | ']' | '{' | '}' ->
       let _ = advance l in
       let span = make_span l start in
-      tokenize_acc l @@ (to_delim c, span) :: acc
+      let delim = match c with
+        | '(' -> TkOpen Paren
+        | '[' -> TkOpen Brack
+        | '{' -> TkOpen Brack
+        | ')' -> TkClose Paren
+        | ']' -> TkClose Brack
+        | '}' -> TkClose Brace
+        | _ -> unreachable __LOC__
+      in
+      tokenize_acc l @@ (delim, span) :: acc
     (* Numbers *)
     | c when is_digit c || c = '.'
     || (c = '-' && when_peek_is (fun x -> is_digit x || x = '.')) ->

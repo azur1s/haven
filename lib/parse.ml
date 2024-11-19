@@ -5,6 +5,7 @@ open Lex
 
 type cst =
   | CLit   of lit
+  | CList  of cst spanned list
   | CBin   of cst spanned * bin * cst spanned
   | CApp   of cst spanned * cst spanned
   | CIf of
@@ -149,17 +150,23 @@ let many_cond p f =
   in
   many_cond_acc p []
 
-let parse_typ p =
+let rec parse_typ p =
   match peek p with
   | Some (TkSym s, _) ->
-    let _ = advance p in (match s with
-    | "unit"  -> Ok (TyConst "unit")
-    | "bool"  -> Ok (TyConst "bool")
-    | "int"   -> Ok (TyConst "int")
-    | "float" -> Ok (TyConst "float")
-    (* TODO custom types *)
-    | _ -> todo @@ __LOC__ ^ " custom types")
-    (* | s -> Ok (TyConst s)) *)
+    let _ = advance p in
+    (match peek p with
+    | Some (TkOpen Paren, _) ->
+      let _ = advance p in
+      let* t = parse_typ p in
+      let* _ = expect p (TkClose Paren) in
+      Ok (TyConstructor (t, TyConst s))
+    | _ ->
+      (match s with
+      | "unit"  -> Ok (TyConst "unit")
+      | "bool"  -> Ok (TyConst "bool")
+      | "int"   -> Ok (TyConst "int")
+      | "float" -> Ok (TyConst "float")
+      | s -> Ok (TyConst s)))
   | Some (t, s) -> Error ("Expected type, found " ^ string_of_token t, s)
   | None -> Error ("Expected type, found end of file", make_span p p.loc)
 
@@ -208,11 +215,17 @@ let rec parse_atom p =
     | TkInt   x -> advance_return p (Ok (CLit (LInt x), span))
     | TkFloat x -> advance_return p (Ok (CLit (LFloat x), span))
     | TkSym   x -> advance_return p (Ok (CLit (LSym x), span))
+    (* (expr) *)
     | TkOpen Paren ->
       let _ = advance p in
       let* (exp, _) = parse_expr p 0 in
       let* (_, end_span) = expect p (TkClose Paren) in
       Ok (exp, span_union span end_span)
+    | TkOpen Brack ->
+      let _ = advance p in
+      let* exprs = many_delim p (fun p -> parse_expr p 0) TkSemi in
+      let* (_, end_span) = expect p (TkClose Brack) in
+      Ok (CList exprs, span_union span end_span)
     | TkIf ->
       let _ = advance p in
       let* cond = parse_expr p 0 in
