@@ -20,5 +20,6 @@ and bin =
 
 and typ =
   | TyConst of string
+  | TyTuple of typ * typ
   | TyArrow of typ * typ
   | TyConstructor of typ * typ

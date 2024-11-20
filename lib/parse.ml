@@ -150,7 +150,7 @@ let many_cond p f =
   in
   many_cond_acc p []
 
-let rec parse_typ p =
+let rec parse_typ p min_bp =
   let parse_typ_atom p =
     match peek p with
     | Some (TkSym s, _) ->
@@ -166,9 +166,21 @@ let rec parse_typ p =
   let rec parse_typ_loop lhs =
     match peek p with
     | Some (TkArrow, _) ->
-      let _ = advance p in
-      let* rhs = parse_typ p in
-      parse_typ_loop (TyArrow (lhs, rhs))
+      let power = 10 in
+      if power < min_bp then
+        Ok lhs
+      else
+        let _ = advance p in
+        let* rhs = parse_typ p @@ power + 1 in
+        parse_typ_loop (TyArrow (lhs, rhs))
+    | Some (TkBin Mul, _) ->
+      let power = 20 in
+      if power < min_bp then
+        Ok lhs
+      else
+        let _ = advance p in
+        let* rhs = parse_typ p @@ power + 1 in
+        parse_typ_loop (TyTuple (lhs, rhs))
     | Some (TkSym f, _) ->
       (match parse_typ_atom p with
       | Ok x -> parse_typ_loop (TyConstructor (x, lhs))
@@ -189,7 +201,7 @@ let parse_let_args p =
       let _ = advance p in
       let* sym = parse_sym p in
       let* _ = expect p TkColon in
-      let* typ = parse_typ p in
+      let* typ = parse_typ p 0 in
       let* _ = expect p @@ TkClose Paren in
       parse_loop p @@ (sym, Some typ) :: acc
     | _ ->
@@ -249,7 +261,7 @@ let rec parse_atom p =
       let* args = parse_let_args p in
       let colon = maybe p TkColon in
       let* ret = if Option.is_some colon
-        then Result.map Option.some (parse_typ p)
+        then Result.map Option.some (parse_typ p 0)
         else Ok None
       in
       let* _ = expect p TkAssign in
@@ -346,7 +358,7 @@ and parse_top p =
       let* args = parse_let_args p in
       let colon = maybe p TkColon in
       let* typ = if Option.is_some colon
-        then Result.map Option.some (parse_typ p)
+        then Result.map Option.some (parse_typ p 0)
         else Ok None
       in
       let* _ = expect p TkAssign in

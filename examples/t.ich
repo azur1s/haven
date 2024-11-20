@@ -1,3 +1,5 @@
+let foo (f : a * b -> c * d) : unit = todo
+
 let map (f : a -> b) (xs : a list) : b list = todo
 
 let succ (x : int) : int = x + 1
