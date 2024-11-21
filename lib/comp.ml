@@ -1,17 +1,18 @@
 open Common
 open Utils
-open Infer
+open Norm
 
 type erl_expr =
   | ELit of lit
   | EBin of erl_expr * bin * erl_expr
-  | EApp of string * erl_expr list
+  | EApp of erl_expr * erl_expr list
   (* fun (args) -> e end *)
   | ELam of string list * erl_expr
   (* e1, e2. *)
   | EThen of erl_expr * erl_expr
   (* x = e *)
   | ELet of string * erl_expr
+  [@@deriving show]
 
 and erl_top =
   (* -export([f/i]) *)
@@ -23,14 +24,23 @@ and erl_top =
     ; args: string list
     ; expr: erl_expr
     }
+  [@@deriving show]
 
 let rec string_of_erl_expr = function
   | ELit l -> string_of_lit l
-  | EBin (a, op, b) -> Printf.sprintf "%s %s %s" (string_of_erl_expr a) (string_of_bin op) (string_of_erl_expr b)
+  | EBin (a, op, b) ->
+    Printf.sprintf "%s %s %s"
+      (string_of_erl_expr a)
+      (string_of_bin op)
+      (string_of_erl_expr b)
   | EApp (f, args) ->
-    Printf.sprintf "%s(%s)" f (String.concat ", " (List.map string_of_erl_expr args))
+    Printf.sprintf "%s(%s)"
+      (string_of_erl_expr f)
+      (String.concat ", " (List.map string_of_erl_expr args))
   | ELam (args, e) ->
-    Printf.sprintf "fun(%s) -> %s end" (String.concat ", " args) (string_of_erl_expr e)
+    Printf.sprintf "fun(%s) -> %s end"
+      (String.concat ", " args)
+      (string_of_erl_expr e)
   | EThen (e1, e2) ->
     Printf.sprintf "%s,\n  %s" (string_of_erl_expr e1) (string_of_erl_expr e2)
   | ELet (x, e) -> Printf.sprintf "%s = %s" x (string_of_erl_expr e)
@@ -46,35 +56,47 @@ let string_of_erl_top = function
       (String.concat ", " args)
       (string_of_erl_expr expr)
 
-let rec comp_term term =
-  match fst term with
-  | TLit (l, _) -> ELit l
-  | TBin (a, op, b) -> EBin (comp_term a, op, comp_term b)
-  | TLet { name; args = None; body; in_ ; _ } ->
-    EThen(
-      ELet (fst name, comp_term body),
-      comp_term in_)
-  | TLet { name; args = Some args; body; in_; _ } ->
-    EThen(
-      ELet (fst name, ELam (List.map (fun x -> fst @@ fst x) args, comp_term body)),
-      comp_term in_)
-  | e -> todo @@ __LOC__ ^ " " ^ show_term e
+type ctx =
+  { mutable vars: (string * erl_expr) list
+  ; mutable funs: (string * string list * erl_expr) list
+  }
 
-let comp_top top =
-  match fst top with
-  | TTLet { name; args = None; body; _ } ->
-    EDef (fst name, comp_term body)
-  | TTLet { name; args = Some args; body; _ } ->
-    EFun
-      { name = fst name
-      ; args = List.map (fun x -> fst @@ fst x) args
-      ; expr = comp_term body
-      }
+let rec comp_term ctx term =
+  match term with
+  | KLit l -> ELit l
+  | KBin (a, op, b) -> EBin (comp_term ctx a, op, comp_term ctx b)
+  | KApp (f, xs) -> EApp (comp_term ctx f, List.map (comp_term ctx) xs)
+  | KLet { name; args = None; body; in_ ; _ } ->
+    ctx.vars <- (name, comp_term ctx body) :: ctx.vars;
+    comp_term ctx in_
+  | KLet { name; args = Some args; body; in_; _ } ->
+    ctx.funs <- (name, args, comp_term ctx body) :: ctx.funs;
+    comp_term ctx in_
+  | e -> todo __LOC__ ~reason:(show_kterm e)
+
+let comp_top ctx top =
+  match top with
+  | KTDef (name, body) -> EDef (name, comp_term ctx body)
+  | KTLet { name; args; body; _ } ->
+    EFun { name; args; expr = comp_term ctx body }
 
 let comp terms =
-  let comped = List.map comp_top terms in
+  let ctx = { vars = []; funs = [] } in
+  let comped = List.map (comp_top ctx) terms in
+
+  let vars = List.map (fun (x, e) -> ELet (x, e)) ctx.vars in
+  let funs = List.map (fun (name, args, body) -> EFun { name; args; expr = body }) ctx.funs in
   let exports = List.fold_left (fun acc -> function
       | EFun { name; args; _ } -> (name, List.length args) :: acc
       | _ -> acc
     ) [] comped in
-  EExport exports :: comped
+
+  (* Look for main function, then insert vars in front of the expression *)
+  let is_main = (function EFun { name = "main"; _ } -> true | _ -> false) in
+  let comped = match List.find_opt is_main comped with
+    | Some (EFun { name = "main"; args; expr }) ->
+      let no_main = List.filter (fun x -> not (is_main x)) comped in
+      let main_expr = List.fold_right (fun x acc -> EThen (x, acc)) vars expr in
+      EFun { name = "main"; args; expr = main_expr } :: no_main
+    | _ -> failwith "main function not found" in
+  EExport exports :: funs @ comped

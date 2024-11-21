@@ -1,5 +1,8 @@
 let todo ?(reason="") loc =
-  failwith @@ "TODO" ^ (if reason != "" then " " ^ reason else "") ^ " " ^ loc
+  print_endline @@ loc ^ ". Reason:";
+  if reason != "" then
+    print_endline reason;
+  raise (Failure "TODO")
 
 let ( let* ) x f =
   match x with

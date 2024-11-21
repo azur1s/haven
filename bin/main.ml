@@ -3,6 +3,7 @@ open Ichor.Loc
 open Ichor.Lex
 open Ichor.Parse
 open Ichor.Infer
+open Ichor.Norm
 open Ichor.Comp
 open Cmdliner
 
@@ -23,9 +24,12 @@ let process path output =
       | Ok tops ->
         let (terms, infer_errs) = infer tops in
         if infer_errs = [] then
-          comp terms
-          |> List.map string_of_erl_top
-          |> List.iter (fun s -> output_string oc s; output_string oc "\n")
+          (output_string oc @@ Printf.sprintf "-module(%s).\n"
+            (Filename.chop_extension @@ Filename.basename output);
+          let normed = norm terms in
+            comp normed
+            |> List.map string_of_erl_top
+            |> List.iter (fun s -> output_string oc s; output_string oc "\n"))
         else
           List.iter (fun (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc) infer_errs
       | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc)
