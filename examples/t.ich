@@ -1,4 +1,4 @@
-let id x = x
-
-let main args =
-  id args
+let main Args =
+  let foo = 34 in
+  let bar = 35 in
+  foo + bar

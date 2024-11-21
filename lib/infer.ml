@@ -318,13 +318,14 @@ let rec infer_expr (ctx : scheme Subst.t) e =
   | e -> todo @@ __LOC__ ^ " " ^ show_cst e
 
 let infer_top (ctx : scheme Subst.t ref) e =
-  let oks x new_ctx = Ok ((x, snd e), new_ctx) in
+  let oks x = Ok (x, snd e) in
   match fst e with
   | CTLet { name; body; args = None; ret } ->
     let ret = Option.value ret ~default:(fresh ()) in
-    let* (b, b_ty, bs) = infer_expr !ctx body in
+    let* (b, b_ty, _bs) = infer_expr !ctx body in
 
     let* ret_ty_s =
+      (* We probably don't need to `apply_ty bs b_ty` :clueless: *)
       unify ret b_ty
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd body))
@@ -336,7 +337,6 @@ let infer_top (ctx : scheme Subst.t ref) e =
       ; args = None
       ; ret
       ; body = b })
-      bs
 
   | CTLet { name; body; args = Some args; ret } ->
     let args_name = List.map (fun x -> fst x) args in
@@ -383,7 +383,6 @@ let infer_top (ctx : scheme Subst.t ref) e =
         ; args = Some args
         ; ret
         ; body = b })
-      (compose bs f_ty_s)
 
 let infer es =
   let ctx = ref Subst.empty in
