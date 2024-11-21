@@ -24,6 +24,7 @@ let process path output =
       | Ok tops ->
         let (terms, infer_errs) = infer tops in
         if infer_errs = [] then
+          (* The rest of the errors after here should be compiler errors, I hope *)
           (output_string oc @@ Printf.sprintf "-module(%s).\n"
             (Filename.chop_extension @@ Filename.basename output);
           let normed = norm terms in

@@ -8,12 +8,12 @@ type cst =
   | CList  of cst spanned list
   | CBin   of cst spanned * bin * cst spanned
   | CApp   of cst spanned * cst spanned
+  | CThen  of cst spanned * cst spanned
   | CIf of
     { cond: cst spanned
     ; t: cst spanned
     ; f: cst spanned
     }
-  | CBlock of cst spanned list
   | CLet of
     { name: string spanned
     ; args: (string spanned * typ option) list option
@@ -285,11 +285,6 @@ let rec parse_atom p =
         ; ret
         ; in_
         }, span_union span (snd in_))
-    | TkOpen Brace ->
-      let _ = advance p in
-      let* exprs = many_delim p (fun p -> parse_expr p 0) TkSemi in
-      let* (_, end_span) = expect p (TkClose Brace) in
-      Ok (CBlock exprs, span_union span end_span)
     | TkCase ->
       let parse_case_clause p =
         let inf = "case clause" in
@@ -345,6 +340,11 @@ and parse_expr p min_bp =
         let _ = advance p in
         let* rhs = parse_expr p r_pw in
         parse_loop (CBin (lhs, bin, rhs), span_union (snd lhs) (snd rhs))
+    (* Semicolon *)
+    | Some (TkSemi, _) ->
+      let _ = advance p in
+      let* rhs = parse_expr p 0 in
+      parse_loop (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
     (* Application *)
     | Some _ ->
       (* Try parse, if goes wrong then just return lhs *)

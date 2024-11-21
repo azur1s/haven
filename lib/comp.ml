@@ -66,6 +66,7 @@ let rec comp_term ctx term =
   match term with
   | KLit l -> ELit l
   | KBin (a, op, b) -> EBin (comp_term ctx a, op, comp_term ctx b)
+  | KThen (a, b) -> EThen (comp_term ctx a, comp_term ctx b)
   | KApp (f, xs) -> EApp (comp_term ctx f, List.map (comp_term ctx) xs)
   | KLet { name; args = None; body; in_ ; _ } ->
     ctx.vars <- (name, comp_term ctx body) :: ctx.vars;

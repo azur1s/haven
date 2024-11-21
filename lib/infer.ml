@@ -9,12 +9,12 @@ type term =
   | TList  of term spanned list
   | TBin   of term spanned * bin * term spanned
   | TApp   of term spanned * term spanned
+  | TThen  of term spanned * term spanned
   | TIf of
     { cond: term spanned
     ; t: term spanned
     ; f: term spanned
     }
-  | TBlock of term spanned list
   | TLet of
     { name: string spanned
     ; args: (string spanned * typ) list option
@@ -213,6 +213,13 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (* (apply_ty unify_b_s expect_args_ty) *)
       ret_ty
       (a_s |> compose b_s |> compose unify_a_s |> compose unify_b_s)
+
+  | CThen (a, b) ->
+    let* (a, _a_ty, a_s) = infer_expr ctx a in
+    let* (b, b_ty, b_s) = infer_expr ctx b in
+    oks (TThen (a, b))
+      b_ty
+      (compose a_s b_s)
 
   | CApp (f, x) ->
     let* (f, f_ty, fs) = infer_expr ctx f in

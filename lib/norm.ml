@@ -9,12 +9,12 @@ type kterm =
   | KList  of kterm list
   | KBin   of kterm * bin * kterm
   | KApp   of kterm * kterm list
+  | KThen  of kterm * kterm
   | KIf of
     { cond: kterm
     ; t: kterm
     ; f: kterm
     }
-  | KBlock of kterm list
   | KLet of
     { name: string
     ; body: kterm
@@ -46,6 +46,7 @@ let rec norm_term term =
   match (fst term) with
   | TLit (l, _) -> KLit l
   | TBin (a, op, b) -> KBin (norm_term a, op, norm_term b)
+  | TThen (a, b) -> KThen (norm_term a, norm_term b)
   (* Uncurry applications *)
   | TApp (f, x) ->
     let (f, x) = uncurry (norm_term f) [norm_term x] in

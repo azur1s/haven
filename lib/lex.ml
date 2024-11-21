@@ -142,7 +142,7 @@ let bin_of_string = function
   | ">=" -> Gte
   | "&&" -> And
   | "||" -> Or
-  | b -> assert false
+  | _ -> assert false
 
 let is_atom_char = function
   | 'a'..'z' | 'A'..'Z' | '_' -> true

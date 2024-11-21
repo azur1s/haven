@@ -1,4 +1,4 @@
 let main args =
-  let addi x y = x + y in
-  let foo = 34 in
-  addi 34 (foo + 1)
+  true;
+  false;
+  ()
