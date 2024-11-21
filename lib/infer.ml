@@ -160,6 +160,7 @@ let instantiate (Forall (bound, ty)) =
 
 let show_context ctx =
   Subst.fold (fun k v acc -> acc ^ k ^ " : " ^ string_of_scheme v ^ "\n") ctx ""
+  |> String.trim
 
 let rec infer_expr (ctx : scheme Subst.t) e =
   let oks x ty subst = Ok ((x, snd e), ty, subst) in
@@ -175,6 +176,44 @@ let rec infer_expr (ctx : scheme Subst.t) e =
   | CLit (LBool x, s)  -> oks (TLit (LBool x, s))  (TyConst "bool")  Subst.empty
   | CLit (LInt x, s)   -> oks (TLit (LInt x, s))   (TyConst "int")   Subst.empty
   | CLit (LFloat x, s) -> oks (TLit (LFloat x, s)) (TyConst "float") Subst.empty
+
+  | CBin (a, op , b) ->
+    let* (a, a_ty, a_s) = infer_expr ctx a in
+    let* (b, b_ty, b_s) = infer_expr ctx b in
+
+    (* Expected type *)
+    let expect_args_ty = match op with
+      | Add | Sub | Mul | Div | Mod ->
+        TyConst "int"
+      | Eq | Neq | Lt | Lte | Gt | Gte ->
+        fresh ()
+      | And | Or ->
+        TyConst "bool"
+    in
+    let ret_ty = match op with
+      | Add | Sub | Mul | Div | Mod ->
+        TyConst "int"
+      | Eq | Neq | Lt | Lte | Gt | Gte
+      | And | Or ->
+        TyConst "bool"
+    in
+
+    (* Unify them to have the operator's expected type *)
+    let* unify_a_s =
+      unify (apply_ty a_s a_ty) expect_args_ty
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd a))
+    in
+    let* unify_b_s =
+      unify (apply_ty b_s b_ty) expect_args_ty
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd b))
+    in
+
+    oks (TBin (a, op, b))
+      (* (apply_ty unify_b_s expect_args_ty) *)
+      ret_ty
+      (a_s |> compose b_s |> compose unify_a_s |> compose unify_b_s)
 
   | CApp (f, x) ->
     let* (f, f_ty, fs) = infer_expr ctx f in
@@ -245,6 +284,8 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     (* Infer body *)
     let* (b, b_ty, bs) = infer_expr body_ctx body in
 
+    let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
+
     (* Unifies that the function type match the body type *)
     let* f_ty_s =
       unify ret b_ty
@@ -254,7 +295,10 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let ret = apply_ty f_ty_s ret in
 
     (* Generalize function type *)
-    let gen_f_ty = generalize body_ctx f_ty |> apply_scheme f_ty_s in
+    let gen_f_ty =
+      apply_ty bs f_ty
+      |> generalize body_ctx
+      |> apply_scheme f_ty_s in
 
     (* Add function to context *)
     let ctx = Subst.add (fst name) gen_f_ty ctx in
