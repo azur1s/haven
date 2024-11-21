@@ -2,7 +2,6 @@
 -export([main/1]).
 
 main(Args) ->
-    Id = fun (X) -> X end,
-    Num = 42,
-    Id(Num),
+    Test = 34 =:= 35,
+    Test,
     ok.

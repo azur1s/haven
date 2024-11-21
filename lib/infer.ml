@@ -32,9 +32,9 @@ type term =
 and term_top =
   | TTLet of
     { name: string spanned
-    ; body: term spanned
     ; args: (string spanned * typ) list option
     ; ret: typ
+    ; body: term spanned
     }
   [@@deriving show]
 
@@ -165,7 +165,6 @@ let show_context ctx =
 let rec infer_expr (ctx : scheme Subst.t) e =
   let oks x ty subst = Ok ((x, snd e), ty, subst) in
   match (fst e) with
-
   | CLit (LSym s, span) ->
     (match Subst.find_opt s ctx with
     | Some scheme ->
@@ -317,3 +316,75 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (compose bs (compose f_ty_s in_s))
 
   | e -> todo @@ __LOC__ ^ " " ^ show_cst e
+
+let infer_top (ctx : scheme Subst.t ref) e =
+  let oks x new_ctx = Ok ((x, snd e), new_ctx) in
+  match fst e with
+  | CTLet { name; body; args = None; ret } ->
+    let ret = Option.value ret ~default:(fresh ()) in
+    let* (b, b_ty, bs) = infer_expr !ctx body in
+
+    let* ret_ty_s =
+      unify ret b_ty
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd body))
+    in
+
+    let ret = apply_ty ret_ty_s ret in
+    oks (TTLet
+      { name
+      ; args = None
+      ; ret
+      ; body = b })
+      bs
+
+  | CTLet { name; body; args = Some args; ret } ->
+    let args_name = List.map (fun x -> fst x) args in
+    let args_ty = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) args in
+    let ret = Option.value ret ~default:(fresh ()) in
+
+    let rec make_ft = function
+      | [] -> ret
+      | arg :: rest ->
+        TyArrow (arg, make_ft rest)
+    in
+    let f_ty = make_ft args_ty in
+
+    let args_scheme = List.combine
+      (List.map (fun x -> fst x) args_name)
+      (List.map (fun t -> Forall ([], t)) args_ty)
+    in
+    let body_ctx = List.fold_left
+      (fun subst (name, ty) -> Subst.add name ty subst)
+      !ctx args_scheme
+    in
+
+    let* (b, b_ty, bs) = infer_expr body_ctx body in
+
+    let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
+
+    let* f_ty_s =
+      unify ret b_ty
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd body))
+    in
+    let ret = apply_ty f_ty_s ret in
+
+    let gen_f_ty =
+      apply_ty bs f_ty
+      |> generalize body_ctx
+      |> apply_scheme f_ty_s in
+
+    ctx := Subst.add (fst name) gen_f_ty !ctx;
+
+    let args = List.combine args_name args_ty in
+    oks (TTLet
+        { name
+        ; args = Some args
+        ; ret
+        ; body = b })
+      (compose bs f_ty_s)
+
+let infer es =
+  let ctx = ref Subst.empty in
+  map_sep_results @@ List.map (infer_top ctx) es
