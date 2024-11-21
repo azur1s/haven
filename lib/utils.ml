@@ -1,8 +1,6 @@
 let todo ?(reason="") loc =
   failwith @@ "TODO" ^ (if reason != "" then " " ^ reason else "") ^ " " ^ loc
 
-let unreachable loc = failwith @@ "Unreachable " ^ loc
-
 let ( let* ) x f =
   match x with
   | Ok v -> f v

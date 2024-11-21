@@ -107,7 +107,7 @@ let parse_sym p =
     "symbols"
   in match sym with
     | TkSym s -> Ok (s, span)
-    | _ -> unreachable __LOC__
+    | _ -> assert false
 
 let many_delim p f delim =
   let rec many_acc p acc =
@@ -392,7 +392,7 @@ and parse_tops p =
 
 let parse ?(file="<anonymous>") tks =
   let p = { input = tks; file = file; loc = 0 } in
-  let res = parse_expr p 0 in
+  let res = parse_tops p in
   match res with
   | Ok v ->
     if List.length p.input = p.loc - 1

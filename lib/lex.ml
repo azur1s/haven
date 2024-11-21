@@ -119,7 +119,7 @@ let delim_of_string = function
   | ":" -> TkColon
   | "|" -> TkBar
   | "\\" -> TkBarElse
-  | _ -> unreachable __LOC__
+  | _ -> assert false
 
 let char_one_of str c = List.exists ((=) c) (explode str)
 let is_bin_char c = char_one_of "+-*/%=!><&!" c
@@ -142,7 +142,7 @@ let bin_of_string = function
   | ">=" -> Gte
   | "&&" -> And
   | "||" -> Or
-  | b -> unreachable @@ __LOC__ ^ " " ^ b
+  | b -> assert false
 
 let is_atom_char = function
   | 'a'..'z' | 'A'..'Z' | '_' -> true
@@ -201,7 +201,7 @@ let rec tokenize_acc l acc =
         | ':' -> TkColon
         | '|' -> TkBar
         | '\\' -> TkBarElse
-        | _ -> unreachable __LOC__
+        | _ -> assert false
       in
       tokenize_acc l @@ (delim, span) :: acc
     | '(' | ')' | '[' | ']' | '{' | '}' ->
@@ -214,7 +214,7 @@ let rec tokenize_acc l acc =
         | ')' -> TkClose Paren
         | ']' -> TkClose Brack
         | '}' -> TkClose Brace
-        | _ -> unreachable __LOC__
+        | _ -> assert false
       in
       tokenize_acc l @@ (delim, span) :: acc
     (* Numbers *)
