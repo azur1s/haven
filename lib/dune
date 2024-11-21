@@ -1,4 +1,4 @@
 (library
  (name ichor)
- (modules utils loc common lex parse infer comp)
+ (modules utils loc common lex parse infer norm comp)
  (preprocess (pps ppx_deriving.show)))

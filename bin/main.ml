@@ -1,3 +1,4 @@
+open Ichor.Common
 open Ichor.Loc
 open Ichor.Lex
 open Ichor.Parse
@@ -21,9 +22,11 @@ let process path =
       (match parse xs ~file:path with
       | Ok tops ->
         (* List.iter (fun (t, _) -> print_endline @@ show_cst_top t) tops; *)
-        let (tops, errs) = infer tops in
-        List.iter (fun (t, _) -> print_endline @@ show_term_top t) tops;
-        List.iter (fun (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc) errs;
+        (* (fun (t, _) -> print_endline @@ show_cst t) tops; *)
+        (match infer_expr Subst.empty tops with
+        | Ok ((t, _), _, _) ->
+          print_endline @@ show_term t;
+        | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc)
       | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc)
     | Error (m, loc) -> print_endline @@ m ^ " @ " ^ show_span_no_file loc;
   with e ->

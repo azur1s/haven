@@ -4,7 +4,7 @@ open Loc
 open Lex
 
 type cst =
-  | CLit   of lit
+  | CLit   of lit spanned
   | CList  of cst spanned list
   | CBin   of cst spanned * bin * cst spanned
   | CApp   of cst spanned * cst spanned
@@ -16,8 +16,8 @@ type cst =
   | CBlock of cst spanned list
   | CLet of
     { name: string spanned
-    ; body: cst spanned
     ; args: (string spanned * typ option) list option
+    ; body: cst spanned
     ; ret: typ option
     ; in_: cst spanned
     }
@@ -55,14 +55,14 @@ let make_span p start =
 
 let peek p =
   if p.loc < List.length p.input then
-    Some (p.input @ p.loc)
+    Some (p.input @* p.loc)
   else
     None
 
 let advance p =
   if p.loc < List.length p.input then (
     p.loc <- p.loc + 1;
-    Some (p.input @ (p.loc - 1))
+    Some (p.input @* (p.loc - 1))
   ) else
     None
 
@@ -153,17 +153,23 @@ let many_cond p f =
 let rec parse_typ p min_bp =
   let parse_typ_atom p =
     match peek p with
-    | Some (TkSym s, _) ->
+    | Some (TkSym s, span) ->
       advance_return p (match s with
-      | "unit"  -> Ok (TyConst "unit")
-      | "bool"  -> Ok (TyConst "bool")
-      | "int"   -> Ok (TyConst "int")
-      | "float" -> Ok (TyConst "float")
-      | s -> Ok (TyConst s))
+      | "unit"  -> Ok (TyConst "unit", span)
+      | "bool"  -> Ok (TyConst "bool", span)
+      | "int"   -> Ok (TyConst "int", span)
+      | "float" -> Ok (TyConst "float", span)
+      | s -> Ok (TyConst s, span))
+    | Some (TkOpen Paren, start) ->
+      let _ = advance p in
+      let* typ = parse_typ p 0 in
+      let* (_, end_) = expect p @@ TkClose Paren in
+      Ok (typ, span_union start end_)
     | Some (t, s) -> Error ("Expected type, found " ^ string_of_token t, s)
     | None -> Error ("Expected type, found end of file", make_span p p.loc)
   in
   let rec parse_typ_loop lhs =
+    let rewind_point = p.loc in
     match peek p with
     | Some (TkArrow, _) ->
       let power = 10 in
@@ -172,7 +178,9 @@ let rec parse_typ p min_bp =
       else
         let _ = advance p in
         let* rhs = parse_typ p @@ power + 1 in
-        parse_typ_loop (TyArrow (lhs, rhs))
+        (* Right-associative so keep parsing in the right direction *)
+        let* rhs = parse_typ_loop rhs in
+        Ok (TyArrow (lhs, rhs))
     | Some (TkBin Mul, _) ->
       let power = 20 in
       if power < min_bp then
@@ -181,14 +189,16 @@ let rec parse_typ p min_bp =
         let _ = advance p in
         let* rhs = parse_typ p @@ power + 1 in
         parse_typ_loop (TyTuple (lhs, rhs))
-    | Some (TkSym f, _) ->
+    | Some (TkSym _, _) ->
       (match parse_typ_atom p with
-      | Ok x -> parse_typ_loop (TyConstructor (x, lhs))
-      | Error _ ->
-        Ok (TyConstructor (TyConst f, lhs)))
+      | Ok (TyConst x, _) -> parse_typ_loop (TyConstructor (x, lhs))
+      | Ok (_, where) ->
+        rewind p rewind_point;
+        Error ("This type can't be used as a constructor", where)
+      | Error _ -> Ok lhs)
     | _ -> Ok lhs
   in
-  let* lhs = parse_typ_atom p in
+  let* (lhs, _) = parse_typ_atom p in
   parse_typ_loop lhs
 
 let parse_let_args p =
@@ -231,11 +241,11 @@ let parse_case_pat p =
 let rec parse_atom p =
   match peek p with
   | Some (t, span) -> (match t with
-    | TkUnit -> advance_return p (Ok (CLit LUnit, span))
-    | TkBool  x -> advance_return p (Ok (CLit (LBool x), span))
-    | TkInt   x -> advance_return p (Ok (CLit (LInt x), span))
-    | TkFloat x -> advance_return p (Ok (CLit (LFloat x), span))
-    | TkSym   x -> advance_return p (Ok (CLit (LSym x), span))
+    | TkUnit    -> advance_return p (Ok (CLit (LUnit, span), span))
+    | TkBool  x -> advance_return p (Ok (CLit (LBool x, span), span))
+    | TkInt   x -> advance_return p (Ok (CLit (LInt x, span), span))
+    | TkFloat x -> advance_return p (Ok (CLit (LFloat x, span), span))
+    | TkSym   x -> advance_return p (Ok (CLit (LSym x, span), span))
     (* (expr) *)
     | TkOpen Paren ->
       let _ = advance p in
@@ -337,12 +347,17 @@ and parse_expr p min_bp =
         parse_loop (CBin (lhs, bin, rhs), span_union (snd lhs) (snd rhs))
     (* Application *)
     | Some _ ->
-      (* Try parse, if goes wrong (e.g. found keywords) just return lhs *)
-      (match parse_expr p min_bp with
-      | Ok x -> parse_loop (CApp (lhs, x), span_union (snd lhs) (snd x))
-      | Error _ ->
-        rewind p rewind_point;
-        Ok lhs)
+      (* Try parse, if goes wrong then just return lhs *)
+      let l_pw, r_pw = 100, 101 in
+      if l_pw < min_bp then
+        Ok lhs
+      else
+        (match parse_expr p r_pw with
+        | Ok x ->
+          parse_loop (CApp (lhs, x), span_union (snd lhs) (snd x))
+        | Error _ ->
+          rewind p rewind_point;
+          Ok lhs)
     | None -> Ok lhs
   in
 
@@ -377,7 +392,7 @@ and parse_tops p =
 
 let parse ?(file="<anonymous>") tks =
   let p = { input = tks; file = file; loc = 0 } in
-  let res = parse_tops p in
+  let res = parse_expr p 0 in
   match res with
   | Ok v ->
     if List.length p.input = p.loc - 1
