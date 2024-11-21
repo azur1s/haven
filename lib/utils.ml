@@ -19,6 +19,11 @@ let str_from_int i =
   in
   aux i
 
+let capitalize_first s =
+  match String.length s with
+  | 0 -> ""
+  | _ -> String.capitalize_ascii (String.make 1 s.[0]) ^ String.sub s 1 (String.length s - 1)
+
 let rec map_early_return f = function
   | [] -> Ok []
   | x :: xs ->

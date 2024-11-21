@@ -26,7 +26,8 @@ and erl_top =
     }
   [@@deriving show]
 
-let rec string_of_erl_expr = function
+let rec string_of_erl_expr ?(cap=true) = function
+  | ELit (LSym s) when cap -> capitalize_first s
   | ELit l -> string_of_lit l
   | EBin (a, op, b) ->
     Printf.sprintf "%s %s %s"
@@ -35,7 +36,7 @@ let rec string_of_erl_expr = function
       (string_of_erl_expr b)
   | EApp (f, args) ->
     Printf.sprintf "%s(%s)"
-      (string_of_erl_expr f)
+      (string_of_erl_expr f ~cap:false)
       (String.concat ", " (List.map string_of_erl_expr args))
   | ELam (args, e) ->
     Printf.sprintf "fun(%s) -> %s end"
@@ -43,7 +44,7 @@ let rec string_of_erl_expr = function
       (string_of_erl_expr e)
   | EThen (e1, e2) ->
     Printf.sprintf "%s,\n  %s" (string_of_erl_expr e1) (string_of_erl_expr e2)
-  | ELet (x, e) -> Printf.sprintf "%s = %s" x (string_of_erl_expr e)
+  | ELet (x, e) -> Printf.sprintf "%s = %s" (capitalize_first x) (string_of_erl_expr e)
 
 let string_of_erl_top = function
   | EExport exports ->
@@ -53,7 +54,7 @@ let string_of_erl_top = function
   | EFun { name; args; expr } ->
     Printf.sprintf "%s(%s) ->\n  %s."
       name
-      (String.concat ", " args)
+      (String.concat ", " (List.map capitalize_first args))
       (string_of_erl_expr expr)
 
 type ctx =
