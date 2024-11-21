@@ -189,7 +189,32 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (apply_ty unified_subst res_ty)
       (compose unified_subst (compose fs xs))
 
-  | CLet { name; args = None; body; ret; in_ } -> todo __LOC__
+  | CLet { name; args = None; body; ret; in_ } ->
+
+    let ret = Option.value ret ~default:(fresh ()) in
+    let* (b, b_ty, bs) = infer_expr ctx body in
+    let gen_b_ty = generalize ctx (apply_ty bs b_ty) in
+
+    let in_ctx = Subst.add (fst name) gen_b_ty ctx in
+
+    let* (in_, in_ty, in_s) = infer_expr in_ctx in_ in
+
+    let* ret_ty_s =
+      unify ret in_ty
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd body))
+    in
+    let ret = apply_ty ret_ty_s ret in
+
+    oks (TLet
+      { name
+      ; args = None
+      ; ret
+      ; body = b
+      ; in_ })
+      in_ty
+      (compose bs in_s)
+
   | CLet { name; args = Some args; body; ret; in_ } ->
 
     (* Just the args *)
