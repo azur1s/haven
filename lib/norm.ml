@@ -26,3 +26,5 @@ type kterm =
     ; pats: (pattern * kterm) list
     ; else_: kterm
     }
+
+(* TODO K-normalization (turns nested expression into multiple lets) *)
