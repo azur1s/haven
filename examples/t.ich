@@ -1,4 +1,5 @@
+let print_fmt fmt args = __external__ "io:format" [fmt, args]
+
 let main args =
-  true;
-  false;
-  ()
+  print_fmt "~s~n" ["Hello, World!"] ;
+  print_fmt "~p~n" [args]

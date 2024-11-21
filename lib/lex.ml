@@ -8,10 +8,12 @@ type token =
   | TkBool  of bool
   | TkInt   of int
   | TkFloat of float
+  | TkStr   of string
   | TkSym   of string
   (* Operators *)
   | TkBin   of bin
   (* Delimiters *)
+  | TkComma
   | TkAssign
   | TkSemi
   | TkColon
@@ -24,6 +26,7 @@ type token =
   | TkIf  | TkThen | TkElse
   | TkLet | TkIn
   | TkCase | TkOf
+  | TkUse
   [@@deriving show]
 
 and delim =
@@ -38,6 +41,7 @@ let string_of_token = function
   | TkInt   x -> string_of_int x
   | TkFloat x -> string_of_float x
   | TkSym   x -> x
+  | TkStr   x -> "\"" ^ x ^ "\""
   (* Operators *)
   | TkBin   x -> (match x with
     | Add -> "+"
@@ -54,6 +58,7 @@ let string_of_token = function
     | And -> "&&"
     | Or  -> "||")
   (* Delimiters *)
+  | TkComma -> ","
   | TkAssign -> "="
   | TkSemi -> ";"
   | TkColon -> ":"
@@ -76,6 +81,7 @@ let string_of_token = function
   | TkIn   -> "in"
   | TkCase -> "case"
   | TkOf   -> "of"
+  | TkUse  -> "use"
 
 type l =
   { input: string
@@ -179,6 +185,31 @@ let rec tokenize_acc l acc =
       in
       skip_line ();
       tokenize_acc l acc
+    (* String *)
+    | '"' ->
+      let _ = advance l in
+      let rec read_str acc =
+        match peek l with
+        | Some '"' ->
+          let _ = advance l in
+          acc
+        | Some '\\' ->
+          let _ = advance l in
+          (match peek l with
+          | Some 'n' -> read_str (acc ^ "\n")
+          | Some 't' -> read_str (acc ^ "\t")
+          | Some '\\' -> read_str (acc ^ "\\")
+          | Some '"' -> read_str (acc ^ "\"")
+          | Some c -> read_str (acc ^ "\\" ^ String.make 1 c)
+          | None -> acc)
+        | Some c ->
+          let _ = advance l in
+          read_str (acc ^ String.make 1 c)
+        | None -> acc
+      in
+      let str = read_str "" in
+      let span = make_span l start in
+      tokenize_acc l @@ (TkStr str, span) :: acc
     (* Delimiters *)
     | c when c = '(' && when_peek_is ((=) ')') ->
       let _ = advance l in
@@ -191,11 +222,12 @@ let rec tokenize_acc l acc =
       let span = make_span l start in
       tokenize_acc l @@ (TkArrow, span) :: acc
     | c when (c = '=' && when_peek_is ((!=) '='))
-    || char_one_of ";:|\\" c ->
+    || char_one_of ",;:|\\" c ->
       let _ = advance l in
       let span = make_span l start in
       let delim =
         match c with
+        | ',' -> TkComma
         | '=' -> TkAssign
         | ';' -> TkSemi
         | ':' -> TkColon
@@ -280,6 +312,7 @@ let rec tokenize_acc l acc =
           | "in"    -> TkIn
           | "case"  -> TkCase
           | "of"    -> TkOf
+          | "use"   -> TkUse
           | _ -> TkSym acc
       in
       let _ = advance l in

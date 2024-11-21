@@ -171,10 +171,27 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       oks (TLit (LSym s, span)) (instantiate scheme) Subst.empty
     | None -> Error ("Unbound variable " ^ s, span))
 
-  | CLit (LUnit, s)    -> oks (TLit (LUnit, s))    (TyConst "unit")  Subst.empty
-  | CLit (LBool x, s)  -> oks (TLit (LBool x, s))  (TyConst "bool")  Subst.empty
-  | CLit (LInt x, s)   -> oks (TLit (LInt x, s))   (TyConst "int")   Subst.empty
-  | CLit (LFloat x, s) -> oks (TLit (LFloat x, s)) (TyConst "float") Subst.empty
+  | CLit (LUnit, s)    -> oks (TLit (LUnit, s))    (TyConst "unit")   Subst.empty
+  | CLit (LBool x, s)  -> oks (TLit (LBool x, s))  (TyConst "bool")   Subst.empty
+  | CLit (LInt x, s)   -> oks (TLit (LInt x, s))   (TyConst "int")    Subst.empty
+  | CLit (LFloat x, s) -> oks (TLit (LFloat x, s)) (TyConst "float")  Subst.empty
+  | CLit (LStr x, s)   -> oks (TLit (LStr x, s))   (TyConst "string") Subst.empty
+
+  | CList [] -> oks (TList []) (TyConstructor ("list", fresh ())) Subst.empty
+  | CList xs ->
+      let* xs' = map_early_return (infer_expr ctx) xs in
+      let (_, expected_t, s) = List.hd xs' in
+      let* unified_subst = List.fold_left
+        (fun acc (x, t, t_s) ->
+          let* s = unify (apply_ty t_s t) expected_t
+            |> Result.map to_scheme
+            |> Result.map_error (fun err -> (err, snd x))
+          in
+          acc |> Result.map (fun acc -> compose acc s))
+        (Ok s) (List.tl xs')
+      in
+      let xs = List.map (fun (x, _ ,_) -> x) xs' in
+      oks (TList xs) (apply_ty unified_subst expected_t) unified_subst
 
   | CBin (a, op , b) ->
     let* (a, a_ty, a_s) = infer_expr ctx a in
@@ -327,6 +344,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
 let infer_top (ctx : scheme Subst.t ref) e =
   let oks x = Ok (x, snd e) in
   match fst e with
+  | CTUse _ -> todo __LOC__ ~reason:"include external files"
   | CTLet { name; body; args = None; ret } ->
     let ret = Option.value ret ~default:(fresh ()) in
     let* (b, b_ty, _bs) = infer_expr !ctx body in
@@ -391,6 +409,13 @@ let infer_top (ctx : scheme Subst.t ref) e =
         ; ret
         ; body = b })
 
+let magic =
+  (* __external__ ext_fun [args] *)
+  [ "__external__", Forall (["'a"], TyArrow (TyConst "string", TyVar "'a"))
+  ]
+
 let infer es =
-  let ctx = ref Subst.empty in
+  let ctx = ref @@ List.fold_left
+    (fun ctx (name, scheme) -> Subst.add name scheme ctx)
+    Subst.empty magic in
   map_sep_results @@ List.map (infer_top ctx) es

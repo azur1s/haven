@@ -6,6 +6,7 @@ type lit =
   | LBool  of bool
   | LInt   of int
   | LFloat of float
+  | LStr   of string
   | LSym   of string
   [@@deriving show]
 
@@ -32,6 +33,7 @@ let rec string_of_lit = function
   | LBool b -> string_of_bool b
   | LInt i -> string_of_int i
   | LFloat f -> string_of_float f
+  | LStr s -> "\"" ^ s ^ "\""
   | LSym s -> s
 
 let string_of_bin = function

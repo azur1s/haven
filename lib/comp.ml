@@ -4,6 +4,7 @@ open Norm
 
 type erl_expr =
   | ELit of lit
+  | EList of erl_expr list
   | EBin of erl_expr * bin * erl_expr
   | EApp of erl_expr * erl_expr list
   (* fun (args) -> e end *)
@@ -29,6 +30,7 @@ and erl_top =
 let rec string_of_erl_expr ?(cap=true) = function
   | ELit (LSym s) when cap -> capitalize_first s
   | ELit l -> string_of_lit l
+  | EList l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_erl_expr l))
   | EBin (a, op, b) ->
     Printf.sprintf "%s %s %s"
       (string_of_erl_expr a)
@@ -66,7 +68,15 @@ let rec comp_term ctx term =
   match term with
   | KLit l -> ELit l
   | KBin (a, op, b) -> EBin (comp_term ctx a, op, comp_term ctx b)
+  | KList l -> EList (List.map (comp_term ctx) l)
   | KThen (a, b) -> EThen (comp_term ctx a, comp_term ctx b)
+  | KApp (KLit (LSym "__external__"), xs) ->
+    (match xs with
+    | [KLit (LStr f); KList args] -> EApp (ELit (LSym f), List.map (comp_term ctx) args)
+    | x -> List.map show_kterm x
+      |> String.concat ", "
+      |> (^) "Invalid external call: "
+      |> failwith)
   | KApp (f, xs) -> EApp (comp_term ctx f, List.map (comp_term ctx) xs)
   | KLet { name; args = None; body; in_ ; _ } ->
     ctx.vars <- (name, comp_term ctx body) :: ctx.vars;

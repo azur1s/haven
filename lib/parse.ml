@@ -29,6 +29,7 @@ type cst =
   [@@deriving show]
 
 and cst_top =
+  | CTUse of string spanned
   | CTLet of
     { name: string spanned
     ; body: cst spanned
@@ -155,10 +156,11 @@ let rec parse_typ p min_bp =
     match peek p with
     | Some (TkSym s, span) ->
       advance_return p (match s with
-      | "unit"  -> Ok (TyConst "unit", span)
-      | "bool"  -> Ok (TyConst "bool", span)
-      | "int"   -> Ok (TyConst "int", span)
-      | "float" -> Ok (TyConst "float", span)
+      | "unit"   -> Ok (TyConst "unit", span)
+      | "bool"   -> Ok (TyConst "bool", span)
+      | "int"    -> Ok (TyConst "int", span)
+      | "float"  -> Ok (TyConst "float", span)
+      | "string" -> Ok (TyConst "string", span)
       | s -> Ok (TyConst s, span))
     | Some (TkOpen Paren, start) ->
       let _ = advance p in
@@ -234,6 +236,7 @@ let parse_case_pat p =
   | TkBool  x -> Ok (PatLit (LBool x), span)
   | TkInt   x -> Ok (PatLit (LInt x), span)
   | TkFloat x -> Ok (PatLit (LFloat x), span)
+  | TkStr   x -> Ok (PatLit (LStr x), span)
   | TkSym   x -> Ok (PatLit (LSym x), span)
   | t -> Error ("Expected " ^ inf ^ ", found " ^ string_of_token t, span))
   inf
@@ -245,6 +248,7 @@ let rec parse_atom p =
     | TkBool  x -> advance_return p (Ok (CLit (LBool x, span), span))
     | TkInt   x -> advance_return p (Ok (CLit (LInt x, span), span))
     | TkFloat x -> advance_return p (Ok (CLit (LFloat x, span), span))
+    | TkStr   x -> advance_return p (Ok (CLit (LStr x, span), span))
     | TkSym   x -> advance_return p (Ok (CLit (LSym x, span), span))
     (* (expr) *)
     | TkOpen Paren ->
@@ -254,7 +258,7 @@ let rec parse_atom p =
       Ok (exp, span_union span end_span)
     | TkOpen Brack ->
       let _ = advance p in
-      let* exprs = many_delim p (fun p -> parse_expr p 0) TkSemi in
+      let* exprs = many_delim p (fun p -> parse_expr p 0) TkComma in
       let* (_, end_span) = expect p (TkClose Brack) in
       Ok (CList exprs, span_union span end_span)
     | TkIf ->
@@ -342,9 +346,13 @@ and parse_expr p min_bp =
         parse_loop (CBin (lhs, bin, rhs), span_union (snd lhs) (snd rhs))
     (* Semicolon *)
     | Some (TkSemi, _) ->
-      let _ = advance p in
-      let* rhs = parse_expr p 0 in
-      parse_loop (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
+      let l_pw, r_pw = 0, 1 in
+      if l_pw < min_bp then
+        Ok lhs
+      else
+        let _ = advance p in
+        let* rhs = parse_expr p r_pw in
+        Ok (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
     (* Application *)
     | Some _ ->
       (* Try parse, if goes wrong then just return lhs *)
@@ -367,6 +375,10 @@ and parse_expr p min_bp =
 and parse_top p =
   match peek p with
   | Some (t, span) -> (match t with
+    | TkUse ->
+      let _ = advance p in
+      let* s = parse_sym p in
+      Ok (CTUse s, span)
     | TkLet ->
       let _ = advance p in
       let* sym = parse_sym p in

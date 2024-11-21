@@ -34,11 +34,12 @@ let process path output =
         infer_errs
         |> List.map (fun (m, loc) -> m ^ " @ " ^ show_span_no_file loc)
         |> String.concat "\n"
+        |> (^) "Type error: "
         |> Result.error
       | Error (m, loc) ->
-        Error (m ^ " @ " ^ show_span_no_file loc))
+        Error ("Parse error: " ^ m ^ " @ " ^ show_span_no_file loc))
     | Error (m, loc) ->
-      Error (m ^ " @ " ^ show_span_no_file loc)
+      Error ("Lex error: " ^ m ^ " @ " ^ show_span_no_file loc)
   with e ->
     close_in ic;
     raise e
@@ -55,7 +56,21 @@ let run path output args =
   compile path output;
   let erl_file = output ^ ".erl" in
 
-  match Unix.system @@ "erlc " ^ erl_file with
+  let args =
+    if args = [||] then
+      "\"\""
+    else
+      String.concat " " (Array.to_list args) in
+  let command = "escript " ^ erl_file ^ " " ^ args in
+  match Unix.system command with
+  | WEXITED 0 -> ()
+  | WEXITED n ->
+    print_endline "Error running the Erlang program";
+    print_endline @@ "Ran: " ^ command;
+    exit n
+  | _ -> print_endline "Error running the Erlang program"
+
+  (* match Unix.system @@ "erlc " ^ erl_file with
   | WEXITED 0 -> (
     let args =
       if args = [||] then
@@ -73,7 +88,7 @@ let run path output args =
   | WEXITED n ->
     print_endline "Error compiling the Erlang program";
     exit n
-  | _ -> print_endline "Error running the Erlang compiler"
+  | _ -> print_endline "Error running the Erlang compiler" *)
 
 let path =
   let doc = "The input file" in
