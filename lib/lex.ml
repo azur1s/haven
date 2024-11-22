@@ -1,5 +1,4 @@
 open Common
-open Utils
 open Loc
 
 type token =

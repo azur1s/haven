@@ -1,1 +1,0 @@
-let print_fmt fmt args = __external__ "io:format" [fmt, args]

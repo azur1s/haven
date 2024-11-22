@@ -13,11 +13,8 @@ let ( @* ) list i = List.nth list i
 
 (* 0 -> a, 1 -> b ...26 -> z, 27 -> a1, 28 -> b1 ... *)
 let str_from_int i =
-  let rec aux i =
-    if i < 26 then String.make 1 (Char.chr (i + 97))
-    else String.make 1 (Char.chr (i mod 26 + 97)) ^ string_of_int (i / 26)
-  in
-  aux i
+  if i < 26 then String.make 1 (Char.chr (i + 97))
+  else String.make 1 (Char.chr (i mod 26 + 97)) ^ string_of_int (i / 26)
 
 let capitalize_first s =
   match String.length s with

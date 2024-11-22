@@ -1,8 +1,6 @@
 open Common
 open Utils
-open Loc
 open Infer
-open Set
 
 type kterm =
   | KLit   of lit

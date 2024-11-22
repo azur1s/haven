@@ -2,7 +2,6 @@ open Common
 open Utils
 open Loc
 open Parse
-open Map
 
 type term =
   | TLit   of lit spanned
@@ -64,7 +63,7 @@ let rec apply_ty (subst : scheme Subst.t) t =
     TyConstructor (name, apply_ty subst t)
   | TyConst _ -> t
 
-let rec apply_scheme (subst : scheme Subst.t) scheme =
+let apply_scheme (subst : scheme Subst.t) scheme =
   match scheme with
   | Forall (bound, ty) ->
     let ty = apply_ty subst ty in
