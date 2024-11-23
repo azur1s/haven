@@ -1,9 +1,4 @@
-let print fmt args =
-  __external__ "io:format" fmt args ;
-  ()
-
-let main (args : string list) =
-  if args == [] then
-    print "~s~n" ["No arguments."]
-  else
-    print "~p~n" [args]
+let main _ =
+  let x = 1 in
+  let f i = i + x in
+  f x

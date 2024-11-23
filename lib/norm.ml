@@ -13,10 +13,15 @@ type kterm =
     ; t: kterm
     ; f: kterm
     }
-  | KLet of
+  | KDef of
     { name: string
     ; body: kterm
-    ; args: string list option
+    ; in_: kterm
+    }
+  | KFun of
+    { name: string
+    ; args: string list
+    ; body: kterm
     ; in_: kterm
     }
   | KCase of
@@ -28,7 +33,7 @@ type kterm =
 
 and ktop =
   | KTDef of string * kterm
-  | KTLet of
+  | KTFun of
     { name: string
     ; args: string list
     ; body: kterm
@@ -54,24 +59,26 @@ let rec norm_term term =
     { cond = norm_term cond
     ; t = norm_term t
     ; f = norm_term f }
-  | TLet { name; args; body; in_; _ } -> KLet
+  | TDef { name; body; in_; _ } -> KDef
     { name = fst name
     ; body = norm_term body
-    ; args = (match args with
-      | None -> None
-      | Some args -> Some (List.map (fun x -> fst @@ fst x) args))
+    ; in_ = norm_term in_ }
+  | TFun { name; args; body; in_; _ } -> KFun
+    { name = fst name
+    ; args = List.map (fun x -> fst @@ fst x) args
+    ; body = norm_term body
     ; in_ = norm_term in_ }
   | e -> todo __LOC__ ~reason:(show_term e)
 
 let norm_top top =
   match top with
-  | TTLet { name; args = None; body; _ } ->
+  | TTDef { name; body; _ } ->
     KTDef (fst name, norm_term body)
-  | TTLet { name; args = Some args; body; _ } ->
-    KTLet { name = fst name
-         ; body = norm_term body
-         ; args = List.map (fun x -> fst @@ fst x) args
-         }
+  | TTFun { name; args; body; _ } -> KTFun
+    { name = fst name
+    ; body = norm_term body
+    ; args = List.map (fun x -> fst @@ fst x) args
+    }
 
 let norm tops =
   List.map (fun x -> norm_top @@ fst x) tops

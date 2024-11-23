@@ -1,3 +1,4 @@
+open Common
 open Loc
 
 let loc_to_line_col str loc =
@@ -27,8 +28,8 @@ let left_pad str len =
   else
     String.make (len - str_len) ' ' ^ str
 
-let report path contents m loc =
-  let (line, col) = loc_to_line_col contents loc in
+let report path contents err =
+  let (line, col) = loc_to_line_col contents err.loc in
 
   let prefix i = " " ^ left_pad (string_of_int i) 4 ^ "   " in
   let curr_line = get_line_opt contents (line - 1)
@@ -38,17 +39,23 @@ let report path contents m loc =
     |> Option.map (fun x -> prefix (line - 2) ^ x)
   in
 
-  [ path ^ ":" ^ string_of_int line ^ ":" ^ string_of_int (col + 1)
-  ; "" ] @
-
-  ([ prev_line
-  ; curr_line
-  ]
-  |> List.filter_map Fun.id) @
-
-  [ String.make (col + String.length (prefix (line - 1))) ' ' ^ "^"
-  ; ""
-  ; m
-  ]
+  let xs =
+    [ path ^ ":" ^ string_of_int line ^ ":" ^ string_of_int (col + 1)
+    ; "" ] in
+  let xs = xs @
+    ([ prev_line
+    ; curr_line
+    ]
+    |> List.filter_map Fun.id) in
+  let xs = xs @
+    [ String.make (col + String.length (prefix (line - 1))) ' ' ^ "^"
+    ; ""
+    ; err.msg
+    ] in
+  let xs = if Option.is_some err.hint then
+    xs @ [ "Hint: " ^ Option.get err.hint ]
+  else
+    xs in
+  xs
   |> String.concat "\n"
   |> print_endline

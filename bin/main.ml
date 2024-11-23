@@ -1,3 +1,4 @@
+open Ichor.Common
 open Ichor.Lex
 open Ichor.Parse
 open Ichor.Infer
@@ -24,19 +25,18 @@ let process path output =
         let (terms, infer_errs) = infer tops in
         if infer_errs = [] then (
           (* The rest of the errors after here should be compiler errors, I hope *)
-          let normed = norm terms in
-            comp normed
-            |> List.map string_of_erl_top
-            |> String.concat "\n"
-            |> Printf.sprintf "-module(%s).\n%s" (Filename.basename output)
-            |> Result.ok)
+          norm terms
+          |> comp
+          |> List.map string_of_erl_top
+          |> String.concat "\n"
+          |> Printf.sprintf "-module(%s).\n\n%s" (Filename.basename output)
+          |> Result.ok)
         else
-        infer_errs
-        |> Result.error
-      | Error (m, loc) ->
-        Error [m, loc])
-    | Error (m, loc) ->
-      Error [m, loc]
+          infer_errs
+          |> List.map (fun (m, loc) -> err m loc)
+          |> Result.error
+      | Error e -> Error [e])
+    | Error (m, loc) -> Error [err m loc]
   with e ->
     close_in ic;
     raise e
@@ -48,11 +48,11 @@ let compile path maybe_output =
     let oc = open_out (output ^ ".erl") in
     Printf.fprintf oc "%s" s;
     close_out oc)
-  | Error ms ->
+  | Error errs ->
     let ic = open_in path in
     try
       let content = readfile path in
-      List.iter (fun (m, loc) -> report path content m loc) ms;
+      List.iter (report path content) errs;
       exit 1
     with e ->
       close_in ic;

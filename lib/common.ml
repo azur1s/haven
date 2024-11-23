@@ -1,4 +1,26 @@
 (* Common types used by representations *)
+open Loc
+
+type err =
+  { msg : string
+  ; hint : string option
+  ; loc : span
+  }
+  [@@deriving show]
+
+let err msg loc =
+  { msg; hint = None; loc }
+
+let err_ret msg loc =
+  Error (err msg loc)
+
+let with_hint hint err =
+  { err with hint = Some hint }
+
+let from_result = function
+| Ok x -> x
+| Error (msg, loc) -> err msg loc
+
 type lit =
   | LUnit
   | LBool  of bool

@@ -68,11 +68,15 @@ let string_of_erl_top = function
 
 type ctx =
   { mutable vars: (string * erl_expr) list
-  ; mutable funs: (string * string list * erl_expr) list
+  ; mutable funs: (string * string list * erl_expr * string list) list
+  ; mutable bounds: string list
   }
 
 let rec comp_term ctx term =
   match term with
+  | KLit (LSym s) ->
+    ctx.bounds <- s :: ctx.bounds;
+    ELit (LSym s)
   | KLit l -> ELit l
   | KBin (a, op, b) -> EBin (comp_term ctx a, op, comp_term ctx b)
   | KList l -> EList (List.map (comp_term ctx) l)
@@ -85,7 +89,18 @@ let rec comp_term ctx term =
       |> (^) __LOC__
       |> (^) "Invalid external call: "
       |> failwith)
-  | KApp (f, xs) -> EApp (comp_term ctx f, List.map (comp_term ctx) xs)
+  | KApp (KLit (LSym s), xs) ->
+    let rec lookup_bounds = function
+      | [] -> failwith "Function not found"
+      | (name, _, _, bounds) :: _ when name = s -> bounds
+      | _ :: rest -> lookup_bounds rest in
+    let bounds = lookup_bounds ctx.funs in
+    let args = List.map (comp_term ctx) xs
+      |> (@) (List.map (fun x -> ELit (LSym x)) bounds)
+    in
+    EApp (ELit (LSym s), args)
+  | KApp (f, xs) ->
+    EApp (comp_term ctx f, List.map (comp_term ctx) xs)
   | KIf { cond; t; f } ->
     EThen (
       ELet ("__if__", comp_term ctx cond),
@@ -93,26 +108,32 @@ let rec comp_term ctx term =
         EBin (ELit (LSym "__if__"), Eq, ELit (LBool true)),
         comp_term ctx t,
         comp_term ctx f))
-  | KLet { name; args = None; body; in_ ; _ } ->
+  | KDef { name; body; in_ ; _ } ->
     ctx.vars <- (name, comp_term ctx body) :: ctx.vars;
     comp_term ctx in_
-  | KLet { name; args = Some args; body; in_; _ } ->
-    ctx.funs <- (name, args, comp_term ctx body) :: ctx.funs;
+  | KFun { name; args; body; in_; _ } ->
+    ctx.bounds <- [];
+    let body = comp_term ctx body in
+    (* Filter out what variables is not bounded by `let`, since Erlang does *)
+    (* not allow defining functions inside functions *)
+    let vs = List.filter (fun v -> not @@ List.mem v args) ctx.bounds in
+    let args = args @ vs in
+    ctx.funs <- (name, args, body, vs) :: ctx.funs;
     comp_term ctx in_
   | e -> todo __LOC__ ~reason:(show_kterm e)
 
 let comp_top ctx top =
   match top with
   | KTDef (name, body) -> EDef (name, comp_term ctx body)
-  | KTLet { name; args; body; _ } ->
+  | KTFun { name; args; body; _ } ->
     EFun { name; args; expr = comp_term ctx body }
 
 let comp terms =
-  let ctx = { vars = []; funs = [] } in
+  let ctx = { vars = []; funs = []; bounds = [] } in
   let comped = List.map (comp_top ctx) terms in
 
-  let vars = List.map (fun (x, e) -> ELet (x, e)) ctx.vars in
-  let funs = List.map (fun (name, args, body) -> EFun { name; args; expr = body }) ctx.funs in
+  let vars = List.map (fun (x, e) -> ELet (x, e)) ctx.vars |> List.rev in
+  let funs = List.map (fun (name, args, body, _) -> EFun { name; args; expr = body }) ctx.funs in
   let exports = List.fold_left (fun acc -> function
       | EFun { name; args; _ } -> (name, List.length args) :: acc
       | _ -> acc

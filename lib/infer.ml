@@ -14,9 +14,15 @@ type term =
     ; t: term spanned
     ; f: term spanned
     }
-  | TLet of
+  | TDef of
     { name: string spanned
-    ; args: (string spanned * typ) list option
+    ; body: term spanned
+    ; ret: typ
+    ; in_: term spanned
+    }
+  | TFun of
+    { name: string spanned
+    ; args: (string spanned * typ) list
     ; ret: typ
     ; body: term spanned
     ; in_: term spanned
@@ -29,9 +35,14 @@ type term =
   [@@deriving show]
 
 and term_top =
-  | TTLet of
+  | TTDef of
     { name: string spanned
-    ; args: (string spanned * typ) list option
+    ; body: term spanned
+    ; ret: typ
+    }
+  | TTFun of
+    { name: string spanned
+    ; args: (string spanned * typ) list
     ; ret: typ
     ; body: term spanned
     }
@@ -282,7 +293,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       |> compose unify_f_s
       |> compose unify_cond_s)
 
-  | CLet { name; args = None; body; ret; in_ } ->
+  | CDef { name; body; ret; in_ } ->
 
     let ret = Option.value ret ~default:(fresh ()) in
     let* (b, b_ty, bs) = infer_expr ctx body in
@@ -299,17 +310,15 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     in
     let ret = apply_ty ret_ty_s ret in
 
-    oks (TLet
+    oks (TDef
       { name
-      ; args = None
-      ; ret
       ; body = b
+      ; ret
       ; in_ })
       in_ty
       (compose bs in_s)
 
-  | CLet { name; args = Some args; body; ret; in_ } ->
-
+  | CFun { name; args ; body; ret; recr; in_; } ->
     (* Just the args *)
     let args_name = List.map (fun x -> fst x) args in
     (* Fresh types or the argument's type hints *)
@@ -334,6 +343,9 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (fun subst (name, ty) -> Subst.add name ty subst)
       ctx args_scheme
     in
+    let body_ctx = if recr then
+      Subst.add (fst name) (empty_scheme ret) body_ctx
+    else body_ctx in
 
     (* Infer body *)
     let* (b, b_ty, bs) = infer_expr body_ctx body in
@@ -361,9 +373,9 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* (in_, in_ty, in_s) = infer_expr ctx in_ in
 
     let args = List.combine args_name args_ty in
-    oks (TLet
+    oks (TFun
         { name
-        ; args = Some args
+        ; args
         ; ret
         ; body = b
         ; in_ })
@@ -376,7 +388,7 @@ let infer_top (ctx : scheme Subst.t ref) e =
   let oks x = Ok (x, snd e) in
   match fst e with
   | CTUse _ -> todo __LOC__ ~reason:"include external files"
-  | CTLet { name; body; args = None; ret } ->
+  | CTDef { name; body; ret } ->
     let ret = Option.value ret ~default:(fresh ()) in
     let* (b, b_ty, _bs) = infer_expr !ctx body in
 
@@ -396,13 +408,12 @@ let infer_top (ctx : scheme Subst.t ref) e =
     ctx := Subst.add (fst name) gen_b_ty !ctx;
 
     let ret = apply_ty ret_ty_s ret in
-    oks (TTLet
+    oks (TTDef
       { name
-      ; args = None
       ; ret
       ; body = b })
 
-  | CTLet { name; body; args = Some args; ret } ->
+  | CTFun { name; body; args; ret; recr } ->
     let args_name = List.map (fun x -> fst x) args in
     let args_ty = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) args in
     let ret = Option.value ret ~default:(fresh ()) in
@@ -422,6 +433,9 @@ let infer_top (ctx : scheme Subst.t ref) e =
       (fun subst (name, ty) -> Subst.add name ty subst)
       !ctx args_scheme
     in
+    let body_ctx = if recr then
+      Subst.add (fst name) (empty_scheme ret) body_ctx
+    else body_ctx in
 
     let* (b, b_ty, bs) = infer_expr body_ctx body in
 
@@ -442,9 +456,9 @@ let infer_top (ctx : scheme Subst.t ref) e =
     ctx := Subst.add (fst name) gen_f_ty !ctx;
 
     let args = List.combine args_name args_ty in
-    oks (TTLet
+    oks (TTFun
         { name
-        ; args = Some args
+        ; args
         ; ret
         ; body = b })
 

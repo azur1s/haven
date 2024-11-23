@@ -23,7 +23,7 @@ type token =
   | TkClose of delim
   (* Keywords *)
   | TkIf  | TkThen | TkElse
-  | TkLet | TkIn
+  | TkLet | TkIn | TkRec
   | TkCase | TkOf
   | TkUse
   [@@deriving show]
@@ -78,6 +78,7 @@ let string_of_token = function
   | TkElse -> "else"
   | TkLet  -> "let"
   | TkIn   -> "in"
+  | TkRec  -> "rec"
   | TkCase -> "case"
   | TkOf   -> "of"
   | TkUse  -> "use"
@@ -309,6 +310,7 @@ let rec tokenize_acc l acc =
           | "else"  -> TkElse
           | "let"   -> TkLet
           | "in"    -> TkIn
+          | "rec"   -> TkRec
           | "case"  -> TkCase
           | "of"    -> TkOf
           | "use"   -> TkUse

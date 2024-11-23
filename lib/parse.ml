@@ -14,29 +14,38 @@ type cst =
     ; t: cst spanned
     ; f: cst spanned
     }
-  | CLet of
+  | CDef of
     { name: string spanned
-    ; args: (string spanned * typ option) list option
     ; body: cst spanned
     ; ret: typ option
+    ; in_: cst spanned
+    }
+  | CFun of
+    { name: string spanned
+    ; args: (string spanned * typ option) list
+    ; body: cst spanned
+    ; ret: typ option
+    ; recr: bool
     ; in_: cst spanned
     }
   | CCase of
     { value: cst spanned
     ; pats: (pattern spanned * cst spanned) list
-    ; else_: cst spanned
     }
   [@@deriving show]
 
 and cst_top =
   | CTUse of string spanned
-  | CTLet of
+  | CTDef of
     { name: string spanned
     ; body: cst spanned
-    (* List option because if `args` is some and is an empty list then it is a
-       function with no arguments but if it is none then it is just a variable
-       definition *)
-    ; args: (string spanned * typ option) list option
+    ; ret: typ option
+    }
+  | CTFun of
+    { name: string spanned
+    ; body: cst spanned
+    ; args: (string spanned * typ option) list
+    ; recr: bool
     ; ret: typ option
     }
   [@@deriving show]
@@ -73,6 +82,12 @@ let rewind p loc =
 let advance_return p r =
   let _ = advance p in r
 
+(* Used when the parser expect something and found end of file
+   Go back to the previous token and grab it's end location for the error span*)
+let eof_error_loc p =
+  let prev_token = List.nth p.input (p.loc - 1) in
+  make_span p (snd prev_token).end_
+
 (* NOTE `expect_then` already advances for you, don't do `let _ = advance p`
    again inside the function to avoid skipping tokens *)
 let expect_then p f expect_str =
@@ -85,13 +100,13 @@ let expect_then p f expect_str =
     | Error e ->
       rewind p rewind_pos;
       Error e)
-  | None -> Error ("Expected " ^ expect_str ^ ", found end of file", make_span p p.loc)
+  | None -> err_ret ("Expected " ^ expect_str ^ ", found end of file") (eof_error_loc p)
 
 let expect_cond p f expect_str =
   match peek p with
   | Some (t, s) when f t -> advance_return p (Ok (t, s))
-  | Some (t, s) -> Error ("Expected " ^ expect_str ^ ", found " ^ string_of_token t, s)
-  | None -> Error ("Expected " ^ expect_str ^ ", found end of file", make_span p p.loc)
+  | Some (t, s) -> err_ret ("Expected " ^ expect_str ^ ", found " ^ string_of_token t) s
+  | None -> err_ret ("Expected " ^ expect_str ^ ", found end of file") (eof_error_loc p)
 
 let expect p tk =
   expect_cond p ((=) tk) (string_of_token tk)
@@ -167,8 +182,8 @@ let rec parse_typ p min_bp =
       let* typ = parse_typ p 0 in
       let* (_, end_) = expect p @@ TkClose Paren in
       Ok (typ, span_union start end_)
-    | Some (t, s) -> Error ("Expected type, found " ^ string_of_token t, s)
-    | None -> Error ("Expected type, found end of file", make_span p p.loc)
+    | Some (t, s) -> err_ret ("Expected type, found " ^ string_of_token t) s
+    | None -> err_ret "Expected type, found end of file" (eof_error_loc p)
   in
   let rec parse_typ_loop lhs =
     let rewind_point = p.loc in
@@ -196,7 +211,7 @@ let rec parse_typ p min_bp =
       | Ok (TyConst x, _) -> parse_typ_loop (TyConstructor (x, lhs))
       | Ok (_, where) ->
         rewind p rewind_point;
-        Error ("This type can't be used as a constructor", where)
+        err_ret "This type can't be used as a constructor" where
       | Error _ -> Ok lhs)
     | _ -> Ok lhs
   in
@@ -238,7 +253,7 @@ let parse_case_pat p =
   | TkFloat x -> Ok (PatLit (LFloat x), span)
   | TkStr   x -> Ok (PatLit (LStr x), span)
   | TkSym   x -> Ok (PatLit (LSym x), span)
-  | t -> Error ("Expected " ^ inf ^ ", found " ^ string_of_token t, span))
+  | t -> err_ret ("Expected " ^ inf ^ ", found " ^ string_of_token t) span)
   inf
 
 let rec parse_atom p =
@@ -276,8 +291,16 @@ let rec parse_atom p =
       Ok (CIf { cond; t; f; }, span_union span (snd f))
     | TkLet ->
       let _ = advance p in
+      let rec_tk = maybe p TkRec in
+      let recr = if Option.is_some rec_tk
+        then true
+        else false
+      in
       let* name = parse_sym p in
       let* args = parse_let_args p in
+      let* _ = (match rec_tk, args with
+        | Some (_, s), None -> err_ret "Variable definition can't be recursive" s
+        | _, _ -> Ok ()) in
       let colon = maybe p TkColon in
       let* ret = if Option.is_some colon
         then Result.map Option.some (parse_typ p 0)
@@ -287,47 +310,45 @@ let rec parse_atom p =
       let* body = parse_expr p 0 in
       let* _ = expect p TkIn in
       let* in_ = parse_expr p 0 in
-      Ok (CLet
+      (match args with
+      | None -> Ok (CDef
+        { name
+        ; body
+        ; ret
+        ; in_
+        }, span_union span (snd in_))
+      | Some args -> Ok (CFun
         { name
         ; body
         ; args
         ; ret
         ; in_
-        }, span_union span (snd in_))
+        ; recr
+        }, span_union span (snd in_)))
     | TkCase ->
-      let parse_case_clause p =
+      let parse_case_clause p tk =
         let inf = "case clause" in
         expect_then p (fun (t, span) -> match t with
-        | TkBar ->
+        | t when t = tk ->
           let* pat = parse_case_pat p in
           let* _ = expect p TkArrow in
           let* exp = parse_expr p 0 in
           Ok (pat, exp)
-        | t -> Error ("Expected " ^ inf ^ ", found " ^ string_of_token t, span))
-        inf
-      in
-      let parse_case_else_clause p =
-        let inf = "case else clause" in
-        expect_then p (fun (t, span) -> match t with
-        | TkBarElse ->
-          let* exp = parse_expr p 0 in
-          Ok exp
-        | t -> Error ("Expected " ^ inf ^ ", found " ^ string_of_token t, span))
+        | t -> err_ret ("Expected " ^ inf ^ ", found " ^ string_of_token t) span)
         inf
       in
 
       let _ = advance p in
       let* value = parse_expr p 0 in
       let* _ = expect p TkOf in
-      let* pats = many_until (fun p -> parse_case_clause p) p TkBarElse in
-      let* else_ = parse_case_else_clause p in
+      let* pats = many_until (fun p -> parse_case_clause p TkBar) p TkBarElse in
+      let* else_ = parse_case_clause p TkBarElse in
       Ok (CCase
         { value
-        ; pats
-        ; else_
-        }, span_union span (snd else_))
-    | t -> Error ("Expected expression, found " ^ string_of_token t, span))
-  | None -> Error ("Expected expression, found end of file", make_span p p.loc)
+        ; pats = pats @ [else_]
+        }, span_union span (snd @@ snd else_))
+    | t -> err_ret ("Expected expression, found " ^ string_of_token t) span)
+  | None -> err_ret "Expected expression, found end of file" (eof_error_loc p)
 
 and binding_power = function
   | Mul | Div | Mod -> 50, 51
@@ -356,8 +377,9 @@ and parse_expr p min_bp =
         Ok lhs
       else
         let _ = advance p in
-        let* rhs = parse_expr p r_pw in
-        parse_loop (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
+        parse_expr p r_pw
+        |> Result.map_error (with_hint "If you meant to return unit, then add a () expression after the semicolon")
+        |> Result.map (fun rhs -> (CThen (lhs, rhs), span_union (snd lhs) (snd rhs)))
     (* Application *)
     | Some _ ->
       (* Try parse, if goes wrong then just return lhs *)
@@ -386,23 +408,38 @@ and parse_top p =
       Ok (CTUse s, span)
     | TkLet ->
       let _ = advance p in
-      let* sym = parse_sym p in
+      let rec_tk = maybe p TkRec in
+      let recr = if Option.is_some rec_tk
+        then true
+        else false
+      in
+      let* name = parse_sym p in
       let* args = parse_let_args p in
+      let* _ = (match rec_tk, args with
+        | Some (_, s), None -> err_ret "Variable definition can't be recursive" s
+        | _, _ -> Ok ()) in
       let colon = maybe p TkColon in
-      let* typ = if Option.is_some colon
+      let* ret = if Option.is_some colon
         then Result.map Option.some (parse_typ p 0)
         else Ok None
       in
       let* _ = expect p TkAssign in
       let* body = parse_expr p 0 in
-      Ok (CTLet
-        { name = sym
-        ; body = body
-        ; args = args
-        ; ret = typ
+      (match args with
+      | None -> Ok (CTDef
+        { name
+        ; body
+        ; ret
         }, span_union span (snd body))
-    | t -> Error ("Expected top level statement, found " ^ string_of_token t, span))
-  | None -> Error ("Expected top level statement, found end of file", make_span p p.loc)
+      | Some args -> Ok (CTFun
+        { name
+        ; body
+        ; args
+        ; ret
+        ; recr
+        }, span_union span (snd body)))
+    | t -> err_ret ("Expected top level statement, found " ^ string_of_token t) span)
+  | None -> err_ret "Expected top level statement, found end of file" (eof_error_loc p)
 
 and parse_tops p =
   many_until_end parse_top p
@@ -416,6 +453,6 @@ let parse ?(file="<anonymous>") tks =
       then Ok v
       else let next = advance p in
         (match next with
-        | Some (t, s) -> Error ("Unexpected " ^ string_of_token t ^ ", expected end of file", s)
+        | Some (t, s) -> err_ret ("Unexpected " ^ string_of_token t ^ ", expected end of file") s
         | None -> Ok v)
   | Error e -> Error e

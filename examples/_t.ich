@@ -1,0 +1,19 @@
+let print fmt args =
+  __external__ "io:format" fmt args ;
+  ()
+
+let len xs = __external__ "length" xs
+let nth n xs = __external__ "lists:nth" (n + 1) xs
+let wnd n xs = __external__ "lists:sublist" xs (n + 1) (n + 3)
+
+let main _ =
+  let start = [0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1] in
+  let l = len start in
+  let f i =
+    print "~p~n" [wnd i start]
+  in
+  let rec loop i =
+    if i == l then f i else loop (i + 1) (f (i + 1))
+  in
+
+  loop 0
