@@ -62,6 +62,7 @@ let rec apply_ty (subst : scheme Subst.t) t =
   | TyConstructor (name, t) ->
     TyConstructor (name, apply_ty subst t)
   | TyConst _ -> t
+  | TyAny -> t
 
 let apply_scheme (subst : scheme Subst.t) scheme =
   match scheme with
@@ -83,6 +84,7 @@ let rec occurs v t =
   | TyArrow (t1, t2) -> occurs v t1 || occurs v t2
   | TyConstructor (_, t) -> occurs v t
   | TyConst _ -> false
+  | TyAny -> false
 
 let rec unify t u =
   let rec apply_ty subst t =
@@ -95,6 +97,7 @@ let rec unify t u =
     | TyConstructor (name, t) ->
       TyConstructor (name, apply_ty subst t)
     | TyConst _ -> t
+    | TyAny -> t
   in
   let compose s1 s2 =
     let s2_mapped = Subst.map (fun t -> apply_ty s1 t) s2 in
@@ -114,7 +117,8 @@ let rec unify t u =
     Ok (compose s2 s1)
   | TyConstructor (l, t), TyConstructor (r, u) when l = r ->
     unify t u
-  | _ -> Error ("Cannot unify " ^ string_of_typ t ^ " with " ^ string_of_typ u)
+  | TyAny, _ | _, TyAny -> Ok Subst.empty
+  | _ -> Error ("Type " ^ string_of_typ t ^ " does not match " ^ string_of_typ u)
 
 let rec free_vars = function
   | TyVar v   -> [v]
@@ -122,6 +126,7 @@ let rec free_vars = function
   | TyTuple (t1, t2) -> free_vars t1 @ free_vars t2
   | TyArrow (t1, t2) -> free_vars t1 @ free_vars t2
   | TyConstructor (_, t) -> free_vars t
+  | TyAny -> []
 
 let free_vars_scheme = function
   | Forall (bound, ty) ->
@@ -190,7 +195,10 @@ let rec infer_expr (ctx : scheme Subst.t) e =
         (Ok s) (List.tl xs')
       in
       let xs = List.map (fun (x, _ ,_) -> x) xs' in
-      oks (TList xs) (apply_ty unified_subst expected_t) unified_subst
+      let t = (apply_ty unified_subst expected_t)
+        |> (fun t -> TyConstructor ("list", t))
+      in
+      oks (TList xs) t unified_subst
 
   | CBin (a, op , b) ->
     let* (a, a_ty, a_s) = infer_expr ctx a in
@@ -215,12 +223,12 @@ let rec infer_expr (ctx : scheme Subst.t) e =
 
     (* Unify them to have the operator's expected type *)
     let* unify_a_s =
-      unify (apply_ty a_s a_ty) expect_args_ty
+      unify a_ty expect_args_ty
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd a))
     in
     let* unify_b_s =
-      unify (apply_ty b_s b_ty) expect_args_ty
+      unify (apply_ty unify_a_s expect_args_ty) b_ty
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd b))
     in
@@ -244,7 +252,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* unified_subst =
       unify (apply_ty xs f_ty) (TyArrow (x_ty, res_ty))
       |> Result.map to_scheme
-      |> Result.map_error (fun err -> (err, snd f))
+      |> Result.map_error (fun err -> (err, snd x))
     in
     oks (TApp (f, x))
       (apply_ty unified_subst res_ty)
@@ -355,6 +363,14 @@ let infer_top (ctx : scheme Subst.t ref) e =
       |> Result.map_error (fun err -> (err, snd body))
     in
 
+    let gen_b_ty =
+      b_ty
+      |> generalize !ctx
+      |> apply_scheme ret_ty_s
+    in
+
+    ctx := Subst.add (fst name) gen_b_ty !ctx;
+
     let ret = apply_ty ret_ty_s ret in
     oks (TTLet
       { name
@@ -410,11 +426,13 @@ let infer_top (ctx : scheme Subst.t ref) e =
 
 let magic =
   (* __external__ ext_fun [args] *)
-  [ "__external__", Forall (["'a"], TyArrow (TyConst "string", TyVar "'a"))
+  [ "__external__", Forall ([], TyArrow (TyConst "string", TyAny))
   ]
 
 let infer es =
   let ctx = ref @@ List.fold_left
     (fun ctx (name, scheme) -> Subst.add name scheme ctx)
     Subst.empty magic in
-  map_sep_results @@ List.map (infer_top ctx) es
+  let (res, err) = map_sep_results @@ List.map (infer_top ctx) es in
+  (* res |> List.iter (fun (t, _) -> print_endline @@ show_term_top t); *)
+  (res, err)

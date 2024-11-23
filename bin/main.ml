@@ -1,9 +1,9 @@
-open Ichor.Loc
 open Ichor.Lex
 open Ichor.Parse
 open Ichor.Infer
 open Ichor.Norm
 open Ichor.Comp
+open Ichor.Report
 open Cmdliner
 open Unix
 
@@ -32,29 +32,42 @@ let process path output =
             |> Result.ok)
         else
         infer_errs
-        |> List.map (fun (m, loc) -> m ^ " @ " ^ show_span_no_file loc)
-        |> String.concat "\n"
-        |> (^) "Type error: "
         |> Result.error
       | Error (m, loc) ->
-        Error ("Parse error: " ^ m ^ " @ " ^ show_span_no_file loc))
+        Error [m, loc])
     | Error (m, loc) ->
-      Error ("Lex error: " ^ m ^ " @ " ^ show_span_no_file loc)
+      Error [m, loc]
   with e ->
     close_in ic;
     raise e
 
-let compile path output =
+let compile path maybe_output =
+  let output = match maybe_output with Some s -> s | None -> "out" in
   match process path output with
   | Ok s -> (
     let oc = open_out (output ^ ".erl") in
     Printf.fprintf oc "%s" s;
     close_out oc)
-  | Error m -> print_endline m; exit 1
+  | Error ms ->
+    let ic = open_in path in
+    try
+      let content = readfile path in
+      List.iter (fun (m, loc) -> report path content m loc) ms;
+      exit 1
+    with e ->
+      close_in ic;
+      raise e
 
-let run path output args =
-  compile path output;
+let run path maybe_output args =
+  compile path maybe_output;
+
+  let output = match maybe_output with Some s -> s | None -> "out" in
   let erl_file = output ^ ".erl" in
+
+  let clean () =
+    if maybe_output = None then
+      Unix.unlink erl_file
+  in
 
   let args =
     if args = [||] then
@@ -63,42 +76,25 @@ let run path output args =
       String.concat " " (Array.to_list args) in
   let command = "escript " ^ erl_file ^ " " ^ args in
   match Unix.system command with
-  | WEXITED 0 -> ()
+  | WEXITED 0 -> clean ()
   | WEXITED n ->
     print_endline "Error running the Erlang program";
     print_endline @@ "Ran: " ^ command;
     exit n
-  | _ -> print_endline "Error running the Erlang program"
-
-  (* match Unix.system @@ "erlc " ^ erl_file with
-  | WEXITED 0 -> (
-    let args =
-      if args = [||] then
-        "\"\""
-      else
-        String.concat " " (Array.to_list args) in
-    let command = "erl -noshell -s " ^ Filename.basename output ^ " main " ^ args ^ " -s init stop" in
-    match Unix.system command with
-    | WEXITED 0 -> ()
-    | WEXITED n ->
-      print_endline "Error running the Erlang program";
-      print_endline @@ "Ran: " ^ command;
-      exit n
-    | _ -> print_endline "Error running the Erlang program")
-  | WEXITED n ->
-    print_endline "Error compiling the Erlang program";
-    exit n
-  | _ -> print_endline "Error running the Erlang compiler" *)
+  | _ ->
+    print_endline "Error running the Erlang program";
+    exit 1
 
 let path =
   let doc = "The input file" in
   Arg.(required & pos 0 (some string) None & info [] ~docv:"INPUT" ~doc)
 
 let output =
-  let doc = "The output file without prefix (default: out)" in
-  Arg.(value & opt string "out" & info ["o"; "output"] ~docv:"OUTPUT" ~doc)
+  let doc = "The output path without prefix (default: out)" in
+  Arg.(value & opt (some string) None & info ["o"; "output"] ~docv:"OUTPUT" ~doc)
 
-let process_t = Term.(const compile $ path $ output)
+let process_t =
+  Term.(const compile $ path $ output)
 let compile_cmd =
   let doc = "Compile" in
   let info = Cmd.info "compile" ~doc in

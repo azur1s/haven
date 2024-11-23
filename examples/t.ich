@@ -1,5 +1,5 @@
-let print_fmt fmt args = __external__ "io:format" [fmt, args]
+let print fmt args = __external__ "io:format" fmt args
 
-let main args =
-  print_fmt "~s~n" ["Hello, World!"] ;
-  print_fmt "~p~n" [args]
+let main (args : string list) =
+  1 == true ;
+  print "~s ~s~n" ["Hello", "world"]

@@ -346,13 +346,13 @@ and parse_expr p min_bp =
         parse_loop (CBin (lhs, bin, rhs), span_union (snd lhs) (snd rhs))
     (* Semicolon *)
     | Some (TkSemi, _) ->
-      let l_pw, r_pw = 0, 1 in
+      let l_pw, r_pw = 1, 2 in
       if l_pw < min_bp then
         Ok lhs
       else
         let _ = advance p in
         let* rhs = parse_expr p r_pw in
-        Ok (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
+        parse_loop (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
     (* Application *)
     | Some _ ->
       (* Try parse, if goes wrong then just return lhs *)

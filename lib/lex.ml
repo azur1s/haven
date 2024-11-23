@@ -318,6 +318,19 @@ let rec tokenize_acc l acc =
       let atom = read_atom (String.make 1 c) in
       let span = make_span l start in
       tokenize_acc l @@ (atom, span) :: acc
+    (* 'a Symbol *)
+    | '\'' ->
+      let _ = advance l in
+      let rec read_symbol acc =
+        match peek l with
+        | Some c when is_atom_char c || is_digit c ->
+          let _ = advance l in
+          read_symbol (acc ^ String.make 1 c)
+        | _ -> acc
+      in
+      let sym = read_symbol "'" in
+      let span = make_span l start in
+      tokenize_acc l @@ (TkSym sym, span) :: acc
     | _ ->
       let span = make_span l start in
       Error ("Unexpected character: " ^ String.make 1 c, span)

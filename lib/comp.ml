@@ -72,9 +72,10 @@ let rec comp_term ctx term =
   | KThen (a, b) -> EThen (comp_term ctx a, comp_term ctx b)
   | KApp (KLit (LSym "__external__"), xs) ->
     (match xs with
-    | [KLit (LStr f); KList args] -> EApp (ELit (LSym f), List.map (comp_term ctx) args)
+    | KLit (LStr f) :: args -> EApp (ELit (LSym f), List.map (comp_term ctx) args)
     | x -> List.map show_kterm x
       |> String.concat ", "
+      |> (^) __LOC__
       |> (^) "Invalid external call: "
       |> failwith)
   | KApp (f, xs) -> EApp (comp_term ctx f, List.map (comp_term ctx) xs)
