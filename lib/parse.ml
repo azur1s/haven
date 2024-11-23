@@ -258,9 +258,14 @@ let rec parse_atom p =
       Ok (exp, span_union span end_span)
     | TkOpen Brack ->
       let _ = advance p in
-      let* exprs = many_delim p (fun p -> parse_expr p 0) TkComma in
-      let* (_, end_span) = expect p (TkClose Brack) in
-      Ok (CList exprs, span_union span end_span)
+      (match peek p with
+      | Some (TkClose Brack, end_span) ->
+        let _ = advance p in
+        Ok (CList [], span_union span end_span)
+      | _ ->
+        let* exprs = many_delim p (fun p -> parse_expr p 0) TkComma in
+        let* (_, end_span) = expect p (TkClose Brack) in
+        Ok (CList exprs, span_union span end_span))
     | TkIf ->
       let _ = advance p in
       let* cond = parse_expr p 0 in

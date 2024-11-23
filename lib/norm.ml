@@ -50,6 +50,10 @@ let rec norm_term term =
   | TApp (f, x) ->
     let (f, x) = uncurry (norm_term f) [norm_term x] in
     KApp (f, x)
+  | TIf { cond; t; f; _ } -> KIf
+    { cond = norm_term cond
+    ; t = norm_term t
+    ; f = norm_term f }
   | TLet { name; args; body; in_; _ } -> KLet
     { name = fst name
     ; body = norm_term body

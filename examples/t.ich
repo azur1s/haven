@@ -1,5 +1,9 @@
-let print fmt args = __external__ "io:format" fmt args
+let print fmt args =
+  __external__ "io:format" fmt args ;
+  ()
 
 let main (args : string list) =
-  1 == true ;
-  print "~s ~s~n" ["Hello", "world"]
+  if args == [] then
+    print "~s~n" ["No arguments."]
+  else
+    print "~p~n" [args]

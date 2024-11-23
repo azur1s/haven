@@ -13,7 +13,9 @@ type erl_expr =
   | EThen of erl_expr * erl_expr
   (* x = e *)
   | ELet of string * erl_expr
+  | EIf of erl_expr * erl_expr * erl_expr
   [@@deriving show]
+
 
 and erl_top =
   (* -export([f/i]) *)
@@ -47,6 +49,11 @@ let rec string_of_erl_expr ?(cap=true) = function
   | EThen (e1, e2) ->
     Printf.sprintf "%s,\n  %s" (string_of_erl_expr e1) (string_of_erl_expr e2)
   | ELet (x, e) -> Printf.sprintf "%s = %s" (capitalize_first x) (string_of_erl_expr e)
+  | EIf (e, t, f) ->
+    Printf.sprintf "if\n    %s -> %s;\n    true -> %s\n  end"
+      (string_of_erl_expr e)
+      (string_of_erl_expr t)
+      (string_of_erl_expr f)
 
 let string_of_erl_top = function
   | EExport exports ->
@@ -79,6 +86,13 @@ let rec comp_term ctx term =
       |> (^) "Invalid external call: "
       |> failwith)
   | KApp (f, xs) -> EApp (comp_term ctx f, List.map (comp_term ctx) xs)
+  | KIf { cond; t; f } ->
+    EThen (
+      ELet ("__if__", comp_term ctx cond),
+      EIf (
+        EBin (ELit (LSym "__if__"), Eq, ELit (LBool true)),
+        comp_term ctx t,
+        comp_term ctx f))
   | KLet { name; args = None; body; in_ ; _ } ->
     ctx.vars <- (name, comp_term ctx body) :: ctx.vars;
     comp_term ctx in_

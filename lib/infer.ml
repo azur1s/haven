@@ -167,6 +167,12 @@ let show_context ctx =
   |> String.trim
 
 let rec infer_expr (ctx : scheme Subst.t) e =
+  let unify_err t u where =
+    unify t u
+    |> Result.map to_scheme
+    |> Result.map_error (fun err -> (err, where))
+  in
+
   let oks x ty subst = Ok ((x, snd e), ty, subst) in
   match (fst e) with
   | CLit (LSym s, span) ->
@@ -250,13 +256,31 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* (x, x_ty, xs) = infer_expr ctx x in
     let res_ty = fresh () in
     let* unified_subst =
-      unify (apply_ty xs f_ty) (TyArrow (x_ty, res_ty))
+      unify f_ty (TyArrow (x_ty, res_ty))
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd x))
     in
     oks (TApp (f, x))
       (apply_ty unified_subst res_ty)
       (compose unified_subst (compose fs xs))
+
+  | CIf { cond; t; f } ->
+    let* (cond, cond_ty, cond_s) = infer_expr ctx cond in
+    let* (t, t_ty, t_s) = infer_expr ctx t in
+    let* (f, f_ty, f_s) = infer_expr ctx f in
+
+    let* unify_cond_s = unify_err cond_ty (TyConst "bool") (snd cond) in
+    let ret_ty = fresh () in
+    let* unify_t_s = unify_err t_ty ret_ty (snd t) in
+    let* unify_f_s = unify_err (apply_ty unify_t_s ret_ty) f_ty (snd f) in
+
+    oks (TIf { cond; t; f })
+      (apply_ty unify_f_s t_ty)
+      ((compose t_s f_s)
+      |> compose cond_s
+      |> compose unify_t_s
+      |> compose unify_f_s
+      |> compose unify_cond_s)
 
   | CLet { name; args = None; body; ret; in_ } ->
 
