@@ -17,13 +17,14 @@ type term =
   | TDef of
     { name: string spanned
     ; body: term spanned
-    ; ret: typ
+    ; typ: typ
     ; in_: term spanned
     }
   | TFun of
     { name: string spanned
     ; args: (string spanned * typ) list
     ; ret: typ
+    ; recr: bool
     ; body: term spanned
     ; in_: term spanned
     }
@@ -44,6 +45,7 @@ and term_top =
     { name: string spanned
     ; args: (string spanned * typ) list
     ; ret: typ
+    ; recr: bool
     ; body: term spanned
     }
   [@@deriving show]
@@ -117,7 +119,9 @@ let rec unify t u =
   match (t, u) with
   | TyConst l, TyConst r when l = r -> Ok Subst.empty
   | TyVar v, t | t, TyVar v ->
-    if occurs v t then
+    if t = TyVar v then
+      Ok Subst.empty
+    else if occurs v t then
       Error ("Infinite type: " ^ v ^ " occurs in " ^ string_of_typ t)
     else
       Ok (Subst.singleton v t)
@@ -222,30 +226,31 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* (b, b_ty, b_s) = infer_expr ctx b in
 
     (* Expected type *)
-    let expect_args_ty = match op with
-      | Add | Sub | Mul | Div | Mod ->
-        TyConst "int"
-      | Eq | Neq | Lt | Lte | Gt | Gte ->
-        fresh ()
-      | And | Or ->
-        TyConst "bool"
+    let expected_lhs_ty = match op with
+      | Add | Sub | Mul | Div | Mod -> TyConst "int"
+      | Eq | Neq | Lt | Lte | Gt | Gte -> a_ty
+      | And | Or -> TyConst "bool"
+      | Cons -> a_ty
+    in
+    let expected_rhs_ty = match op with
+      | Cons -> TyConstructor ("list", expected_lhs_ty)
+      | _ -> expected_lhs_ty
     in
     let ret_ty = match op with
-      | Add | Sub | Mul | Div | Mod ->
-        TyConst "int"
+      | Add | Sub | Mul | Div | Mod -> TyConst "int"
       | Eq | Neq | Lt | Lte | Gt | Gte
-      | And | Or ->
-        TyConst "bool"
+      | And | Or -> TyConst "bool"
+      | Cons -> TyConstructor ("list", expected_lhs_ty)
     in
 
     (* Unify them to have the operator's expected type *)
     let* unify_a_s =
-      unify a_ty expect_args_ty
+      unify a_ty expected_lhs_ty
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd a))
     in
     let* unify_b_s =
-      unify (apply_ty unify_a_s expect_args_ty) b_ty
+      unify (apply_ty unify_a_s expected_rhs_ty) b_ty
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd b))
     in
@@ -293,27 +298,27 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       |> compose unify_f_s
       |> compose unify_cond_s)
 
-  | CDef { name; body; ret; in_ } ->
+  | CDef { name; body; typ; in_ } ->
 
-    let ret = Option.value ret ~default:(fresh ()) in
+    let typ = Option.value typ ~default:(fresh ()) in
     let* (b, b_ty, bs) = infer_expr ctx body in
     let gen_b_ty = generalize ctx (apply_ty bs b_ty) in
+
+    let* ty_s =
+      unify typ (apply_ty bs b_ty)
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd body))
+    in
+    let typ = apply_ty ty_s typ in
 
     let in_ctx = Subst.add (fst name) gen_b_ty ctx in
 
     let* (in_, in_ty, in_s) = infer_expr in_ctx in_ in
 
-    let* ret_ty_s =
-      unify ret in_ty
-      |> Result.map to_scheme
-      |> Result.map_error (fun err -> (err, snd body))
-    in
-    let ret = apply_ty ret_ty_s ret in
-
     oks (TDef
       { name
       ; body = b
-      ; ret
+      ; typ
       ; in_ })
       in_ty
       (compose bs in_s)
@@ -377,6 +382,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
         { name
         ; args
         ; ret
+        ; recr
         ; body = b
         ; in_ })
       in_ty
@@ -460,6 +466,7 @@ let infer_top (ctx : scheme Subst.t ref) e =
         { name
         ; args
         ; ret
+        ; recr
         ; body = b })
 
 let magic =

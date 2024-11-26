@@ -55,7 +55,8 @@ let string_of_token = function
     | Gt  -> ">"
     | Gte -> ">="
     | And -> "&&"
-    | Or  -> "||")
+    | Or  -> "||"
+    | Cons -> "::")
   (* Delimiters *)
   | TkComma -> ","
   | TkAssign -> "="
@@ -128,10 +129,10 @@ let delim_of_string = function
   | _ -> assert false
 
 let char_one_of str c = List.exists ((=) c) (explode str)
-let is_bin_char c = char_one_of "+-*/%=!><&!" c
+let is_bin_char c = char_one_of "+-*/%=!><&!:" c
 
 let multi_char_bin = [
-  "=="; "!="; "<="; ">="; "&&"; "||"
+  "=="; "!="; "<="; ">="; "&&"; "||"; "::"
 ]
 
 let bin_of_string = function
@@ -148,6 +149,7 @@ let bin_of_string = function
   | ">=" -> Gte
   | "&&" -> And
   | "||" -> Or
+  | "::" -> Cons
   | _ -> assert false
 
 let is_atom_char = function
@@ -159,6 +161,11 @@ let rec tokenize_acc l acc =
     match peek { l with loc = l.loc + 1 } with
     | Some c -> f c
     | None -> false
+  in
+  (* | c when (c = '=' && when_peek_is ((!=) '=')) *)
+  let single c cs =
+    let cs = explode cs in
+    List.exists ((=) c) cs && when_peek_is ((!=) c)
   in
 
   match peek l with
@@ -221,8 +228,7 @@ let rec tokenize_acc l acc =
       let _ = advance l in
       let span = make_span l start in
       tokenize_acc l @@ (TkArrow, span) :: acc
-    | c when (c = '=' && when_peek_is ((!=) '='))
-    || char_one_of ",;:|\\" c ->
+    | c when single c ",=;:|\\" ->
       let _ = advance l in
       let span = make_span l start in
       let delim =

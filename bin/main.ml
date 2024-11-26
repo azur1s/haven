@@ -29,7 +29,7 @@ let process path output =
           |> comp
           |> List.map string_of_erl_top
           |> String.concat "\n"
-          |> Printf.sprintf "-module(%s).\n\n%s" (Filename.basename output)
+          |> Printf.sprintf "-module(%s).\n%s" (Filename.basename output)
           |> Result.ok)
         else
           infer_errs

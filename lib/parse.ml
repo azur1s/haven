@@ -17,7 +17,7 @@ type cst =
   | CDef of
     { name: string spanned
     ; body: cst spanned
-    ; ret: typ option
+    ; typ: typ option
     ; in_: cst spanned
     }
   | CFun of
@@ -302,7 +302,7 @@ let rec parse_atom p =
         | Some (_, s), None -> err_ret "Variable definition can't be recursive" s
         | _, _ -> Ok ()) in
       let colon = maybe p TkColon in
-      let* ret = if Option.is_some colon
+      let* typ = if Option.is_some colon
         then Result.map Option.some (parse_typ p 0)
         else Ok None
       in
@@ -314,14 +314,14 @@ let rec parse_atom p =
       | None -> Ok (CDef
         { name
         ; body
-        ; ret
+        ; typ
         ; in_
         }, span_union span (snd in_))
       | Some args -> Ok (CFun
         { name
         ; body
         ; args
-        ; ret
+        ; ret = typ
         ; in_
         ; recr
         }, span_union span (snd in_)))
@@ -350,12 +350,14 @@ let rec parse_atom p =
     | t -> err_ret ("Expected expression, found " ^ string_of_token t) span)
   | None -> err_ret "Expected expression, found end of file" (eof_error_loc p)
 
+(* https://ocaml.org/manual/5.2/expr.html#ss:precedence-and-associativity *)
 and binding_power = function
-  | Mul | Div | Mod -> 50, 51
-  | Add | Sub -> 40, 41
-  | Lt | Lte | Gt | Gte -> 30, 31
-  | Eq | Neq -> 20, 21
-  | And | Or -> 10, 11
+  | Mul | Div | Mod     -> 120, 121
+  | Add | Sub           -> 110, 111
+  | Cons                -> 100, 101
+  | Eq | Neq
+  | Lt | Lte | Gt | Gte -> 80, 81
+  | And | Or            -> 70, 71
 
 and parse_expr p min_bp =
   let rec parse_loop lhs =
@@ -377,13 +379,14 @@ and parse_expr p min_bp =
         Ok lhs
       else
         let _ = advance p in
-        parse_expr p r_pw
-        |> Result.map_error (with_hint "If you meant to return unit, then add a () expression after the semicolon")
-        |> Result.map (fun rhs -> (CThen (lhs, rhs), span_union (snd lhs) (snd rhs)))
+        let* rhs = parse_expr p r_pw
+          |> Result.map_error (with_hint "If you meant to return unit, then add a () expression after the semicolon")
+        in
+        parse_loop (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
     (* Application *)
     | Some _ ->
       (* Try parse, if goes wrong then just return lhs *)
-      let l_pw, r_pw = 100, 101 in
+      let l_pw, r_pw = 150, 151 in
       if l_pw < min_bp then
         Ok lhs
       else

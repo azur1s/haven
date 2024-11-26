@@ -1,4 +1,0 @@
-let main _ =
-  let x = 1 in
-  let f i = i + x in
-  f x

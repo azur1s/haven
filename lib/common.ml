@@ -38,6 +38,7 @@ and bin =
   | Add | Sub | Mul | Div | Mod
   | Eq  | Neq | Lt  | Lte | Gt | Gte
   | And | Or
+  | Cons
   [@@deriving show]
 
 and typ =
@@ -72,6 +73,7 @@ let string_of_bin = function
   (* Short-circuiting *)
   | And -> "andalso"
   | Or -> "orelse"
+  | Cons -> "|"
 
 let rec string_of_typ = function
   | TyAny -> "_"

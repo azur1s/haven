@@ -23,6 +23,7 @@ type kterm =
     ; args: string list
     ; body: kterm
     ; in_: kterm
+    ; recr: bool
     }
   | KCase of
     { value: kterm
@@ -36,6 +37,7 @@ and ktop =
   | KTFun of
     { name: string
     ; args: string list
+    ; recr: bool
     ; body: kterm
     }
   [@@deriving show]
@@ -52,9 +54,8 @@ let rec norm_term term =
   | TBin (a, op, b) -> KBin (norm_term a, op, norm_term b)
   | TThen (a, b) -> KThen (norm_term a, norm_term b)
   (* Uncurry applications *)
-  | TApp (f, x) ->
-    let (f, x) = uncurry (norm_term f) [norm_term x] in
-    KApp (f, x)
+  | TApp (f, x) -> uncurry (norm_term f) [norm_term x]
+    |> fun (f, x) -> KApp (f, x)
   | TIf { cond; t; f; _ } -> KIf
     { cond = norm_term cond
     ; t = norm_term t
@@ -63,9 +64,10 @@ let rec norm_term term =
     { name = fst name
     ; body = norm_term body
     ; in_ = norm_term in_ }
-  | TFun { name; args; body; in_; _ } -> KFun
+  | TFun { name; args; recr; body; in_; _ } -> KFun
     { name = fst name
     ; args = List.map (fun x -> fst @@ fst x) args
+    ; recr
     ; body = norm_term body
     ; in_ = norm_term in_ }
   | e -> todo __LOC__ ~reason:(show_term e)
@@ -73,10 +75,13 @@ let rec norm_term term =
 let norm_top top =
   match top with
   | TTDef { name; body; _ } ->
-    KTDef (fst name, norm_term body)
-  | TTFun { name; args; body; _ } -> KTFun
+    norm_term body
+    |> fun body ->
+      KTDef (fst name, body)
+  | TTFun { name; args; recr; body; _ } -> KTFun
     { name = fst name
     ; body = norm_term body
+    ; recr
     ; args = List.map (fun x -> fst @@ fst x) args
     }
 

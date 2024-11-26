@@ -1,0 +1,8 @@
+let main _ =
+  let mkadd n =
+    let f x = x + n in
+    f
+  in
+  let add_one = mkadd 1 in
+  let x = 10 in
+  __external__ "io:format" "~p~n" [add_one x]
