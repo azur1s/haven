@@ -14,7 +14,7 @@ let readfile path =
   close_in ch;
   s
 
-let process path =
+let process path output =
   let ic = open_in path in
   try
     let content = readfile path in
@@ -27,6 +27,9 @@ let process path =
           (* The rest of the errors after here should be compiler errors, I hope *)
           norm terms
           |> comp
+          |> List.map string_of_erl_top
+          |> String.concat "\n"
+          |> Printf.sprintf "-module(%s).\n%s" (Filename.basename output)
           |> Result.ok)
         else
           infer_errs
@@ -40,9 +43,9 @@ let process path =
 
 let compile path maybe_output =
   let output = match maybe_output with Some s -> s | None -> "out" in
-  match process path with
+  match process path output with
   | Ok s -> (
-    let oc = open_out (output ^ ".js") in
+    let oc = open_out (output ^ ".erl") in
     Printf.fprintf oc "%s" s;
     close_out oc)
   | Error errs ->
@@ -59,11 +62,11 @@ let run path maybe_output args =
   compile path maybe_output;
 
   let output = match maybe_output with Some s -> s | None -> "out" in
-  let target_file = output ^ ".js" in
+  let erl_file = output ^ ".erl" in
 
   let clean () =
     if maybe_output = None then
-      Unix.unlink target_file
+      Unix.unlink erl_file
   in
 
   let args =
@@ -71,15 +74,15 @@ let run path maybe_output args =
       "\"\""
     else
       String.concat " " (Array.to_list args) in
-  let command = "node " ^ target_file ^ " " ^ args in
+  let command = "escript " ^ erl_file ^ " " ^ args in
   match Unix.system command with
   | WEXITED 0 -> clean ()
   | WEXITED n ->
-    print_endline "Error running the output program";
+    print_endline "Error running the Erlang program";
     print_endline @@ "Ran: " ^ command;
     exit n
   | _ ->
-    print_endline "Error running the output program";
+    print_endline "Error running the Erlang program";
     exit 1
 
 let path =
