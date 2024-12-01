@@ -25,6 +25,11 @@ type kterm =
     ; in_: kterm
     ; recr: bool
     }
+  | KDestruct of
+    { names: string list
+    ; body: kterm
+    ; in_: kterm
+    }
   | KCase of
     { value: kterm
     ; pats: (pattern * kterm) list
@@ -68,6 +73,10 @@ let rec norm_term term =
     { name = fst name
     ; args = List.map (fun x -> fst @@ fst x) args
     ; recr
+    ; body = norm_term body
+    ; in_ = norm_term in_ }
+  | TDestruct { names; body; in_; _ } -> KDestruct
+    { names = List.map fst names
     ; body = norm_term body
     ; in_ = norm_term in_ }
   | e -> todo __LOC__ ~reason:(show_term e)

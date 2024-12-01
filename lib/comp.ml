@@ -13,7 +13,9 @@ type erl_expr =
   | EThen of erl_expr * erl_expr
   (* x = e *)
   | ELet of string * erl_expr
+  | ELetD of string list * erl_expr
   | EIf of erl_expr * erl_expr * erl_expr
+  | EInline of string
   [@@deriving show]
 
 and erl_top =
@@ -53,11 +55,13 @@ let rec string_of_erl_expr ?(cap=true) = function
   | EThen (e1, e2) ->
     Printf.sprintf "%s,\n  %s" (string_of_erl_expr e1) (string_of_erl_expr e2)
   | ELet (x, e) -> Printf.sprintf "%s = %s" (capitalize_first x) (string_of_erl_expr e)
+  | ELetD (xs, e) -> Printf.sprintf "{%s} = %s" (String.concat ", " (List.map capitalize_first xs)) (string_of_erl_expr e)
   | EIf (e, t, f) ->
     Printf.sprintf "if\n    %s -> %s;\n    true -> %s\n  end"
       (string_of_erl_expr e)
       (string_of_erl_expr t)
       (string_of_erl_expr f)
+  | EInline s -> s
 
 let string_of_erl_top = function
   | EExport exports ->
@@ -74,8 +78,9 @@ module M = Map.Make(String)
 
 type ctx =
   { mutable id: int
+  ; mutable top_funs: string list
   (* List of top level function, used to know when to capitalize the names or not *)
-  ; mutable top_funcs: string list
+  ; mutable top_vars: string list
   (* A mapping from actual symbol to symbol with id *)
   ; mutable vars: string M.t
   }
@@ -90,7 +95,7 @@ let next_id ctx =
 let rec comp_term ctx term =
   match term with
   | KLit (LSym s) ->
-    if List.mem s ctx.top_funcs then
+    if List.mem s ctx.top_vars then
       EApp (ELit (LSym s), [], true)
     else if M.mem s ctx.vars then
       ELit (LSym (M.find s ctx.vars))
@@ -108,8 +113,20 @@ let rec comp_term ctx term =
       |> (^) __LOC__
       |> (^) "Invalid external call: "
       |> failwith)
+  | KApp (KLit (LSym "__inline__"), xs) ->
+    (match xs with
+    | [KLit (LStr c)] -> EInline c
+    | x -> List.map show_kterm x
+      |> String.concat ", "
+      |> (^) __LOC__
+      |> (^) "Invalid external call: "
+      |> failwith)
   | KApp (f, xs) ->
-    EApp (comp_term ctx f, List.map (comp_term ctx) xs, false)
+    let is_top = match f with
+      | KLit (LSym s) -> List.mem s ctx.top_funs
+      | _ -> false
+    in
+    EApp (comp_term ctx f, List.map (comp_term ctx) xs, is_top)
   | KIf { cond; t; f } ->
     let cond = comp_term ctx cond in
     let ifsym = "_if" ^ string_of_int (next_id ctx) in
@@ -133,21 +150,34 @@ let rec comp_term ctx term =
     EThen (
       ELet (sym, ELam (sym, args, body)),
       comp_term ctx in_)
+  | KDestruct { names; body; in_; } ->
+    let syms = List.map (fun name -> name ^ string_of_int (next_id ctx)) names in
+    List.iter2 (fun name sym -> ctx.vars <- M.add name sym ctx.vars) names syms;
+    let body = comp_term ctx body in
+    EThen (
+      ELetD (syms, body),
+      comp_term ctx in_)
   | e -> todo __LOC__ ~reason:(show_kterm e)
 
 let comp_top ctx top =
   match top with
   | KTDef (name, body) ->
     reset_id ctx;
-    ctx.top_funcs <- name :: ctx.top_funcs;
+    ctx.top_vars <- name :: ctx.top_vars;
     EDef (name, comp_term ctx body)
   | KTFun { name; args; body; _ } ->
     reset_id ctx;
-    ctx.top_funcs <- name :: ctx.top_funcs;
+    ctx.top_funs <- name :: ctx.top_funs;
     EFun { name; args; expr = comp_term ctx body }
 
 let comp terms =
-  let ctx = { id = 0; top_funcs = []; vars = M.empty } in
+  let ctx =
+    { id = 0
+    ; top_funs = []
+    ; top_vars = []
+    ; vars = M.empty
+    }
+  in
   let comped = List.map (comp_top ctx) terms in
 
   let exports = List.fold_left (fun acc -> function

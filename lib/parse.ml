@@ -28,6 +28,11 @@ type cst =
     ; recr: bool
     ; in_: cst spanned
     }
+  | CDestruct of
+    { names: (string spanned * typ option) list
+    ; body: cst spanned
+    ; in_: cst spanned
+    }
   | CCase of
     { value: cst spanned
     ; pats: (pattern spanned * cst spanned) list
@@ -104,7 +109,7 @@ let expect_then p f expect_str =
 
 let expect_cond p f expect_str =
   match peek p with
-  | Some (t, s) when f t -> advance_return p (Ok (t, s))
+  | Some (t, s) when f t -> (Ok (t, s)) |> advance_return p
   | Some (t, s) -> err_ret ("Expected " ^ expect_str ^ ", found " ^ string_of_token t) s
   | None -> err_ret ("Expected " ^ expect_str ^ ", found end of file") (eof_error_loc p)
 
@@ -170,13 +175,14 @@ let rec parse_typ p min_bp =
   let parse_typ_atom p =
     match peek p with
     | Some (TkSym s, span) ->
-      advance_return p (match s with
+      (match s with
       | "unit"   -> Ok (TyConst "unit", span)
       | "bool"   -> Ok (TyConst "bool", span)
       | "int"    -> Ok (TyConst "int", span)
       | "float"  -> Ok (TyConst "float", span)
       | "string" -> Ok (TyConst "string", span)
       | s -> Ok (TyConst s, span))
+      |> advance_return p
     | Some (TkOpen Paren, start) ->
       let _ = advance p in
       let* typ = parse_typ p 0 in
@@ -291,40 +297,59 @@ let rec parse_atom p =
       Ok (CIf { cond; t; f; }, span_union span (snd f))
     | TkLet ->
       let _ = advance p in
-      let rec_tk = maybe p TkRec in
-      let recr = if Option.is_some rec_tk
-        then true
-        else false
-      in
-      let* name = parse_sym p in
-      let* args = parse_let_args p in
-      let* _ = (match rec_tk, args with
-        | Some (_, s), None -> err_ret "Variable definition can't be recursive" s
-        | _, _ -> Ok ()) in
-      let colon = maybe p TkColon in
-      let* typ = if Option.is_some colon
-        then Result.map Option.some (parse_typ p 0)
-        else Ok None
-      in
-      let* _ = expect p TkAssign in
-      let* body = parse_expr p 0 in
-      let* _ = expect p TkIn in
-      let* in_ = parse_expr p 0 in
-      (match args with
-      | None -> Ok (CDef
-        { name
-        ; body
-        ; typ
-        ; in_
-        }, span_union span (snd in_))
-      | Some args -> Ok (CFun
-        { name
-        ; body
-        ; args
-        ; ret = typ
-        ; in_
-        ; recr
-        }, span_union span (snd in_)))
+      (match peek p with
+      | Some (TkOpen Paren, _) ->
+        let _ = advance p in
+        let* names_tys = parse_let_args p in
+        let* _ = if Option.is_none names_tys
+          then err_ret "Expected variable names" span
+          else Ok ()
+        in
+        let* _ = expect p (TkClose Paren) in
+        let* _ = expect p TkAssign in
+        let* body = parse_expr p 0 in
+        let* _ = expect p TkIn in
+        let* in_ = parse_expr p 0 in
+        Ok (CDestruct
+          { names = Option.get names_tys
+          ; body
+          ; in_
+          }, span_union span (snd in_))
+      | _ ->
+        let rec_tk = maybe p TkRec in
+        let recr = if Option.is_some rec_tk
+          then true
+          else false
+        in
+        let* name = parse_sym p in
+        let* args = parse_let_args p in
+        let* _ = (match rec_tk, args with
+          | Some (_, s), None -> err_ret "Variable definition can't be recursive" s
+          | _, _ -> Ok ()) in
+        let colon = maybe p TkColon in
+        let* typ = if Option.is_some colon
+          then Result.map Option.some (parse_typ p 0)
+          else Ok None
+        in
+        let* _ = expect p TkAssign in
+        let* body = parse_expr p 0 in
+        let* _ = expect p TkIn in
+        let* in_ = parse_expr p 0 in
+        (match args with
+        | None -> Ok (CDef
+          { name
+          ; body
+          ; typ
+          ; in_
+          }, span_union span (snd in_))
+        | Some args -> Ok (CFun
+          { name
+          ; body
+          ; args
+          ; ret = typ
+          ; in_
+          ; recr
+          }, span_union span (snd in_))))
     | TkCase ->
       let parse_case_clause p tk =
         let inf = "case clause" in
@@ -417,7 +442,11 @@ and parse_top p =
         else false
       in
       let* name = parse_sym p in
-      let* args = parse_let_args p in
+      let* args = match peek p with
+        | Some (TkUnit, s) -> Ok (Some [(("_", s), Some (TyConst "unit"))])
+          |> advance_return p
+        | _ -> parse_let_args p
+      in
       let* _ = (match rec_tk, args with
         | Some (_, s), None -> err_ret "Variable definition can't be recursive" s
         | _, _ -> Ok ()) in

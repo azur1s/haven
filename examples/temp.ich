@@ -1,9 +1,1 @@
-let f l =
-  if l == [] then
-    0
-  else
-    let l = 1 in
-    l
-
-let main _ =
-  ()
+let main _ = __external__ "io:format" "~s~n" ["Hello, World"]

@@ -7,8 +7,8 @@ let rec fold_left f accu l =
     fold_left f (f accu a) l
 
 let main _ =
-  let x : int = 0 in
-  let xs : int list = [1, 2, 3, 4, 5] in
+  let x = 0 in
+  let xs = [1, 2, 3, 4, 5] in
   let cons = x :: xs in
 
   let sum acc b = acc + b in

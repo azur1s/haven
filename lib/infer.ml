@@ -28,6 +28,12 @@ type term =
     ; body: term spanned
     ; in_: term spanned
     }
+  | TDestruct of
+    { names: string spanned list
+    ; types: typ list
+    ; body: term spanned
+    ; in_: term spanned
+    }
   | TCase of
     { value: term spanned
     ; pats: (pattern spanned * term spanned) list
@@ -388,6 +394,42 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       in_ty
       (compose bs (compose f_ty_s in_s))
 
+  | CDestruct { names; body; in_ } ->
+    let types = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) names in
+    let names = List.map (fun x -> fst x) names in
+    let expect_ty = List.fold_right (fun t acc -> TyTuple (t, acc))
+      (List.tl types) (List.hd types) in
+    let* (b, b_ty, bs) = infer_expr ctx body in
+
+    let* unify_s =
+      unify b_ty expect_ty
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd body))
+    in
+
+    let _gen_b_ty =
+      apply_ty bs b_ty
+      |> generalize ctx
+      |> apply_scheme unify_s
+    in
+
+    let ctx = List.fold_left
+      (fun ctx (name, ty) -> Subst.add name ty ctx)
+      ctx (List.combine
+        (List.map fst names)
+        (List.map (fun t -> Forall ([], t)) types))
+    in
+
+    let* (in_, in_ty, in_s) = infer_expr ctx in_ in
+
+    oks (TDestruct
+      { names
+      ; types
+      ; body = b
+      ; in_ })
+      in_ty
+      (compose bs (compose unify_s in_s))
+
   | e -> todo @@ __LOC__ ^ " " ^ show_cst e
 
 let infer_top (ctx : scheme Subst.t ref) e =
@@ -472,6 +514,8 @@ let infer_top (ctx : scheme Subst.t ref) e =
 let magic =
   (* __external__ ext_fun [args] *)
   [ "__external__", Forall ([], TyArrow (TyConst "string", TyAny))
+  (* __inline__ string *)
+  ; "__inline__", Forall ([], TyArrow (TyConst "string", TyAny))
   ]
 
 let infer es =
