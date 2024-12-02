@@ -192,7 +192,23 @@ let rec tokenize_acc l acc =
       in
       skip_line ();
       tokenize_acc l acc
-    (* String *)
+    | c when c = '(' && when_peek_is ((=) '*') ->
+      let _ = advance l in
+      let _ = advance l in
+      let rec skip_comment () =
+        match peek l with
+        | Some '*' when when_peek_is ((=) ')') ->
+          let _ = advance l in
+          let _ = advance l in
+          ()
+        | Some _ ->
+          let _ = advance l in
+          skip_comment ()
+        | None -> ()
+      in
+      skip_comment ();
+      tokenize_acc l acc
+      (* String *)
     | '"' ->
       let _ = advance l in
       let rec read_str acc =

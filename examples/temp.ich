@@ -1,1 +1,5 @@
-let main _ = __external__ "io:format" "~s~n" ["Hello, World"]
+let test = (* ajsdlfjasl;kdjf;laskdfj *) "Hello" -- test
+
+let main _ = __external__ "io:format" "~s~n" [test]
+
+
