@@ -1,0 +1,5 @@
+let test = ("Hello", 42, "World", "!")
+
+let main _ =
+  let (a b c d) = test in
+  __external__ "io:format" "~s ~p ~s~s~n" [a, b, c, d]

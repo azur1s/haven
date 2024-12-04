@@ -5,6 +5,7 @@ open Norm
 type erl_expr =
   | ELit of lit
   | EList of erl_expr list
+  | ETuple of erl_expr list
   | EBin of erl_expr * bin * erl_expr
   | EApp of erl_expr * erl_expr list * bool
   (* fun name(args) -> e end *)
@@ -34,6 +35,7 @@ let rec string_of_erl_expr ?(cap=true) = function
   | ELit (LSym s) when cap -> capitalize_first s
   | ELit l -> string_of_lit l
   | EList l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_erl_expr l))
+  | ETuple l -> Printf.sprintf "{%s}" (String.concat ", " (List.map string_of_erl_expr l))
   | EBin (a, Cons, b) ->
     Printf.sprintf "[%s | %s]"
       (string_of_erl_expr a)
@@ -104,6 +106,7 @@ let rec comp_term ctx term =
   | KLit l -> ELit l
   | KBin (a, op, b) -> EBin (comp_term ctx a, op, comp_term ctx b)
   | KList l -> EList (List.map (comp_term ctx) l)
+  | KTuple l -> ETuple (List.map (comp_term ctx) l)
   | KThen (a, b) -> EThen (comp_term ctx a, comp_term ctx b)
   | KApp (KLit (LSym "__external__"), xs) ->
     (match xs with

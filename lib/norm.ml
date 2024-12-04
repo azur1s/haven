@@ -5,6 +5,7 @@ open Infer
 type kterm =
   | KLit   of lit
   | KList  of kterm list
+  | KTuple of kterm list
   | KBin   of kterm * bin * kterm
   | KApp   of kterm * kterm list
   | KThen  of kterm * kterm
@@ -56,6 +57,7 @@ let rec norm_term term =
   match (fst term) with
   | TLit (l, _) -> KLit l
   | TList l -> KList (List.map norm_term l)
+  | TTuple l -> KTuple (List.map norm_term l)
   | TBin (a, op, b) -> KBin (norm_term a, op, norm_term b)
   | TThen (a, b) -> KThen (norm_term a, norm_term b)
   (* Uncurry applications *)

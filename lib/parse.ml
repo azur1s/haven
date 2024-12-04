@@ -6,6 +6,7 @@ open Lex
 type cst =
   | CLit   of lit spanned
   | CList  of cst spanned list
+  | CTuple of cst spanned list
   | CBin   of cst spanned * bin * cst spanned
   | CApp   of cst spanned * cst spanned
   | CThen  of cst spanned * cst spanned
@@ -271,12 +272,20 @@ let rec parse_atom p =
     | TkFloat x -> advance_return p (Ok (CLit (LFloat x, span), span))
     | TkStr   x -> advance_return p (Ok (CLit (LStr x, span), span))
     | TkSym   x -> advance_return p (Ok (CLit (LSym x, span), span))
-    (* (expr) *)
+    (* (expr, ...) *)
     | TkOpen Paren ->
       let _ = advance p in
-      let* (exp, _) = parse_expr p 0 in
-      let* (_, end_span) = expect p (TkClose Paren) in
-      Ok (exp, span_union span end_span)
+      let* exp = parse_expr p 0 in
+      (match peek p with
+      | Some (TkClose Paren, end_span) ->
+        advance_return p @@ Ok (fst exp, span_union span end_span)
+      | Some (TkComma, _) ->
+        let _ = advance p in
+        let* exprs = many_delim p (fun p -> parse_expr p 0) TkComma in
+        let* (_, end_span) = expect p (TkClose Paren) in
+        Ok (CTuple (exp :: exprs), (span_union span end_span))
+      | Some (t, s) -> err_ret ("Expected `)` or `,`, found " ^ string_of_token t) s
+      | None -> err_ret ("Expected `)` or `,`, found end of file") (eof_error_loc p))
     | TkOpen Brack ->
       let _ = advance p in
       (match peek p with

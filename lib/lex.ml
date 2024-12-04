@@ -43,36 +43,36 @@ let string_of_token = function
   | TkStr   x -> "\"" ^ x ^ "\""
   (* Operators *)
   | TkBin   x -> (match x with
-    | Add -> "+"
-    | Sub -> "-"
-    | Mul -> "*"
-    | Div -> "/"
-    | Mod -> "%"
-    | Eq  -> "=="
-    | Neq -> "!="
-    | Lt  -> "<"
-    | Lte -> "<="
-    | Gt  -> ">"
-    | Gte -> ">="
-    | And -> "&&"
-    | Or  -> "||"
-    | Cons -> "::")
+    | Add -> "`+`"
+    | Sub -> "`-`"
+    | Mul -> "`*`"
+    | Div -> "`/`"
+    | Mod -> "`%`"
+    | Eq  -> "`==`"
+    | Neq -> "`!=`"
+    | Lt  -> "`<`"
+    | Lte -> "`<=`"
+    | Gt  -> "`>`"
+    | Gte -> "`>=`"
+    | And -> "`&&`"
+    | Or  -> "`||`"
+    | Cons -> "`::`")
   (* Delimiters *)
-  | TkComma -> ","
-  | TkAssign -> "="
-  | TkSemi -> ";"
-  | TkColon -> ":"
-  | TkBar -> "|"
-  | TkBarElse -> "\\"
-  | TkArrow -> "->"
+  | TkComma -> "`,`"
+  | TkAssign -> "`=`"
+  | TkSemi -> "`;`"
+  | TkColon -> "`:`"
+  | TkBar -> "`|`"
+  | TkBarElse -> "`\\`"
+  | TkArrow -> "`->`"
   | TkOpen  x -> (match x with
-    | Paren -> "("
-    | Brack -> "["
-    | Brace -> "{")
+    | Paren -> "`(`"
+    | Brack -> "`[`"
+    | Brace -> "`{`")
   | TkClose x -> (match x with
-    | Paren -> ")"
-    | Brack -> "]"
-    | Brace -> "}")
+    | Paren -> "`)`"
+    | Brack -> "`]`"
+    | Brace -> "`}`")
   (* Keywords *)
   | TkIf   -> "if"
   | TkThen -> "then"

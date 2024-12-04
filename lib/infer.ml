@@ -6,6 +6,7 @@ open Parse
 type term =
   | TLit   of lit spanned
   | TList  of term spanned list
+  | TTuple of term spanned list
   | TBin   of term spanned * bin * term spanned
   | TApp   of term spanned * term spanned
   | TThen  of term spanned * term spanned
@@ -227,6 +228,20 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       in
       oks (TList xs) t unified_subst
 
+  | CTuple xs ->
+    let* xs' = map_early_return (infer_expr ctx) xs in
+    let (_, t, _) = List.hd xs' in
+    let t = List.fold_right
+      (fun (_, u, _) acc -> TyTuple (acc, u))
+      (List.tl xs') t
+    in
+    let xs = List.map (fun (x, _, _) -> x) xs' in
+    let subst = List.fold_left
+      (fun acc (_, _, s) -> compose acc s)
+      Subst.empty xs'
+    in
+    oks (TTuple xs) t subst
+
   | CBin (a, op , b) ->
     let* (a, a_ty, a_s) = infer_expr ctx a in
     let* (b, b_ty, b_s) = infer_expr ctx b in
@@ -397,7 +412,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
   | CDestruct { names; body; in_ } ->
     let types = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) names in
     let names = List.map (fun x -> fst x) names in
-    let expect_ty = List.fold_right (fun t acc -> TyTuple (t, acc))
+    let expect_ty = List.fold_right (fun t acc -> TyTuple (acc, t))
       (List.tl types) (List.hd types) in
     let* (b, b_ty, bs) = infer_expr ctx body in
 
