@@ -1,0 +1,29 @@
+let l_to_b bs = __external__ "list_to_binary" bs
+let println msg = __external__ "io:format" "~s~n" [msg]
+let listen port = __external__ "gen_tcp:listen" port [__inline__ "binary, {packet, 0}, {active, false}"]
+let accept sckt = __external__ "gen_tcp:accept" sckt
+let close  sckt = __external__ "gen_tcp:close" sckt
+let recv   sckt len = __external__ "gen_tcp:recv" sckt len
+
+let rec do_recv sckt bs =
+  let (res b) = recv sckt 0 in
+  let ok = (__inline__ "ok") in
+  if res == ok
+  (* TODO: This upset inference *)
+  (*                 vvvvv      *)
+  then do_recv sckt [bs, b]
+  else (ok, l_to_b bs)
+
+let rec loop srvr =
+  let (_ sckt) = accept srvr in
+  let (_ bin) = do_recv sckt [] in
+  close sckt;
+  println bin;
+  loop srvr
+
+let server =
+  let (_ srvr) = listen 3000 in
+  loop srvr
+
+let main _ =
+  println "Server started"

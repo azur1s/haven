@@ -1,3 +1,4 @@
-let test = (* ajsdlfjasl;kdjf;laskdfj *) "Hello" -- test
-
-let main _ = __external__ "io:format" "~s~n" [test]
+let main _ =
+  let a : int = 1 in
+  let b : int list = [a, [a]] in
+  b

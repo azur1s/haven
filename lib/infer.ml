@@ -129,7 +129,7 @@ let rec unify t u =
     if t = TyVar v then
       Ok Subst.empty
     else if occurs v t then
-      Error ("Infinite type: " ^ v ^ " occurs in " ^ string_of_typ t)
+      Error ("Recursive type: " ^ v ^ " occurs in " ^ string_of_typ t)
     else
       Ok (Subst.singleton v t)
   | TyTuple (t1, t2), TyTuple (u1, u2)
@@ -497,24 +497,24 @@ let infer_top (ctx : scheme Subst.t ref) e =
       !ctx args_scheme
     in
     let body_ctx = if recr then
-      Subst.add (fst name) (empty_scheme ret) body_ctx
+      Subst.add (fst name) (empty_scheme f_ty) body_ctx
     else body_ctx in
 
     let* (b, b_ty, bs) = infer_expr body_ctx body in
 
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
-    let* f_ty_s =
+    let* f_ret_ty_s =
       unify ret b_ty
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd body))
     in
-    let ret = apply_ty f_ty_s ret in
+    let ret = apply_ty f_ret_ty_s ret in
 
     let gen_f_ty =
       apply_ty bs f_ty
       |> generalize body_ctx
-      |> apply_scheme f_ty_s in
+      |> apply_scheme f_ret_ty_s in
 
     ctx := Subst.add (fst name) gen_f_ty !ctx;
 
