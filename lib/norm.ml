@@ -67,11 +67,11 @@ let rec norm_term term =
   | TThen (a, b) ->
     let a = norm_term a in
     let b = norm_term b in
-    KDef { name = "_"; body = a; in_ =  b }
+    KDef { name = "_then_"; body = a; in_ =  b }
   (* Uncurry applications *)
   | TApp (f, x) -> uncurry (norm_term f) [norm_term x]
     |> fun (f, x) -> KApp (f, x)
-  | TLambda { args; body } -> KLambda
+  | TLambda { args; body; _ } -> KLambda
     (List.map (fun x -> fst @@ fst x) args, norm_term body)
   | TIf { cond; t; f; _ } -> KIf
     { cond = norm_term cond
@@ -126,17 +126,26 @@ let rec flatten_let = function
     KDef { name; body = flatten_let body; in_ = flatten_let in_ }
   | x -> x
 
-let rec convert_to_lambda = function
-  | KFun { name; args; body; in_; recr } -> todo ""
+let rec fun_to_lambda_def = function
+  | KFun { name; args; body; in_; recr = _recr } ->
+    let body = fun_to_lambda_def body in
+    let in_ = fun_to_lambda_def in_ in
+    KDef
+      { name
+      ; body = KLambda (args, body)
+      ; in_ }
   | x -> x
 
 let norm_top top =
-  let norm t = norm_term t |> flatten_let in
+  let norm t =
+    norm_term t
+    |> flatten_let
+    |> fun_to_lambda_def
+  in
   match top with
   | TTDef { name; body; _ } ->
     norm body
-    |> fun body ->
-      KTDef (fst name, body)
+    |> fun body -> KTDef (fst name, body)
   | TTFun { name; args; recr; body; _ } -> KTFun
     { name = fst name
     ; body = norm body

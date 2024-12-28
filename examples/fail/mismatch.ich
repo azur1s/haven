@@ -1,4 +1,0 @@
-let main () =
-    let A : int = 1 in
-    let B : bool = true in
-    [A, B]

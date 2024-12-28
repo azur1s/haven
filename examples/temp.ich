@@ -1,8 +1,16 @@
+let print a = __external__ "console.log" a
+
+let foo =
+    let x = 34 in
+    let y = 35 in
+    x + y
+
+let id x = x
+
 let main () =
-    let rec fib (n : int) : int =
-        if n == 0 || n == 1
-        then n else fib (n - 1) + fib (n - 2)
+    let rec fib n =
+        if n <= 1 then n else fib (n - 1) + fib (n - 2)
     in
-    let id = fun a -> a in
-    let result : int = id fib 5 in
-    __external__ "console.log" result
+    let result : int = id (fib 10) in
+    print result;
+    print (id foo)

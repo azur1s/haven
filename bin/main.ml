@@ -15,7 +15,7 @@ let readfile path =
   close_in ch;
   s
 
-let process path output =
+let process path =
   let ic = open_in path in
   try
     let content = readfile path in
@@ -27,14 +27,13 @@ let process path output =
         if infer_errs = [] then (
           (* The rest of the errors after here should be compiler errors, I hope *)
           norm terms
-          |> (fun normeds ->
+          (* |> (fun normeds ->
             let _ = List.map (fun x -> Printf.printf "%s\n"
               (Sexp.to_string_hum (sexp_of_ktop x))) normeds in
-            normeds)
-          (* |> comp
-          |> List.map string_of_erl_top
-          |> String.concat "\n"
-          |> Printf.sprintf "-module(%s).\n%s" (Filename.basename output) *)
+            normeds) *)
+          |> comp
+          |> List.map string_of_js_expr
+          |> String.concat ";\n"
           |> Result.ok)
         else
           infer_errs
@@ -46,15 +45,17 @@ let process path output =
     close_in ic;
     raise e
 
-let compile path maybe_output =
-  let output = match maybe_output with Some s -> s | None -> "out" in
-  match process path output with
+let output_or_default = function
+  | Some s -> s
+  | None -> "out.js"
+
+let compile path output =
+  let output = output_or_default output in
+  match process path with
   | Ok s -> (
-    (* let oc = open_out (output ^ ".erl") in *)
-    (* Printf.fprintf oc "%s" s; *)
-    (* close_out oc *)
-    ()
-    )
+    let oc = open_out output in
+    Printf.fprintf oc "%s" s;
+    close_out oc)
   | Error errs ->
     let ic = open_in path in
     try
@@ -65,40 +66,42 @@ let compile path maybe_output =
       close_in ic;
       raise e
 
-let run path maybe_output args =
-  compile path maybe_output;
+let run path output args =
+  compile path output;
+  let should_clean = output = None in
+  let output = output_or_default output in
 
-  let output = match maybe_output with Some s -> s | None -> "out" in
-  let erl_file = output ^ ".erl" in
-
-  let clean () =
-    if maybe_output = None then
-      Unix.unlink erl_file
-  in
+  let clean () = Unix.unlink output in
 
   let args =
     if args = [||] then
       "\"\""
     else
       String.concat " " (Array.to_list args) in
-  let command = "escript " ^ erl_file ^ " " ^ args in
+  let command = "node " ^ output ^ " " ^ args in
   match Unix.system command with
-  | WEXITED 0 -> clean ()
+  | WEXITED 0 -> if should_clean then clean ()
   | WEXITED n ->
-    print_endline "Error running the Erlang program";
+    print_endline "Runtime error of JavaScript execution";
     print_endline @@ "Ran: " ^ command;
     exit n
   | _ ->
-    print_endline "Error running the Erlang program";
+    print_endline "Runtime error of JavaScript execution";
     exit 1
 
 let path =
   let doc = "The input file" in
   Arg.(required & pos 0 (some string) None & info [] ~docv:"INPUT" ~doc)
 
+let map_strip maybe_output =
+  match maybe_output with
+  | Some s -> Some (if Filename.check_suffix s ".js" then s else s ^ ".js")
+  | None -> None
+
 let output =
   let doc = "The output path without prefix (default: out)" in
   Arg.(value & opt (some string) None & info ["o"; "output"] ~docv:"OUTPUT" ~doc)
+  |> Term.app (Term.const map_strip)
 
 let process_t =
   Term.(const compile $ path $ output)
