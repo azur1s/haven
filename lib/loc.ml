@@ -1,3 +1,5 @@
+open Sexplib0
+
 type span =
   { file: string
   ; start: int
@@ -18,3 +20,6 @@ let show_span_no_file s =
 
 let show_span s =
   s.file ^ "@" ^ show_span_no_file s
+
+let sexp_of_span s =
+  Sexp.Atom (show_span s)

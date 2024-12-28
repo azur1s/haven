@@ -10,6 +10,11 @@ type term =
   | TBin   of term spanned * bin * term spanned
   | TApp   of term spanned * term spanned
   | TThen  of term spanned * term spanned
+  | TLambda of
+    { args: (string spanned * typ) list
+    ; ret: typ
+    ; body: term spanned
+    }
   | TIf of
     { cond: term spanned
     ; t: term spanned
@@ -140,7 +145,7 @@ let rec unify t u =
   | TyConstructor (l, t), TyConstructor (r, u) when l = r ->
     unify t u
   | TyAny, _ | _, TyAny -> Ok Subst.empty
-  | _ -> Error ("Type " ^ string_of_typ t ^ " does not match " ^ string_of_typ u)
+  | _ -> Error ("Expected type " ^ string_of_typ t ^ " does not match " ^ string_of_typ u)
 
 let rec free_vars = function
   | TyVar v   -> [v]
@@ -301,6 +306,47 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (apply_ty unified_subst res_ty)
       (compose unified_subst (compose fs xs))
 
+  | CLambda { args; ret; body } ->
+    let args_name = List.map (fun x -> fst x) args in
+    let args_ty = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) args in
+    let ret = Option.value ret ~default:(fresh ()) in
+
+    let rec make_ft = function
+      | [] -> ret
+      | arg :: rest -> TyArrow (arg, make_ft rest)
+    in
+    let f_ty = make_ft args_ty in
+
+    let args_scheme = List.combine
+      (List.map (fun x -> fst x) args_name)
+      (List.map (fun t -> Forall ([], t)) args_ty)
+    in
+    let body_ctx = List.fold_left
+      (fun subst (name, ty) -> Subst.add name ty subst)
+      ctx args_scheme
+    in
+
+    let* (b, b_ty, bs) = infer_expr body_ctx body in
+
+
+    let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
+
+    let* ret_ty_s =
+      unify ret b_ty
+      |> Result.map to_scheme
+      |> Result.map_error (fun err -> (err, snd body))
+    in
+    let ret = apply_ty ret_ty_s ret in
+    let f_ty = apply_ty (compose bs ret_ty_s) f_ty in
+
+    let args = List.combine args_name args_ty in
+    oks (TLambda
+        { args
+        ; ret
+        ; body = b })
+      f_ty
+      (compose bs ret_ty_s)
+
   | CIf { cond; t; f } ->
     let* (cond, cond_ty, cond_s) = infer_expr ctx cond in
     let* (t, t_ty, t_s) = infer_expr ctx t in
@@ -370,7 +416,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       ctx args_scheme
     in
     let body_ctx = if recr then
-      Subst.add (fst name) (empty_scheme ret) body_ctx
+      Subst.add (fst name) (empty_scheme f_ty) body_ctx
     else body_ctx in
 
     (* Infer body *)
@@ -378,19 +424,19 @@ let rec infer_expr (ctx : scheme Subst.t) e =
 
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
-    (* Unifies that the function type match the body type *)
-    let* f_ty_s =
+    (* Unifies that the function's return type match the body type *)
+    let* ret_ty_s =
       unify ret b_ty
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd body))
     in
-    let ret = apply_ty f_ty_s ret in
+    let ret = apply_ty ret_ty_s ret in
 
     (* Generalize function type *)
     let gen_f_ty =
       apply_ty bs f_ty
       |> generalize body_ctx
-      |> apply_scheme f_ty_s in
+      |> apply_scheme ret_ty_s in
 
     (* Add function to context *)
     let ctx = Subst.add (fst name) gen_f_ty ctx in
@@ -407,7 +453,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
         ; body = b
         ; in_ })
       in_ty
-      (compose bs (compose f_ty_s in_s))
+      (compose bs (compose ret_ty_s in_s))
 
   | CDestruct { names; body; in_ } ->
     let types = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) names in

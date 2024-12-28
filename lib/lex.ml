@@ -25,7 +25,7 @@ type token =
   | TkIf  | TkThen | TkElse
   | TkLet | TkIn | TkRec
   | TkCase | TkOf
-  | TkUse
+  | TkUse | TkFun
   [@@deriving show]
 
 and delim =
@@ -83,6 +83,7 @@ let string_of_token = function
   | TkCase -> "case"
   | TkOf   -> "of"
   | TkUse  -> "use"
+  | TkFun  -> "fun"
 
 type l =
   { input: string
@@ -129,7 +130,7 @@ let delim_of_string = function
   | _ -> assert false
 
 let char_one_of str c = List.exists ((=) c) (explode str)
-let is_bin_char c = char_one_of "+-*/%=!><&!:" c
+let is_bin_char c = char_one_of "+-*/%=!><&|!:" c
 
 let multi_char_bin = [
   "=="; "!="; "<="; ">="; "&&"; "||"; "::"
@@ -178,6 +179,7 @@ let rec tokenize_acc l acc =
     | c when is_ws c ->
       let _ = advance l in
       tokenize_acc l acc
+    (* Delimiters that is the first character of something else *)
     | c when c = '-' && when_peek_is ((=) '-') ->
       let _ = advance l in
       let rec skip_line () =
@@ -192,6 +194,7 @@ let rec tokenize_acc l acc =
       in
       skip_line ();
       tokenize_acc l acc
+    (* Comments *)
     | c when c = '(' && when_peek_is ((=) '*') ->
       let _ = advance l in
       let _ = advance l in
@@ -208,7 +211,7 @@ let rec tokenize_acc l acc =
       in
       skip_comment ();
       tokenize_acc l acc
-      (* String *)
+    (* String *)
     | '"' ->
       let _ = advance l in
       let rec read_str acc =
@@ -336,6 +339,7 @@ let rec tokenize_acc l acc =
           | "case"  -> TkCase
           | "of"    -> TkOf
           | "use"   -> TkUse
+          | "fun"   -> TkFun
           | _ -> TkSym acc
       in
       let _ = advance l in

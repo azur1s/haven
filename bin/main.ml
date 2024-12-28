@@ -7,6 +7,7 @@ open Ichor.Comp
 open Ichor.Report
 open Cmdliner
 open Unix
+open Sexplib0
 
 let readfile path =
   let ch = open_in_bin path in
@@ -26,10 +27,14 @@ let process path output =
         if infer_errs = [] then (
           (* The rest of the errors after here should be compiler errors, I hope *)
           norm terms
-          |> comp
+          |> (fun normeds ->
+            let _ = List.map (fun x -> Printf.printf "%s\n"
+              (Sexp.to_string_hum (sexp_of_ktop x))) normeds in
+            normeds)
+          (* |> comp
           |> List.map string_of_erl_top
           |> String.concat "\n"
-          |> Printf.sprintf "-module(%s).\n%s" (Filename.basename output)
+          |> Printf.sprintf "-module(%s).\n%s" (Filename.basename output) *)
           |> Result.ok)
         else
           infer_errs
@@ -45,9 +50,11 @@ let compile path maybe_output =
   let output = match maybe_output with Some s -> s | None -> "out" in
   match process path output with
   | Ok s -> (
-    let oc = open_out (output ^ ".erl") in
-    Printf.fprintf oc "%s" s;
-    close_out oc)
+    (* let oc = open_out (output ^ ".erl") in *)
+    (* Printf.fprintf oc "%s" s; *)
+    (* close_out oc *)
+    ()
+    )
   | Error errs ->
     let ic = open_in path in
     try
@@ -109,7 +116,7 @@ let run_cmd =
   let doc = "Compile and run" in
   let info = Cmd.info "run" ~doc in
   Cmd.v info process_and_run_t
-  
+
 let cmds = Cmd.group (Cmd.info "") [compile_cmd; run_cmd]
 
 let () = exit (Cmd.eval cmds)

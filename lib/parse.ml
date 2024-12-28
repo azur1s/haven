@@ -4,12 +4,17 @@ open Loc
 open Lex
 
 type cst =
-  | CLit   of lit spanned
-  | CList  of cst spanned list
-  | CTuple of cst spanned list
-  | CBin   of cst spanned * bin * cst spanned
-  | CApp   of cst spanned * cst spanned
-  | CThen  of cst spanned * cst spanned
+  | CLit    of lit spanned
+  | CList   of cst spanned list
+  | CTuple  of cst spanned list
+  | CBin    of cst spanned * bin * cst spanned
+  | CApp    of cst spanned * cst spanned
+  | CThen   of cst spanned * cst spanned
+  | CLambda of
+    { args: (string spanned * typ option) list
+    ; ret: typ option
+    ; body: cst spanned
+    }
   | CIf of
     { cond: cst spanned
     ; t: cst spanned
@@ -38,7 +43,6 @@ type cst =
     { value: cst spanned
     ; pats: (pattern spanned * cst spanned) list
     }
-  [@@deriving show]
 
 and cst_top =
   | CTUse of string spanned
@@ -296,6 +300,20 @@ let rec parse_atom p =
         let* exprs = many_delim p (fun p -> parse_expr p 0) TkComma in
         let* (_, end_span) = expect p (TkClose Brack) in
         Ok (CList exprs, span_union span end_span))
+    | TkFun ->
+      let _ = advance p in
+      let* args = parse_let_args p in
+      let args = (match args with
+        | Some args -> args
+        | None -> []) in
+      let colon = maybe p TkColon in
+      let* ret = if Option.is_some colon
+        then Result.map Option.some (parse_typ p 0)
+        else Ok None
+      in
+      let* _ = expect p TkArrow in
+      let* body = parse_expr p 0 in
+      Ok (CLambda { args; ret; body }, span_union span (snd body))
     | TkIf ->
       let _ = advance p in
       let* cond = parse_expr p 0 in
