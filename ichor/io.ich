@@ -1,0 +1,5 @@
+let print s = __external__ "process.stdout.write" s
+
+let println s =
+    print s;
+    print "\n"

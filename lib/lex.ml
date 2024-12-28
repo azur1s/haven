@@ -222,11 +222,9 @@ let rec tokenize_acc l acc =
         | Some '\\' ->
           let _ = advance l in
           (match peek l with
-          | Some 'n' -> read_str (acc ^ "\n")
-          | Some 't' -> read_str (acc ^ "\t")
-          | Some '\\' -> read_str (acc ^ "\\")
-          | Some '"' -> read_str (acc ^ "\"")
-          | Some c -> read_str (acc ^ "\\" ^ String.make 1 c)
+          | Some c ->
+            let _ = advance l in
+            read_str (acc ^ "\\" ^ String.make 1 c)
           | None -> acc)
         | Some c ->
           let _ = advance l in
@@ -235,6 +233,7 @@ let rec tokenize_acc l acc =
       in
       let str = read_str "" in
       let span = make_span l start in
+      Printf.printf "str: %s\n" str;
       tokenize_acc l @@ (TkStr str, span) :: acc
     (* Delimiters *)
     | c when c = '(' && when_peek_is ((=) ')') ->
