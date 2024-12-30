@@ -9,7 +9,7 @@ type js_expr =
   | JSArrow of string list * js_expr
   | JSTernary of js_expr * js_expr * js_expr
   | JSThen of js_expr * js_expr
-  | JSLet of string * js_expr
+  | JSDef of string * js_expr
   | JSBlock of js_expr
   | JSReturn of js_expr
 
@@ -41,8 +41,8 @@ let rec string_of_js_expr = function
     Printf.sprintf "(%s ? %s : %s)" (string_of_js_expr cond) (string_of_js_expr then_) (string_of_js_expr else_)
   | JSThen (a, b) ->
     Printf.sprintf "%s;\n%s" (string_of_js_expr a) (string_of_js_expr b)
-  | JSLet (name, expr) ->
-    Printf.sprintf "let %s = %s" name (string_of_js_expr expr)
+  | JSDef (name, expr) ->
+    Printf.sprintf "var %s = %s" name (string_of_js_expr expr)
   | JSBlock expr ->
     Printf.sprintf "{\n%s\n}" (string_of_js_expr expr)
   | JSReturn expr ->
@@ -84,7 +84,7 @@ let rec comp_term ctx term =
   | KDef { name; body; in_ } ->
     let body = comp_term ctx body in
     let in_ = comp_term ctx in_ in
-    JSThen (JSLet (name, body), in_)
+    JSThen (JSDef (name, body), in_)
   | e -> todo __LOC__ ~reason:(show_kterm e)
 
 let rec put_return_in_then_chain = function
@@ -98,12 +98,12 @@ let comp_top ctx top =
   match top with
   | KTDef (name, body) ->
     reset_id ctx;
-    JSLet (name, JSApp (JSArrow ([], JSBlock (process body)), []))
+    JSDef (name, JSApp (JSArrow ([], JSBlock (process body)), []))
   | KTFun { name; args; body; _ } ->
     reset_id ctx;
     if name = "main" then
       ctx.main_is_defined <- true;
-    JSLet (name, JSArrow (args, JSBlock (process body)))
+    JSDef (name, JSArrow (args, JSBlock (process body)))
 
 let comp terms =
   let ctx =

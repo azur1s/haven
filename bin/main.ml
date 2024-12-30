@@ -24,7 +24,7 @@ let process_lib path =
     | Error e -> Error [e])
   | Error (m, loc) -> Error [err m loc]
 
-let rec process path =
+let process path =
   let ic = open_in path in
   try
     let content = readfile path in

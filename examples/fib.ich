@@ -1,7 +1,8 @@
-let print a = __external__ "console.log" a
+use core/io
 
 let rec fib n =
     if n <= 1 then n else fib (n - 1) + fib (n - 2)
 
 let main () =
-    print (fib 10)
+    print "Fibonacci of 10 is: ";
+    println (fib 10)

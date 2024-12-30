@@ -1,5 +1,9 @@
+let to_string any = __external__ "String" any
+
 let write s = __external__ "process.stdout.write" s
 
-let writeln s =
-    write s;
-    write "\n"
+let print any = write (to_string any)
+
+let println any =
+    print any;
+    print "\n"
