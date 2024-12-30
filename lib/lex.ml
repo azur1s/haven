@@ -66,6 +66,7 @@ let string_of_token = function
   | TkBar -> "`|`"
   | TkBarElse -> "`\\`"
   | TkArrow -> "`->`"
+  | TkDot -> "`.`"
   | TkOpen  x -> (match x with
     | Paren -> "`(`"
     | Brack -> "`[`"

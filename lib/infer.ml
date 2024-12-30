@@ -87,7 +87,6 @@ let rec apply_ty (subst : scheme Subst.t) t =
   | TyConstructor (name, t) ->
     TyConstructor (name, apply_ty subst t)
   | TyConst _ -> t
-  | TyAny -> t
 
 let apply_scheme (subst : scheme Subst.t) scheme =
   match scheme with
@@ -109,7 +108,6 @@ let rec occurs v t =
   | TyArrow (t1, t2) -> occurs v t1 || occurs v t2
   | TyConstructor (_, t) -> occurs v t
   | TyConst _ -> false
-  | TyAny -> false
 
 let rec unify t u =
   let rec apply_ty subst t =
@@ -122,7 +120,6 @@ let rec unify t u =
     | TyConstructor (name, t) ->
       TyConstructor (name, apply_ty subst t)
     | TyConst _ -> t
-    | TyAny -> t
   in
   let compose s1 s2 =
     let s2_mapped = Subst.map (fun t -> apply_ty s1 t) s2 in
@@ -144,7 +141,6 @@ let rec unify t u =
     Ok (compose s2 s1)
   | TyConstructor (l, t), TyConstructor (r, u) when l = r ->
     unify t u
-  | TyAny, _ | _, TyAny -> Ok Subst.empty
   | _ -> Error ("Expected type " ^ string_of_typ t ^ " does not match " ^ string_of_typ u)
 
 let rec free_vars = function
@@ -153,7 +149,6 @@ let rec free_vars = function
   | TyTuple (t1, t2) -> free_vars t1 @ free_vars t2
   | TyArrow (t1, t2) -> free_vars t1 @ free_vars t2
   | TyConstructor (_, t) -> free_vars t
-  | TyAny -> []
 
 let free_vars_scheme = function
   | Forall (bound, ty) ->
@@ -574,9 +569,9 @@ let infer_top (ctx : scheme Subst.t ref) e =
 
 let magic =
   (* __external__ ext_fun [args] *)
-  [ "__external__", Forall ([], TyArrow (TyConst "string", TyAny))
+  [ "__external__", Forall (["_"], TyArrow (TyConst "string", TyVar "_"))
   (* __inline__ string *)
-  ; "__inline__", Forall ([], TyArrow (TyConst "string", TyAny))
+  ; "__inline__", Forall (["_"], TyArrow (TyConst "string", TyVar "_"))
   ]
 
 let infer es =
