@@ -45,7 +45,11 @@ type cst =
     }
 
 and cst_top =
-  | CTUse of string spanned
+  | CTUse of
+    { path: string spanned list
+    ; exposing: string spanned list option
+    ; relative: bool
+    }
   | CTDef of
     { name: string spanned
     ; body: cst spanned
@@ -58,6 +62,12 @@ and cst_top =
     ; recr: bool
     ; ret: typ option
     }
+  [@@deriving show]
+
+type modul =
+  { path: string list
+  ; tops: cst_top spanned list
+  }
   [@@deriving show]
 
 type p =
@@ -459,8 +469,33 @@ and parse_top p =
   | Some (t, span) -> (match t with
     | TkUse ->
       let _ = advance p in
-      let* s = parse_sym p in
-      Ok (CTUse s, span)
+      let* relative = match peek p with
+        | Some (TkDot, _) ->
+          let _ = advance p in
+          let* _ = expect p (TkBin Div) in
+          Ok true
+        | _ -> Ok false in
+      let rec parse_path p acc =
+        let* sym = parse_sym p in
+        let acc = acc @ [sym] in
+        match peek p with
+        | Some (TkBin Div, _) ->
+          let _ = advance p in
+          parse_path p acc
+        | _ -> Ok acc
+      in
+      let* path = parse_path p [] in
+      let exposing = maybe p (TkOpen Paren) in
+      let* (exposing, end_span) = match exposing with
+        | Some _ ->
+          let* syms = many_until (fun p -> parse_sym p) p (TkClose Paren) in
+          let* (_, end_span) = expect p (TkClose Paren) in
+          Ok (Some syms, end_span)
+        | None ->
+          let span = snd @@ List.nth path (List.length path - 1) in
+          Ok (None, span)
+      in
+      Ok (CTUse { path; exposing; relative }, span_union span end_span)
     | TkLet ->
       let _ = advance p in
       let rec_tk = maybe p TkRec in
@@ -508,10 +543,17 @@ let parse ?(file="<anonymous>") tks =
   let res = parse_tops p in
   match res with
   | Ok v ->
+    let uses = List.filter_map (function
+      | (CTUse { path; relative; _ }, _) ->
+        let path = String.concat "/" @@ List.map fst path in
+        if relative
+          then Some ("./" ^ path)
+          else Some path
+      | _ -> None) v in
     if List.length p.input = p.loc - 1
-      then Ok v
+      then Ok (v, uses)
       else let next = advance p in
         (match next with
         | Some (t, s) -> err_ret ("Unexpected " ^ string_of_token t ^ ", expected end of file") s
-        | None -> Ok v)
+        | None -> Ok (v, uses))
   | Error e -> Error e

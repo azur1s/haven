@@ -93,9 +93,6 @@ let rec norm_term term =
     ; in_ = norm_term in_ }
   | e -> todo __LOC__ ~reason:(show_term e)
 
-let rec convert_fun = function
-  | x -> x
-
 let rec flatten_let = function
   (*
   Example:

@@ -112,6 +112,7 @@ let comp terms =
     }
   in
   let comped = List.map (comp_top ctx) terms in
-  if not ctx.main_is_defined then
-    failwith "main function is not defined";
-  comped @ [JSApp (JSLit (LSym "main"), [])]
+  if ctx.main_is_defined then
+    comped @ [JSApp (JSLit (LSym "main"), [])]
+  else
+    failwith "main function is not defined"

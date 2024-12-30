@@ -7,7 +7,6 @@ open Ichor.Comp
 open Ichor.Report
 open Cmdliner
 open Unix
-open Sexplib0
 
 let readfile path =
   let ch = open_in_bin path in
@@ -15,30 +14,60 @@ let readfile path =
   close_in ch;
   s
 
-let process path =
+let process_lib path =
+  let content = readfile path in
+  match lex content ~file:path with
+  | Ok xs ->
+    (match parse xs ~file:path with
+    (* TODO handle importing from the imported file *)
+    | Ok (tops, _) -> Ok tops
+    | Error e -> Error [e])
+  | Error (m, loc) -> Error [err m loc]
+
+let rec process path =
   let ic = open_in path in
   try
     let content = readfile path in
     match lex content ~file:path with
     | Ok xs ->
       (match parse xs ~file:path with
-      | Ok tops ->
-        let (terms, infer_errs) = infer tops in
-        if infer_errs = [] then (
-          (* The rest of the errors after here should be compiler errors, I hope *)
-          norm terms
-          (* |> (fun normeds ->
-            let _ = List.map (fun x -> Printf.printf "%s\n"
-              (Sexp.to_string_hum (sexp_of_ktop x))) normeds in
-            normeds) *)
-          |> comp
-          |> List.map string_of_js_expr
-          |> String.concat ";\n"
-          |> Result.ok)
-        else
-          infer_errs
-          |> List.map (fun (m, loc) -> err m loc)
-          |> Result.error
+      | Ok (tops, uses) ->
+
+        let handle_relative import_path =
+          if String.starts_with ~prefix:"./" import_path then
+            let dir = Filename.dirname path in
+            let stripped = String.sub import_path 2
+              (String.length import_path - 2) in
+            let path = Filename.concat dir stripped in
+            "./" ^ path
+          else
+            import_path in
+        let uses = uses
+          |> List.map handle_relative
+          |> List.map (fun x -> x ^ ".ich")
+          |> List.map (process_lib) in
+
+        let libs = List.fold_left (fun acc x ->
+          match x with
+          | Ok    s -> ((fst acc) @ s, snd acc)
+          | Error e -> (fst acc, e @ (snd acc))) ([], []) uses in
+
+        (match snd libs with
+        | [] ->
+          let tops = (fst libs) @ tops in
+          let (terms, infer_errs) = infer tops in
+          if infer_errs = [] then (
+            (* The rest of the errors after here should be compiler errors, I hope *)
+            norm terms
+            |> comp
+            |> List.map string_of_js_expr
+            |> String.concat ";\n"
+            |> Result.ok)
+          else
+            infer_errs
+            |> List.map (fun (m, loc) -> err m loc)
+            |> Result.error
+        | errs -> Error errs)
       | Error e -> Error [e])
     | Error (m, loc) -> Error [err m loc]
   with e ->

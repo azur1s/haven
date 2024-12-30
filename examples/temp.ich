@@ -1,2 +1,4 @@
+use core/io
+
 let main () =
-    "\n"
+    print "Hello, World\n"

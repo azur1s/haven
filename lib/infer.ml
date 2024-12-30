@@ -494,9 +494,9 @@ let rec infer_expr (ctx : scheme Subst.t) e =
   | e -> todo @@ __LOC__ ^ " " ^ show_cst e
 
 let infer_top (ctx : scheme Subst.t ref) e =
-  let oks x = Ok (x, snd e) in
+  let oks x = Ok (Some (x, snd e)) in
   match fst e with
-  | CTUse _ -> todo __LOC__ ~reason:"include external files"
+  | CTUse _ -> Ok (None)
   | CTDef { name; body; ret } ->
     let ret = Option.value ret ~default:(fresh ()) in
     let* (b, b_ty, _bs) = infer_expr !ctx body in
@@ -584,5 +584,6 @@ let infer es =
     (fun ctx (name, scheme) -> Subst.add name scheme ctx)
     Subst.empty magic in
   let (res, err) = map_sep_results @@ List.map (infer_top ctx) es in
+  let res = List.filter_map (fun x -> x) res in
   (* res |> List.iter (fun (t, _) -> print_endline @@ show_term_top t); *)
   (res, err)

@@ -19,6 +19,7 @@ type token =
   | TkBar
   | TkBarElse
   | TkArrow
+  | TkDot
   | TkOpen  of delim
   | TkClose of delim
   (* Keywords *)
@@ -233,7 +234,6 @@ let rec tokenize_acc l acc =
       in
       let str = read_str "" in
       let span = make_span l start in
-      Printf.printf "str: %s\n" str;
       tokenize_acc l @@ (TkStr str, span) :: acc
     (* Delimiters *)
     | c when c = '(' && when_peek_is ((=) ')') ->
@@ -246,17 +246,18 @@ let rec tokenize_acc l acc =
       let _ = advance l in
       let span = make_span l start in
       tokenize_acc l @@ (TkArrow, span) :: acc
-    | c when single c ",=;:|\\" ->
+    | c when single c ",=;:|\\." ->
       let _ = advance l in
       let span = make_span l start in
       let delim =
         match c with
-        | ',' -> TkComma
-        | '=' -> TkAssign
-        | ';' -> TkSemi
-        | ':' -> TkColon
-        | '|' -> TkBar
+        | ','  -> TkComma
+        | '='  -> TkAssign
+        | ';'  -> TkSemi
+        | ':'  -> TkColon
+        | '|'  -> TkBar
         | '\\' -> TkBarElse
+        | '.'  -> TkDot
         | _ -> assert false
       in
       tokenize_acc l @@ (delim, span) :: acc
