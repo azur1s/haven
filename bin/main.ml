@@ -34,6 +34,7 @@ let rec process path =
       | Ok (tops, uses) ->
 
         let handle_relative import_path =
+          (* Relative path (to the file) *)
           if String.starts_with ~prefix:"./" import_path then
             let dir = Filename.dirname path in
             let stripped = String.sub import_path 2
@@ -41,7 +42,12 @@ let rec process path =
             let path = Filename.concat dir stripped in
             "./" ^ path
           else
-            import_path in
+          (* Standard library *)
+            let importing = Filename.basename import_path in
+            let core_path = match Sys.getenv_opt "ICHOR_LIB" with
+              | Some s -> s ^ "/core/"
+              | None -> "./core/"
+            in core_path ^ importing in
         let uses = uses
           |> List.map handle_relative
           |> List.map (fun x -> x ^ ".ich")

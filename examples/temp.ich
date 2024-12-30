@@ -1,4 +1,4 @@
 use core/io
 
 let main () =
-    print "Hello, World\n"
+    writeln "Hello, World"
