@@ -1,0 +1,6 @@
+use core/io
+
+let main () =
+    let a = 69 in
+    let b: string = to_string a in
+    write b; write "\n"

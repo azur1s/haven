@@ -1,0 +1,11 @@
+use core/io
+
+let is_even a = case a of
+    | 1 -> false
+    | 2 -> true
+    \ n -> n % 2 == 0
+
+let main () =
+    let a = 6 in
+    let b = is_even a in
+    print b

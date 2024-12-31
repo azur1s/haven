@@ -505,7 +505,7 @@ and parse_top p =
       in
       let* name = parse_sym p in
       let* args = match peek p with
-        | Some (TkUnit, s) -> Ok (Some [(("_unit_", s), Some (TyConst "unit"))])
+        | Some (TkUnit, _) -> Ok (Some [])
           |> advance_return p
         | _ -> parse_let_args p
       in

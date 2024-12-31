@@ -1,0 +1,8 @@
+use core/io
+
+let float_to_int (a: float): int = __external__ "~~" a
+
+let main () =
+    let a: int = 34 in
+    let b: float = 35.69 in
+    println a + (float_to_int b)

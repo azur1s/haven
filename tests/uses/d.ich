@@ -1,0 +1,11 @@
+use core/io
+use ./a
+use ./b
+
+(* d -> a      *)
+(*   -> b -> a *)
+(*        -> c *)
+
+let main () =
+    println foo;
+    println bar

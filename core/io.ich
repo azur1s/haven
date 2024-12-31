@@ -1,4 +1,4 @@
-let to_string any = __external__ "String" any
+let to_string any: string = __external__ "String" any
 
 let write s = __external__ "process.stdout.write" s
 

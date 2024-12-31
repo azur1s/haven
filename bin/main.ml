@@ -14,13 +14,40 @@ let readfile path =
   close_in ch;
   s
 
-let process_lib path =
+let handle_relative base_path import_path =
+  (* Relative path (to the file) *)
+  if String.starts_with ~prefix:"./" import_path then
+    let dir = Filename.dirname base_path in
+    let stripped = String.sub import_path 2
+      (String.length import_path - 2) in
+    let path = Filename.concat dir stripped in
+    "./" ^ path ^ ".ich"
+  else
+  (* Standard library *)
+    let importing = Filename.basename import_path in
+    let core_path = match Sys.getenv_opt "ICHOR_LIB" with
+      | Some s -> s ^ "/core/"
+      | None -> "./core/"
+    in core_path ^ importing ^ ".ich"
+
+let rec process_lib path =
   let content = readfile path in
   match lex content ~file:path with
   | Ok xs ->
     (match parse xs ~file:path with
-    (* TODO handle importing from the imported file *)
-    | Ok (tops, _) -> Ok tops
+    | Ok (tops, uses) ->
+      let uses = uses
+        |> List.map (handle_relative path)
+        |> List.map (process_lib) in
+
+      let csts, errs = List.fold_left (fun acc x ->
+        match x with
+        | Ok    s -> ((fst acc) @ s, snd acc)
+        | Error e -> (fst acc, e @ (snd acc))) ([], []) uses in
+
+      (match errs with
+      | [] -> Ok (csts @ tops)
+      | errs -> Error errs)
     | Error e -> Error [e])
   | Error (m, loc) -> Error [err m loc]
 
@@ -33,34 +60,18 @@ let process path =
       (match parse xs ~file:path with
       | Ok (tops, uses) ->
 
-        let handle_relative import_path =
-          (* Relative path (to the file) *)
-          if String.starts_with ~prefix:"./" import_path then
-            let dir = Filename.dirname path in
-            let stripped = String.sub import_path 2
-              (String.length import_path - 2) in
-            let path = Filename.concat dir stripped in
-            "./" ^ path
-          else
-          (* Standard library *)
-            let importing = Filename.basename import_path in
-            let core_path = match Sys.getenv_opt "ICHOR_LIB" with
-              | Some s -> s ^ "/core/"
-              | None -> "./core/"
-            in core_path ^ importing in
         let uses = uses
-          |> List.map handle_relative
-          |> List.map (fun x -> x ^ ".ich")
+          |> List.map (handle_relative path)
           |> List.map (process_lib) in
 
-        let libs = List.fold_left (fun acc x ->
+        let libs, errs = List.fold_left (fun acc x ->
           match x with
           | Ok    s -> ((fst acc) @ s, snd acc)
           | Error e -> (fst acc, e @ (snd acc))) ([], []) uses in
 
-        (match snd libs with
+        (match errs with
         | [] ->
-          let tops = (fst libs) @ tops in
+          let tops = libs @ tops in
           let (terms, infer_errs) = infer tops in
           if infer_errs = [] then (
             (* The rest of the errors after here should be compiler errors, I hope *)

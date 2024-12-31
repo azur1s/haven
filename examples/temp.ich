@@ -1,4 +1,0 @@
-use core/io
-
-let main () =
-    writeln "Hello, World"
