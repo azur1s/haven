@@ -1,9 +1,11 @@
 open Common
 open Utils
 open Norm
+open Sexplib0
 
 type js_expr =
   | JSLit of lit
+  | JSList of js_expr list
   | JSBin of js_expr * bin * js_expr
   | JSApp of js_expr * js_expr list
   | JSArrow of string list * js_expr
@@ -31,6 +33,7 @@ let string_of_js_bin = function
 
 let rec string_of_js_expr = function
   | JSLit l -> string_of_lit l
+  | JSList l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_js_expr l))
   | JSBin (a, op, b) ->
     Printf.sprintf "(%s %s %s)" (string_of_js_expr a) (string_of_js_bin op) (string_of_js_expr b)
   | JSApp (f, args) ->
@@ -65,6 +68,7 @@ let next_id ctx =
 let rec comp_term ctx term =
   match term with
   | KLit l -> JSLit l
+  | KList l -> JSList (List.map (comp_term ctx) l)
   | KBin (a, op, b) -> JSBin (comp_term ctx a, op, comp_term ctx b)
   | KApp (KLit (LSym "__external__"), args) ->
     (match args with
@@ -85,6 +89,9 @@ let rec comp_term ctx term =
     let body = comp_term ctx body in
     let in_ = comp_term ctx in_ in
     JSThen (JSDef (name, body), in_)
+  | KFun _ ->
+    Printf.printf "KFun: %s\n" (sexp_of_kterm term |> Sexp.to_string);
+    failwith "KFun should've been converted to let lambda"
   | e -> todo __LOC__ ~reason:(show_kterm e)
 
 let rec put_return_in_then_chain = function

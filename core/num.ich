@@ -1,0 +1,5 @@
+let floor (a: float): float = __external__ "~~" a
+let round (a: float): float = __external__ "Math.round" a
+let ceil (a: float): float = __external__ "Math.ceil" a
+
+let float_to_int (a: float): int = __external__ "~~" a

@@ -58,7 +58,18 @@ let flat_map f l = List.map f l |> List.flatten
 let rec norm_term term =
   match (fst term) with
   | TLit (l, _) -> KLit l
-  | TList l -> KList (List.map norm_term l)
+  | TList l ->
+    let l = List.map norm_term l in
+    (* TODO put complex expression outside of list *)
+    (* Example:
+    [1, 2, let a = 3 in a, let f x = x + 1 in f 3]
+    =>
+    let a = 3 in
+    let b =
+      let f x = x + 1 in f 3
+    in
+    [1, 2, a, b] *)
+    KList l
   | TTuple l -> KTuple (List.map norm_term l)
   | TBin (a, op, b) ->
     let a = norm_term a in
@@ -81,12 +92,13 @@ let rec norm_term term =
     { name = fst name
     ; body = norm_term body
     ; in_ = norm_term in_ }
-  | TFun { name; args; recr; body; in_; _ } -> KFun
-    { name = fst name
-    ; args = List.map (fun x -> fst @@ fst x) args
-    ; recr
-    ; body = norm_term body
-    ; in_ = norm_term in_ }
+  | TFun { name; args; body; in_; _ } ->
+    let body = norm_term body in
+    let in_ = norm_term in_ in
+    KDef
+      { name = fst name
+      ; body = KLambda (List.map (fun x -> fst @@ fst x) args, body)
+      ; in_ }
   | TDestruct { names; body; in_; _ } -> KDestruct
     { names = List.map fst names
     ; body = norm_term body
@@ -123,21 +135,10 @@ let rec flatten_let = function
     KDef { name; body = flatten_let body; in_ = flatten_let in_ }
   | x -> x
 
-let rec fun_to_lambda_def = function
-  | KFun { name; args; body; in_; recr = _recr } ->
-    let body = fun_to_lambda_def body in
-    let in_ = fun_to_lambda_def in_ in
-    KDef
-      { name
-      ; body = KLambda (args, body)
-      ; in_ }
-  | x -> x
-
 let norm_top top =
   let norm t =
     norm_term t
     |> flatten_let
-    |> fun_to_lambda_def
   in
   match top with
   | TTDef { name; body; _ } ->

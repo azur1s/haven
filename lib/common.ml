@@ -57,7 +57,7 @@ and typ =
   [@@deriving show, sexp_of]
 
 let string_of_lit = function
-  | LUnit -> "ok" (* Assuming this is Erlang's unit expression *)
+  | LUnit -> "null"
   | LBool b -> string_of_bool b
   | LInt i -> string_of_int i
   | LFloat f -> string_of_float f
