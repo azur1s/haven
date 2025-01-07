@@ -113,7 +113,7 @@ let rec occurs v t =
   | TyConstructor (_, t) -> occurs v t
   | TyConst _ -> false
 
-let rec unify t u =
+let rec unify ?(context=None) t u =
   let rec apply_ty subst t =
     match t with
     | TyVar v -> (try Subst.find v subst with Not_found -> t)
@@ -145,9 +145,19 @@ let rec unify t u =
     let* s1 = unify t1 u1 in
     let* s2 = unify (apply_ty s1 t2) (apply_ty s1 u2) in
     Ok (compose s2 s1)
+  | TyRecord fields1, TyRecord fields2 when List.length fields1 = List.length fields2 ->
+    List.fold_left2
+      (fun acc (_l1, t1) (_l2, t2) ->
+        let* s = acc in
+        let* s1 = unify t1 t2 ~context:(Some ("type " ^ string_of_typ t)) in
+        Ok (compose s1 s))
+      (Ok Subst.empty) fields1 fields2
   | TyConstructor (l, t), TyConstructor (r, u) when l = r ->
     unify t u
-  | _ -> Error ("Expected type " ^ string_of_typ t ^ " does not match " ^ string_of_typ u)
+  (* | _ -> Error ("Expected type " ^ string_of_typ t ^ " does not match " ^ string_of_typ u) *)
+  | _ -> Error (Printf.sprintf "Expected type %s does not match %s%s"
+    (string_of_typ t) (string_of_typ u)
+    (if Option.is_some context then " in " ^ Option.get context else ""))
 
 let rec free_vars = function
   | TyVar v   -> [v]

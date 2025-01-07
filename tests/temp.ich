@@ -6,4 +6,12 @@ let main () =
         , bar : "456"
         } in
 
-    log o
+    let p =
+        { foo : "123"
+        , bar : 456
+        } in
+
+    if o == p then
+        log o
+    else
+        ()
