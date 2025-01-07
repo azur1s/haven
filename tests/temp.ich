@@ -1,9 +1,9 @@
 use core/io
 
 let main () =
-    let a = [
-        1, 2, 3, 4,
-        let n = 6 in n - 1,
-        let f x = x + 1 in f 5
-    ] in
-    a
+    let o =
+        { foo : 123
+        , bar : "456"
+        } in
+
+    log o

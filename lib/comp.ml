@@ -6,6 +6,8 @@ open Sexplib0
 type js_expr =
   | JSLit of lit
   | JSList of js_expr list
+  | JSTuple of js_expr list
+  | JSObject of (string * js_expr) list
   | JSBin of js_expr * bin * js_expr
   | JSApp of js_expr * js_expr list
   | JSArrow of string list * js_expr
@@ -34,6 +36,9 @@ let string_of_js_bin = function
 let rec string_of_js_expr = function
   | JSLit l -> string_of_lit l
   | JSList l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_js_expr l))
+  | JSTuple l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_js_expr l))
+  | JSObject l -> Printf.sprintf "{%s}"
+    (String.concat ", " (List.map (fun (k, v) -> Printf.sprintf "%s: %s" k (string_of_js_expr v)) l))
   | JSBin (a, op, b) ->
     Printf.sprintf "(%s %s %s)" (string_of_js_expr a) (string_of_js_bin op) (string_of_js_expr b)
   | JSApp (f, args) ->
@@ -69,6 +74,8 @@ let rec comp_term ctx term =
   match term with
   | KLit l -> JSLit l
   | KList l -> JSList (List.map (comp_term ctx) l)
+  | KTuple l -> JSTuple (List.map (comp_term ctx) l)
+  | KRecord l -> JSObject (List.map (fun (k, v) -> (k, comp_term ctx v)) l)
   | KBin (a, op, b) -> JSBin (comp_term ctx a, op, comp_term ctx b)
   | KApp (KLit (LSym "__external__"), args) ->
     (match args with

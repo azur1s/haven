@@ -268,7 +268,7 @@ let rec tokenize_acc l acc =
       let delim = match c with
         | '(' -> TkOpen Paren
         | '[' -> TkOpen Brack
-        | '{' -> TkOpen Brack
+        | '{' -> TkOpen Brace
         | ')' -> TkClose Paren
         | ']' -> TkClose Brack
         | '}' -> TkClose Brace

@@ -8,6 +8,7 @@ type cst =
   | CList   of cst spanned list
   | CTuple  of cst spanned list
   | CBin    of cst spanned * bin * cst spanned
+  | CRecord of (string spanned * cst spanned) list
   | CApp    of cst spanned * cst spanned
   | CThen   of cst spanned * cst spanned
   | CLambda of
@@ -186,6 +187,14 @@ let many_cond p f =
   in
   many_cond_acc p []
 
+let or_p p p1 p2 =
+  let rewind_point = p.loc in
+  match p1 p with
+  | Ok v -> Ok v
+  | Error _ ->
+    rewind p rewind_point;
+    p2 p
+
 let rec parse_typ p min_bp =
   let parse_typ_atom p =
     match peek p with
@@ -277,15 +286,21 @@ let parse_case_pat p =
   | t -> err_ret ("Expected " ^ inf ^ ", found " ^ string_of_token t) span)
   inf
 
-let rec parse_atom p =
+let parse_lit p =
   match peek p with
   | Some (t, span) -> (match t with
-    | TkUnit    -> advance_return p (Ok (CLit (LUnit, span), span))
-    | TkBool  x -> advance_return p (Ok (CLit (LBool x, span), span))
-    | TkInt   x -> advance_return p (Ok (CLit (LInt x, span), span))
-    | TkFloat x -> advance_return p (Ok (CLit (LFloat x, span), span))
-    | TkStr   x -> advance_return p (Ok (CLit (LStr x, span), span))
-    | TkSym   x -> advance_return p (Ok (CLit (LSym x, span), span))
+    | TkUnit    -> advance_return p (Ok (LUnit, span))
+    | TkBool  x -> advance_return p (Ok (LBool x, span))
+    | TkInt   x -> advance_return p (Ok (LInt x, span))
+    | TkFloat x -> advance_return p (Ok (LFloat x, span))
+    | TkStr   x -> advance_return p (Ok (LStr x, span))
+    | TkSym   x -> advance_return p (Ok (LSym x, span))
+    | t -> err_ret ("Expected literal, found " ^ string_of_token t) span)
+  | None -> err_ret "Expected literal, found end of file" (eof_error_loc p)
+
+let rec parse_atom p =
+  let parse_atomic p = match peek p with
+  | Some (t, span) -> (match t with
     (* (expr, ...) *)
     | TkOpen Paren ->
       let _ = advance p in
@@ -310,6 +325,16 @@ let rec parse_atom p =
         let* exprs = many_delim p (fun p -> parse_expr p 0) TkComma in
         let* (_, end_span) = expect p (TkClose Brack) in
         Ok (CList exprs, span_union span end_span))
+    | TkOpen Brace ->
+      let _ = advance p in
+      let parse_field p =
+        let* sym = parse_sym p in
+        let* _ = expect p TkColon in
+        let* exp = parse_expr p 0 in
+        Ok (sym, exp) in
+      let* fields = many_delim p parse_field TkComma in
+      let* (_, end_span) = expect p (TkClose Brace) in
+      Ok (CRecord fields, span_union span end_span)
     | TkFun ->
       let _ = advance p in
       let* args = parse_let_args p in
@@ -411,6 +436,12 @@ let rec parse_atom p =
         }, span_union span (snd @@ snd else_))
     | t -> err_ret ("Expected expression, found " ^ string_of_token t) span)
   | None -> err_ret "Expected expression, found end of file" (eof_error_loc p)
+  in
+
+  let lit p = parse_lit p |> Result.map (fun (l, s) -> (CLit (l, s)), s) in
+  or_p p
+    lit
+    parse_atomic
 
 (* https://ocaml.org/manual/5.2/expr.html#ss:precedence-and-associativity *)
 and binding_power = function

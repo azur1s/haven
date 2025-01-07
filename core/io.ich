@@ -7,3 +7,6 @@ let print any: unit = write (to_string any)
 let println any: unit =
     print any;
     print "\n"
+
+(* console.log *)
+let log s: unit = __external__ "console.log" s

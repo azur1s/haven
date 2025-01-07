@@ -3,11 +3,12 @@ open Utils
 open Infer
 
 type kterm =
-  | KLit   of lit
-  | KList  of kterm list
-  | KTuple of kterm list
-  | KBin   of kterm * bin * kterm
-  | KApp   of kterm * kterm list
+  | KLit    of lit
+  | KList   of kterm list
+  | KTuple  of kterm list
+  | KBin    of kterm * bin * kterm
+  | KRecord of (string * kterm) list
+  | KApp    of kterm * kterm list
   | KLambda of string list * kterm
   | KIf of
     { cond: kterm
@@ -60,7 +61,7 @@ let rec norm_term term =
   | TLit (l, _) -> KLit l
   | TList l ->
     let l = List.map norm_term l in
-    (* TODO put complex expression outside of list *)
+    (* TODO put complex expression outside of list, tuple & record *)
     (* Example:
     [1, 2, let a = 3 in a, let f x = x + 1 in f 3]
     =>
@@ -71,6 +72,7 @@ let rec norm_term term =
     [1, 2, a, b] *)
     KList l
   | TTuple l -> KTuple (List.map norm_term l)
+  | TRecord l -> KRecord (List.map (fun (k, v) -> (fst k, norm_term v)) l)
   | TBin (a, op, b) ->
     let a = norm_term a in
     let b = norm_term b in

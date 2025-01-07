@@ -7,6 +7,7 @@ type term =
   | TLit   of lit spanned
   | TList  of term spanned list
   | TTuple of term spanned list
+  | TRecord of (string spanned * term spanned) list
   | TBin   of term spanned * bin * term spanned
   | TApp   of term spanned * term spanned
   | TThen  of term spanned * term spanned
@@ -84,6 +85,8 @@ let rec apply_ty (subst : scheme Subst.t) t =
     TyTuple (apply_ty subst t1, apply_ty subst t2)
   | TyArrow (t1, t2) ->
     TyArrow (apply_ty subst t1, apply_ty subst t2)
+  | TyRecord fields ->
+    TyRecord (List.map (fun (name, t) -> (name, apply_ty subst t)) fields)
   | TyConstructor (name, t) ->
     TyConstructor (name, apply_ty subst t)
   | TyConst _ -> t
@@ -106,6 +109,7 @@ let rec occurs v t =
   | TyVar _ -> false
   | TyTuple (t1, t2) -> occurs v t1 || occurs v t2
   | TyArrow (t1, t2) -> occurs v t1 || occurs v t2
+  | TyRecord fields -> List.exists (fun (_, t) -> occurs v t) fields
   | TyConstructor (_, t) -> occurs v t
   | TyConst _ -> false
 
@@ -117,6 +121,8 @@ let rec unify t u =
       TyTuple (apply_ty subst t1, apply_ty subst t2)
     | TyArrow (t1, t2) ->
       TyArrow (apply_ty subst t1, apply_ty subst t2)
+    | TyRecord fields ->
+      TyRecord (List.map (fun (name, t) -> (name, apply_ty subst t)) fields)
     | TyConstructor (name, t) ->
       TyConstructor (name, apply_ty subst t)
     | TyConst _ -> t
@@ -148,6 +154,7 @@ let rec free_vars = function
   | TyConst _ -> []
   | TyTuple (t1, t2) -> free_vars t1 @ free_vars t2
   | TyArrow (t1, t2) -> free_vars t1 @ free_vars t2
+  | TyRecord fields -> List.fold_left (fun acc (_, t) -> acc @ free_vars t) [] fields
   | TyConstructor (_, t) -> free_vars t
 
 let free_vars_scheme = function
@@ -241,6 +248,18 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       Subst.empty xs'
     in
     oks (TTuple xs) t subst
+
+  | CRecord (fields) ->
+    let* fields' = map_early_return (fun (name, expr) ->
+      let* (expr, t, s) = infer_expr ctx expr in
+      Ok((name, expr, t, s))) fields in
+    let fields = List.map (fun (name, term, _, _) -> (name, term)) fields' in
+    let t = TyRecord (List.map (fun (name, _, t, _) -> (fst name, t)) fields') in
+    let subst = List.fold_left
+      (fun acc (_, _, _, s) -> compose acc s)
+      Subst.empty fields'
+    in
+    oks (TRecord fields) t subst
 
   | CBin (a, op , b) ->
     let* (a, a_ty, a_s) = infer_expr ctx a in
