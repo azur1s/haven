@@ -81,7 +81,7 @@ let rec comp_term ctx term =
   | KRecord l -> JSObject (List.map (fun (k, v) -> (k, comp_term ctx v)) l)
   | KAccess (r, k) -> JSAccess (comp_term ctx r, k)
   | KBin (a, op, b) -> JSBin (comp_term ctx a, op, comp_term ctx b)
-  | KApp (KLit (LSym "__external__"), args) ->
+  | KApp (KLit (LSym "__js__"), args) ->
     (match args with
     | KLit (LStr f) :: args -> JSApp (JSLit (LSym f), List.map (comp_term ctx) args)
     | x -> List.map show_kterm x
@@ -89,7 +89,7 @@ let rec comp_term ctx term =
       |> (^) __LOC__
       |> (^) "Invalid external call: "
       |> failwith)
-  | KApp (KLit (LSym "__external_method__"), args) ->
+  | KApp (KLit (LSym "__js_method__"), args) ->
     (match args with
     | [obj; KLit (LStr field); KLit LUnit] ->
       JSApp (JSAccess (comp_term ctx obj, field), [])
@@ -100,7 +100,7 @@ let rec comp_term ctx term =
       |> (^) __LOC__
       |> (^) "Invalid external method call: "
       |> failwith)
-  | KApp (KLit (LSym "__external_field__"), args) ->
+  | KApp (KLit (LSym "__js_field__"), args) ->
     (match args with
     | obj :: KLit (LStr field) :: [] -> JSAccess (comp_term ctx obj, field)
     | x -> List.map show_kterm x

@@ -607,14 +607,14 @@ let infer_top (ctx : scheme Subst.t ref) e =
         ; body = b })
 
 let magic =
-  (* __external__ ext_fun [args] *)
-  [ "__external__", Forall (["_"], TyArrow (TyConst "string", TyVar "_"))
+  (* __js__ ext_fun [args] *)
+  [ "__js__", Forall (["_"], TyArrow (TyConst "string", TyVar "_"))
   (* __inline__ string *)
   ; "__inline__", Forall (["_"], TyArrow (TyConst "string", TyVar "_"))
-  (* __external_method__ m field [args]*)
-  ; "__external_method__", Forall (["_1"; "_2"], TyArrow (TyVar "_1", TyArrow (TyConst "string", TyVar "_2")))
-  (* __external_field__ m field *)
-  ; "__external_field__", Forall (["_"], TyArrow (TyVar "_", TyConst "string"))
+  (* __js_method__ m field [args]*)
+  ; "__js_method__", Forall (["_1"; "_2"], TyArrow (TyVar "_1", TyArrow (TyConst "string", TyVar "_2")))
+  (* __js_field__ m field *)
+  ; "__js_field__", Forall (["_"], TyArrow (TyVar "_", TyConst "string"))
   ]
 
 let infer es =
