@@ -8,6 +8,7 @@ type term =
   | TList  of term spanned list
   | TTuple of term spanned list
   | TRecord of (string spanned * term spanned) list
+  | TAccess of term spanned * string spanned
   | TBin   of term spanned * bin * term spanned
   | TApp   of term spanned * term spanned
   | TThen  of term spanned * term spanned
@@ -259,7 +260,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     in
     oks (TTuple xs) t subst
 
-  | CRecord (fields) ->
+  | CRecord fields ->
     let* fields' = map_early_return (fun (name, expr) ->
       let* (expr, t, s) = infer_expr ctx expr in
       Ok((name, expr, t, s))) fields in
@@ -270,6 +271,15 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       Subst.empty fields'
     in
     oks (TRecord fields) t subst
+
+  | CAccess (record, field) ->
+    let* (record, record_ty, record_s) = infer_expr ctx record in
+    (* Get the type of that field *)
+    (match record_ty with
+    | TyRecord fields ->
+      let field_ty = List.assoc (fst field) fields in
+      oks (TAccess (record, field)) field_ty record_s
+    | _ -> Error ("Expected record type, got " ^ string_of_typ record_ty, snd record))
 
   | CBin (a, op , b) ->
     let* (a, a_ty, a_s) = infer_expr ctx a in
@@ -601,6 +611,10 @@ let magic =
   [ "__external__", Forall (["_"], TyArrow (TyConst "string", TyVar "_"))
   (* __inline__ string *)
   ; "__inline__", Forall (["_"], TyArrow (TyConst "string", TyVar "_"))
+  (* __external_method__ m field [args]*)
+  ; "__external_method__", Forall (["_1"; "_2"], TyArrow (TyVar "_1", TyArrow (TyConst "string", TyVar "_2")))
+  (* __external_field__ m field *)
+  ; "__external_field__", Forall (["_"], TyArrow (TyVar "_", TyConst "string"))
   ]
 
 let infer es =

@@ -1,0 +1,15 @@
+(* Please do not use this, I only make this for my highschool SWE finals :) *)
+(* There will be a proper one later *)
+
+let http = __external__ "require" "http"
+
+let server_create f =
+    __external__ "http.createServer" (fun req res -> f req res)
+
+let server_start s (port: int) =
+    __external_method__ s "listen" port
+
+let res_write res (m: string) =
+    __external_method__ res "write" m
+
+let res_end res = __external_method__ res "end" ()

@@ -8,6 +8,7 @@ type kterm =
   | KTuple  of kterm list
   | KBin    of kterm * bin * kterm
   | KRecord of (string * kterm) list
+  | KAccess of kterm * string
   | KApp    of kterm * kterm list
   | KLambda of string list * kterm
   | KIf of
@@ -73,6 +74,7 @@ let rec norm_term term =
     KList l
   | TTuple l -> KTuple (List.map norm_term l)
   | TRecord l -> KRecord (List.map (fun (k, v) -> (fst k, norm_term v)) l)
+  | TAccess (r, k) -> KAccess (norm_term r, fst k)
   | TBin (a, op, b) ->
     let a = norm_term a in
     let b = norm_term b in

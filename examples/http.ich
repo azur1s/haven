@@ -1,0 +1,29 @@
+use core/basehttp
+
+let response_html =
+    "
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Document</title>
+</head>
+<body>
+    <h1>Hello, World!</h1>
+</body>
+<style>
+    h1 {
+        font-size: 3rem;
+    }
+</style>
+</html>
+    "
+
+let handle req res =
+    let _ = res_write res response_html in
+    res_end res
+
+let main () =
+    let s = server_create handle in
+    server_start s 8080

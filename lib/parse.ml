@@ -9,6 +9,7 @@ type cst =
   | CTuple  of cst spanned list
   | CBin    of cst spanned * bin * cst spanned
   | CRecord of (string spanned * cst spanned) list
+  | CAccess of cst spanned * string spanned
   | CApp    of cst spanned * cst spanned
   | CThen   of cst spanned * cst spanned
   | CLambda of
@@ -476,6 +477,15 @@ and parse_expr p min_bp =
           |> Result.map_error (with_hint "If you meant to return unit, then add a () expression after the semicolon")
         in
         parse_loop (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
+    (* Field access *)
+    | Some (TkDot, _) ->
+      let l_pw, _r_pw = 160, 161 in
+      if l_pw < min_bp then
+        Ok lhs
+      else
+        let _ = advance p in
+        let* (field, span) = parse_sym p in
+        parse_loop (CAccess (lhs, (field, span)), span_union (snd lhs) span)
     (* Application *)
     | Some _ ->
       (* Try parse, if goes wrong then just return lhs *)

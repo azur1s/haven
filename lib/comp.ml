@@ -8,6 +8,7 @@ type js_expr =
   | JSList of js_expr list
   | JSTuple of js_expr list
   | JSObject of (string * js_expr) list
+  | JSAccess of js_expr * string
   | JSBin of js_expr * bin * js_expr
   | JSApp of js_expr * js_expr list
   | JSArrow of string list * js_expr
@@ -34,11 +35,13 @@ let string_of_js_bin = function
   | Cons -> todo __LOC__ ~reason:"cons binop"
 
 let rec string_of_js_expr = function
+  | JSLit (LStr s) -> Printf.sprintf "`%s`" s (* For multi-line string *)
   | JSLit l -> string_of_lit l
   | JSList l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_js_expr l))
   | JSTuple l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_js_expr l))
   | JSObject l -> Printf.sprintf "{%s}"
     (String.concat ", " (List.map (fun (k, v) -> Printf.sprintf "%s: %s" k (string_of_js_expr v)) l))
+  | JSAccess (a, b) -> Printf.sprintf "%s.%s" (string_of_js_expr a) b
   | JSBin (a, op, b) ->
     Printf.sprintf "(%s %s %s)" (string_of_js_expr a) (string_of_js_bin op) (string_of_js_expr b)
   | JSApp (f, args) ->
@@ -76,6 +79,7 @@ let rec comp_term ctx term =
   | KList l -> JSList (List.map (comp_term ctx) l)
   | KTuple l -> JSTuple (List.map (comp_term ctx) l)
   | KRecord l -> JSObject (List.map (fun (k, v) -> (k, comp_term ctx v)) l)
+  | KAccess (r, k) -> JSAccess (comp_term ctx r, k)
   | KBin (a, op, b) -> JSBin (comp_term ctx a, op, comp_term ctx b)
   | KApp (KLit (LSym "__external__"), args) ->
     (match args with
@@ -84,6 +88,25 @@ let rec comp_term ctx term =
       |> String.concat ", "
       |> (^) __LOC__
       |> (^) "Invalid external call: "
+      |> failwith)
+  | KApp (KLit (LSym "__external_method__"), args) ->
+    (match args with
+    | [obj; KLit (LStr field); KLit LUnit] ->
+      JSApp (JSAccess (comp_term ctx obj, field), [])
+    | obj :: KLit (LStr field) :: args ->
+      JSApp (JSAccess (comp_term ctx obj, field), List.map (comp_term ctx) args)
+    | x -> List.map show_kterm x
+      |> String.concat ", "
+      |> (^) __LOC__
+      |> (^) "Invalid external method call: "
+      |> failwith)
+  | KApp (KLit (LSym "__external_field__"), args) ->
+    (match args with
+    | obj :: KLit (LStr field) :: [] -> JSAccess (comp_term ctx obj, field)
+    | x -> List.map show_kterm x
+      |> String.concat ", "
+      |> (^) __LOC__
+      |> (^) "Invalid external field access: "
       |> failwith)
   | KApp (f, args) -> JSApp (comp_term ctx f, List.map (comp_term ctx) args)
   | KLambda (args, body) -> JSArrow (args, comp_term ctx body)
