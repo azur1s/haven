@@ -114,7 +114,7 @@ let rec occurs v t =
   | TyConstructor (_, t) -> occurs v t
   | TyConst _ -> false
 
-let rec unify ?(context=None) t u =
+let rec unify ?(context="") t u =
   let rec apply_ty subst t =
     match t with
     | TyVar v -> (try Subst.find v subst with Not_found -> t)
@@ -143,22 +143,21 @@ let rec unify ?(context=None) t u =
       Ok (Subst.singleton v t)
   | TyTuple (t1, t2), TyTuple (u1, u2)
   | TyArrow (t1, t2), TyArrow (u1, u2) ->
-    let* s1 = unify t1 u1 in
-    let* s2 = unify (apply_ty s1 t2) (apply_ty s1 u2) in
+    let* s1 = unify t1 u1 ~context in
+    let* s2 = unify (apply_ty s1 t2) (apply_ty s1 u2) ~context in
     Ok (compose s2 s1)
   | TyRecord fields1, TyRecord fields2 when List.length fields1 = List.length fields2 ->
     List.fold_left2
       (fun acc (_l1, t1) (_l2, t2) ->
         let* s = acc in
-        let* s1 = unify t1 t2 ~context:(Some ("type " ^ string_of_typ t)) in
+        let* s1 = unify t1 t2 ~context:("type " ^ string_of_typ t) in
         Ok (compose s1 s))
       (Ok Subst.empty) fields1 fields2
   | TyConstructor (l, t), TyConstructor (r, u) when l = r ->
-    unify t u
-  (* | _ -> Error ("Expected type " ^ string_of_typ t ^ " does not match " ^ string_of_typ u) *)
+    unify t u ~context
   | _ -> Error (Printf.sprintf "Expected type %s does not match %s%s"
     (string_of_typ t) (string_of_typ u)
-    (if Option.is_some context then " in " ^ Option.get context else ""))
+    (if context = "" then "" else " in " ^ context))
 
 let rec free_vars = function
   | TyVar v   -> [v]
@@ -207,8 +206,8 @@ let show_context ctx =
   |> String.trim
 
 let rec infer_expr (ctx : scheme Subst.t) e =
-  let unify_err t u where =
-    unify t u
+  let unify_err ?(context="") t u where =
+    unify t u ~context
     |> Result.map to_scheme
     |> Result.map_error (fun err -> (err, where))
   in
@@ -233,7 +232,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       let (_, expected_t, s) = List.hd xs' in
       let* unified_subst = List.fold_left
         (fun acc (x, t, t_s) ->
-          let* s = unify (apply_ty t_s t) expected_t
+          let* s = unify (apply_ty t_s t) expected_t ~context:"list"
             |> Result.map to_scheme
             |> Result.map_error (fun err -> (err, snd x))
           in
@@ -285,6 +284,9 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* (a, a_ty, a_s) = infer_expr ctx a in
     let* (b, b_ty, b_s) = infer_expr ctx b in
 
+    Printf.printf "a_ty: %s\n" (string_of_typ a_ty);
+    Printf.printf "b_ty: %s\n" (string_of_typ b_ty);
+
     (* Expected type *)
     let expected_lhs_ty = match op with
       | Add | Sub | Mul | Div | Mod -> TyConst "int"
@@ -305,12 +307,12 @@ let rec infer_expr (ctx : scheme Subst.t) e =
 
     (* Unify them to have the operator's expected type *)
     let* unify_a_s =
-      unify a_ty expected_lhs_ty
+      unify a_ty expected_lhs_ty ~context:"left operand"
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd a))
     in
     let* unify_b_s =
-      unify (apply_ty unify_a_s expected_rhs_ty) b_ty
+      unify (apply_ty unify_a_s expected_rhs_ty) b_ty ~context:"right operand"
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd b))
     in
@@ -386,10 +388,10 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* (t, t_ty, t_s) = infer_expr ctx t in
     let* (f, f_ty, f_s) = infer_expr ctx f in
 
-    let* unify_cond_s = unify_err cond_ty (TyConst "bool") (snd cond) in
+    let* unify_cond_s = unify_err cond_ty (TyConst "bool") (snd cond) ~context:"if condition" in
     let ret_ty = fresh () in
-    let* unify_t_s = unify_err t_ty ret_ty (snd t) in
-    let* unify_f_s = unify_err (apply_ty unify_t_s ret_ty) f_ty (snd f) in
+    let* unify_t_s = unify_err t_ty ret_ty (snd t) ~context:"return type of true branch" in
+    let* unify_f_s = unify_err (apply_ty unify_t_s ret_ty) f_ty (snd f) ~context:"return type of false branch" in
 
     oks (TIf { cond; t; f })
       (apply_ty unify_f_s t_ty)
@@ -403,16 +405,16 @@ let rec infer_expr (ctx : scheme Subst.t) e =
 
     let typ = Option.value typ ~default:(fresh ()) in
     let* (b, b_ty, bs) = infer_expr ctx body in
-    let gen_b_ty = generalize ctx (apply_ty bs b_ty) in
 
     let* ty_s =
-      unify typ (apply_ty bs b_ty)
+      unify typ (apply_ty bs b_ty) ~context:"definition"
       |> Result.map to_scheme
       |> Result.map_error (fun err -> (err, snd body))
     in
     let typ = apply_ty ty_s typ in
 
-    let in_ctx = Subst.add (fst name) gen_b_ty ctx in
+    let gen_typ = generalize ctx (apply_ty ty_s typ) in
+    let in_ctx = Subst.add (fst name) gen_typ ctx in
 
     let* (in_, in_ty, in_s) = infer_expr in_ctx in_ in
 

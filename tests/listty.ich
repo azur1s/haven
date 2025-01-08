@@ -1,0 +1,5 @@
+let main () =
+    let xs: int list = [1] in
+    let ys: string list = [] in
+
+    if xs == ys then () else ()
