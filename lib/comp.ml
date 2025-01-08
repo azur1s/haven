@@ -35,7 +35,7 @@ let string_of_js_bin = function
   | Cons -> todo __LOC__ ~reason:"cons binop"
 
 let rec string_of_js_expr = function
-  | JSLit (LStr s) -> Printf.sprintf "`%s`" s (* For multi-line string *)
+  | JSLit (LStr s) -> Printf.sprintf "\"%s\"" (String.escaped s)
   | JSLit l -> string_of_lit l
   | JSList l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_js_expr l))
   | JSTuple l -> Printf.sprintf "[%s]" (String.concat ", " (List.map string_of_js_expr l))

@@ -1,3 +1,4 @@
+use core/io
 use core/basehttp
 
 let response_html =
@@ -26,4 +27,5 @@ let handle req res =
 
 let main () =
     let s = server_create handle in
-    server_start s 8080
+    server_start s 8080;
+    log "Listening to localhost:8080"
