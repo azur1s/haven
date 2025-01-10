@@ -1,4 +1,0 @@
-(library
- (name ichor)
- (modules utils loc report common lex parse infer norm opt comp)
- (preprocess (pps ppx_deriving.show ppx_sexp_conv)))

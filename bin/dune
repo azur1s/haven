@@ -1,6 +1,0 @@
-(executable
- (public_name ichor)
- (name main)
- (modules main)
- (libraries ichor cmdliner unix)
- (preprocess (pps ppx_deriving.show ppx_sexp_conv)))

@@ -2,7 +2,7 @@ use core/io
 use core/basehttp
 
 let handle req res =
-    let _ = res_write res "Hello, World" in
+    res_write res "Hello, World";
     res_end res
 
 let main () =

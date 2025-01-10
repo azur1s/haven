@@ -1,10 +1,10 @@
-open Ichor.Common
-open Ichor.Lex
-open Ichor.Parse
-open Ichor.Infer
-open Ichor.Norm
-open Ichor.Comp
-open Ichor.Report
+open Common
+open Lex
+open Parse
+open Infer
+open Norm
+open Comp
+open Report
 open Cmdliner
 open Unix
 
