@@ -284,9 +284,6 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* (a, a_ty, a_s) = infer_expr ctx a in
     let* (b, b_ty, b_s) = infer_expr ctx b in
 
-    Printf.printf "a_ty: %s\n" (string_of_typ a_ty);
-    Printf.printf "b_ty: %s\n" (string_of_typ b_ty);
-
     (* Expected type *)
     let expected_lhs_ty = match op with
       | Add | Sub | Mul | Div | Mod -> TyConst "int"

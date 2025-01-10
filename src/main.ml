@@ -26,8 +26,8 @@ let handle_relative base_path import_path =
   (* Standard library *)
     let importing = Filename.basename import_path in
     let core_path = match Sys.getenv_opt "ICHOR_LIB" with
-      | Some s -> s ^ "/core/"
-      | None -> "./core/"
+      | Some s -> s ^ "/std/"
+      | None -> "./std/"
     in core_path ^ importing ^ ".ich"
 
 let rec process_lib path =

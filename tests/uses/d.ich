@@ -1,4 +1,4 @@
-use core/io
+use std/io
 use ./a
 use ./b
 

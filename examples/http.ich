@@ -1,5 +1,5 @@
-use core/io
-use core/basehttp
+use std/io
+use std/basehttp
 
 let handle req res =
     res_write res "Hello, World";

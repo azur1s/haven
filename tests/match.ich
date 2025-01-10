@@ -1,4 +1,4 @@
-use core/io
+use std/io
 
 let is_even a = case a of
     | 1 -> false
