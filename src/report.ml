@@ -57,10 +57,10 @@ let report path contents err =
 
   let prefix i = " " ^ left_pad (string_of_int i) 4 ^ "   " in
   let curr_line = get_line_opt contents (line - 1)
-    |> Option.map (fun x -> dim ^ prefix (line - 1) ^ reset ^ highlight x)
+    |> Option.map (fun x -> dim ^ prefix line ^ reset ^ highlight x)
   in
   let prev_line = get_line_opt contents (line - 2)
-    |> Option.map (fun x -> dim ^ prefix (line - 2) ^ reset ^ highlight x)
+    |> Option.map (fun x -> dim ^ prefix (line - 1) ^ reset ^ highlight x)
   in
 
   let xs =
