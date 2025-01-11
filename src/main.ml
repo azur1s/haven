@@ -82,7 +82,6 @@ let process path =
             |> Result.ok)
           else
             infer_errs
-            |> List.map (fun (m, loc) -> err m loc)
             |> Result.error
         | errs -> Error errs)
       | Error e -> Error [e])
@@ -107,6 +106,7 @@ let compile path output =
     try
       let content = readfile path in
       List.iter (report path content) errs;
+      print_endline "";
       exit 1
     with e ->
       close_in ic;

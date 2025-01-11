@@ -1,6 +1,30 @@
 open Common
 open Loc
 
+let red    = "\027[31m"
+let green  = "\027[32m"
+let yellow = "\027[33m"
+let blue   = "\027[34m"
+let purple = "\027[35m"
+let cyan   = "\027[36m"
+
+let dim = "\027[2m"
+let reset = "\027[0m"
+
+let highlight_kw s =
+  let color = match s with
+    | "let" | "rec" | "fun" -> cyan
+    | "if" | "then" | "else" | "use" -> purple
+    | "()" -> yellow
+    | _ -> ""
+  in
+  color ^ s ^ reset
+
+let highlight s =
+  String.split_on_char ' ' s
+  |> List.map highlight_kw
+  |> String.concat " "
+
 let loc_to_line_col str loc =
   let lines = String.split_on_char '\n' str in
   let rec loop i acc = function
@@ -33,14 +57,15 @@ let report path contents err =
 
   let prefix i = " " ^ left_pad (string_of_int i) 4 ^ "   " in
   let curr_line = get_line_opt contents (line - 1)
-    |> Option.map (fun x -> prefix (line - 1) ^ x)
+    |> Option.map (fun x -> dim ^ prefix (line - 1) ^ reset ^ highlight x)
   in
   let prev_line = get_line_opt contents (line - 2)
-    |> Option.map (fun x -> prefix (line - 2) ^ x)
+    |> Option.map (fun x -> dim ^ prefix (line - 2) ^ reset ^ highlight x)
   in
 
   let xs =
-    [ path ^ ":" ^ string_of_int line ^ ":" ^ string_of_int (col + 1)
+    [ ""
+    ; red ^ "ERR " ^ reset ^ path ^ ":" ^ string_of_int line ^ ":" ^ string_of_int (col + 1)
     ; "" ] in
   let xs = xs @
     ([ prev_line
@@ -48,12 +73,12 @@ let report path contents err =
     ]
     |> List.filter_map Fun.id) in
   let xs = xs @
-    [ String.make (col + String.length (prefix (line - 1))) ' ' ^ "^"
+    [ red ^ String.make (col + String.length (prefix (line - 1))) ' ' ^ "^" ^ reset
     ; ""
     ; err.msg
     ] in
   let xs = if Option.is_some err.hint then
-    xs @ [ "Hint: " ^ Option.get err.hint ]
+    xs @ [ blue ^ "HINT " ^ reset ^ Option.get err.hint ^ reset ]
   else
     xs in
   xs
