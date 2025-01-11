@@ -3,5 +3,5 @@ use std/io
 let main () =
     print "1\n";
     print "Hello
-    World"; (* TODO multiple newlines inserted here *)
+    World";
     print "2\r\n"

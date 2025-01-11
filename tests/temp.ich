@@ -1,17 +1,3 @@
-use std/io
-
 let main () =
-    let o =
-        { foo : 123
-        , bar : "456"
-        } in
-
-    let p =
-        { foo : "123"
-        , bar : 456
-        } in
-
-    if o == p then
-        log o
-    else
-        ()
+"A
+B"
