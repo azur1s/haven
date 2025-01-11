@@ -30,8 +30,8 @@ let loc_to_line_col str loc =
   let rec loop i acc = function
     | [] -> failwith "loc_to_line_col: invalid loc"
     | hd :: tl ->
-      if i + String.length hd >= loc.start then
-        (acc, loc.start - i)
+      if i + String.length hd >= loc.end_ then
+        (acc, loc.end_ - i)
       else
         loop (i + String.length hd + 1) (acc + 1) tl
   in
@@ -73,7 +73,7 @@ let report path contents err =
     ]
     |> List.filter_map Fun.id) in
   let xs = xs @
-    [ red ^ String.make (col + String.length (prefix (line - 1))) ' ' ^ "^" ^ reset
+    [ red ^ String.make (col - 1 + String.length (prefix (line - 1))) ' ' ^ "^" ^ reset
     ; ""
     ; err.msg
     ] in

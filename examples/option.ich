@@ -1,8 +1,0 @@
-use std/list
-use std/io
-
-let succ x = x + 1
-
-let main () =
-  let my_num = 0 :: [1, 2] in
-  iter log (map succ my_num)

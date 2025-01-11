@@ -14,3 +14,7 @@ let rec iter (f: 'a -> unit) (xs: 'a list): unit =
   if xs == [] then ()
   else
     (f (head xs)); (iter f (tail xs))
+
+let rec fold_left (f: 'a -> 'b -> 'a) (acc: 'a) (xs: 'b list): 'a =
+  if xs == [] then acc
+  else fold_left f (f acc (head xs)) (tail xs)

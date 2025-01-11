@@ -75,7 +75,20 @@ let string_of_scheme = function
 
 module Subst = Map.Make(String)
 
-type context = scheme Subst.t
+type context =
+  { mutable env: scheme Subst.t
+  ; mutable typedefs: scheme Subst.t
+  }
+
+let show_context ctx =
+  Subst.fold (fun k v acc -> acc ^ k ^ " : " ^ string_of_scheme v ^ "\n") ctx ""
+  |> String.trim
+
+let ctx_define ctx name scheme =
+  ctx.env <- Subst.add name scheme ctx.env
+
+let ctx_define_type ctx name quantified typ =
+  ctx.typedefs <- Subst.add name (Forall (quantified, typ)) ctx.typedefs
 
 let fresh =
   let counter = ref 0 in
@@ -135,7 +148,7 @@ let rec occurs v t =
   | TyConstructor (_, t) -> occurs v t
   | TyConst _ -> false
 
-let rec unify ?(context="") (ctx : scheme Subst.t) t u =
+let rec unify ?(context="") (ctx: context) t u =
   let rec apply_ty0 subst t =
     match t with
     | TyInfer v -> (try Subst.find v subst with Not_found -> t)
@@ -165,15 +178,26 @@ let rec unify ?(context="") (ctx : scheme Subst.t) t u =
       Ok (Subst.singleton v t)
 
   | TyConst l, TyConst r when l = r && List.mem l intrinsic_types -> Ok Subst.empty
-  | TyConst l, t | t, TyConst l ->
+  | TyConst l, TyConst r when List.mem l intrinsic_types && List.mem r intrinsic_types ->
+    Error (Printf.sprintf "Expected type %s does not match %s%s"
+    l r
+    (if context = "" then "" else " in " ^ context))
+  | TyConst l, v | v, TyConst l ->
     if List.mem l intrinsic_types then
-      Error (Printf.sprintf "Expected type %s does not match %s%s"
-        (string_of_typ t) l
+      match v with
+      | TyConst r ->
+        (match Subst.find_opt r ctx.typedefs with
+        | Some scheme ->
+          unify ctx (TyConst l) (instantiate scheme) ~context
+        | None -> Error (Printf.sprintf "Unbound type %s%s" l
+          (if context = "" then "" else " in " ^ context)))
+      | _ -> Error (Printf.sprintf "Expected type %s does not match %s%s"
+        l (string_of_typ v)
         (if context = "" then "" else " in " ^ context))
     else
-      (* Check if type exists in ctx *)
-      (match Subst.find_opt l ctx with
-      | Some scheme -> unify ctx (apply_ty ctx (instantiate scheme)) t ~context
+      (match Subst.find_opt l ctx.typedefs with
+      | Some scheme ->
+        unify ctx (instantiate scheme) v ~context
       | None -> Error (Printf.sprintf "Unbound type %s%s" l
         (if context = "" then "" else " in " ^ context)))
 
@@ -240,10 +264,6 @@ let generalize ctx t =
   in
   Forall (free_type_vars, t)
 
-let show_context ctx =
-  Subst.fold (fun k v acc -> acc ^ k ^ " : " ^ string_of_scheme v ^ "\n") ctx ""
-  |> String.trim
-
 let unify_err ?(context="") ?(hint="") ctx t u where =
   unify ctx t u ~context
   |> Result.map to_scheme
@@ -253,12 +273,12 @@ let or_fresh = function
   | Some t -> fst t
   | None -> fresh ()
 
-let rec infer_expr (ctx : scheme Subst.t) e =
+let rec infer_expr (ctx: context) e =
   let unify_err ?(context="") ?(hint="") t u where = unify_err ~context ~hint ctx t u where in
   let oks x ty subst = Ok ((x, snd e), ty, subst) in
   match (fst e) with
   | CLit (LSym s, span) ->
-    (match Subst.find_opt s ctx with
+    (match Subst.find_opt s ctx.env with
     | Some scheme ->
       oks (TLit (LSym s, span)) (instantiate scheme) Subst.empty
     | None -> err_ret ("Unbound variable " ^ s) span)
@@ -398,13 +418,13 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (List.map (fun x -> fst x) args_name)
       (List.map (fun t -> Forall ([], t)) args_ty)
     in
-    let body_ctx = List.fold_left
+    let body_env = List.fold_left
       (fun subst (name, ty) -> Subst.add name ty subst)
-      ctx args_scheme
+      ctx.env args_scheme
     in
 
-    let* (b, b_ty, bs) = infer_expr body_ctx body in
-
+    let body_ctx = ref { env = body_env; typedefs = ctx.typedefs } in
+    let* (b, b_ty, bs) = infer_expr !body_ctx body in
 
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
@@ -445,9 +465,10 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let* ty_s = unify_err typ (apply_ty bs b_ty) (snd body) ~context:"definition" in
     let typ = apply_ty ty_s typ in
 
-    let gen_typ = generalize ctx (apply_ty ty_s typ) in
-    let in_ctx = Subst.add (fst name) gen_typ ctx in
+    let gen_typ = generalize ctx.env (apply_ty ty_s typ) in
+    let in_env = Subst.add (fst name) gen_typ ctx.env in
 
+    let in_ctx = { env = in_env; typedefs = ctx.typedefs } in
     let* (in_, in_ty, in_s) = infer_expr in_ctx in_ in
 
     oks (TDef
@@ -479,16 +500,17 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (List.map (fun x -> fst x) args_name)
       (List.map (fun t -> Forall ([], t)) args_ty)
     in
-    let body_ctx = List.fold_left
+    let body_env = List.fold_left
       (fun subst (name, ty) -> Subst.add name ty subst)
-      ctx args_scheme
+      ctx.env args_scheme
     in
-    let body_ctx = if recr then
-      Subst.add (fst name) (empty_scheme f_ty) body_ctx
-    else body_ctx in
+    let body_env = if recr then
+      Subst.add (fst name) (empty_scheme f_ty) body_env
+    else body_env in
 
     (* Infer body *)
-    let* (b, b_ty, bs) = infer_expr body_ctx body in
+    let body_ctx = ref { env = body_env; typedefs = ctx.typedefs } in
+    let* (b, b_ty, bs) = infer_expr !body_ctx body in
 
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
@@ -499,14 +521,15 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     (* Generalize function type *)
     let gen_f_ty =
       apply_ty bs f_ty
-      |> generalize body_ctx
+      |> generalize !body_ctx.env
       |> apply_scheme ret_ty_s in
 
     (* Add function to context *)
-    let ctx = Subst.add (fst name) gen_f_ty ctx in
+    let in_env = Subst.add (fst name) gen_f_ty ctx.env in
 
     (* Infer `in`'s expression *)
-    let* (in_, in_ty, in_s) = infer_expr ctx in_ in
+    let in_ctx = { env = in_env; typedefs = ctx.typedefs } in
+    let* (in_, in_ty, in_s) = infer_expr in_ctx in_ in
 
     let args = List.combine args_name args_ty in
     oks (TFun
@@ -519,41 +542,13 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       in_ty
       (compose bs (compose ret_ty_s in_s))
 
-  | CDestruct { names; body; in_ } ->
-    let types = List.map (fun (_, t) -> or_fresh t) names in
-    let names = List.map (fun x -> fst x) names in
-    let expect_ty = List.fold_right (fun t acc -> TyTuple (acc, t))
-      (List.tl types) (List.hd types) in
-    let* (b, b_ty, bs) = infer_expr ctx body in
-
-    let* unify_s = unify_err b_ty expect_ty (snd body) in
-
-    let _gen_b_ty =
-      apply_ty bs b_ty
-      |> generalize ctx
-      |> apply_scheme unify_s
-    in
-
-    let ctx = List.fold_left
-      (fun ctx (name, ty) -> Subst.add name ty ctx)
-      ctx (List.combine
-        (List.map fst names)
-        (List.map (fun t -> Forall ([], t)) types))
-    in
-
-    let* (in_, in_ty, in_s) = infer_expr ctx in_ in
-
-    oks (TDestruct
-      { names
-      ; types
-      ; body = b
-      ; in_ })
-      in_ty
-      (compose bs (compose unify_s in_s))
+  (* | CDestruct { names; body; in_ } -> *)
+  | CDestruct _ ->
+    todo @@ __LOC__ ^ " CDestruct"
 
   | e -> todo @@ __LOC__ ^ " " ^ show_cst e
 
-let infer_top (ctx : scheme Subst.t ref) e =
+let infer_top (ctx: context ref) e =
   let unify_err ?(context="") ?(hint="") t u where = unify_err ~context ~hint !ctx t u where in
   let oks x = Ok (Some (x, snd e)) in
   match fst e with
@@ -567,11 +562,11 @@ let infer_top (ctx : scheme Subst.t ref) e =
 
     let gen_b_ty =
       b_ty
-      |> generalize !ctx
+      |> generalize !ctx.env
       |> apply_scheme ret_ty_s
     in
 
-    ctx := Subst.add (fst name) gen_b_ty !ctx;
+    ctx_define !ctx (fst name) gen_b_ty;
 
     let ret = apply_ty ret_ty_s ret in
     oks (TTDef
@@ -595,27 +590,28 @@ let infer_top (ctx : scheme Subst.t ref) e =
       (List.map (fun x -> fst x) args_name)
       (List.map (fun t -> Forall ([], t)) args_ty)
     in
-    let body_ctx = List.fold_left
+    let body_env = List.fold_left
       (fun subst (name, ty) -> Subst.add name ty subst)
-      !ctx args_scheme
+      !ctx.env args_scheme
     in
-    let body_ctx = if recr then
-      Subst.add (fst name) (empty_scheme f_ty) body_ctx
-    else body_ctx in
+    let body_env = if recr then
+      Subst.add (fst name) (empty_scheme f_ty) body_env
+    else body_env in
 
-    let* (b, b_ty, bs) = infer_expr body_ctx body in
+    let body_ctx = ref { env = body_env; typedefs = !ctx.typedefs } in
+    let* (b, b_ty, bs) = infer_expr !body_ctx body in
 
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
-    let* f_ret_ty_s = unify_err ret b_ty (snd body) ~context:"function body" in
+    let* f_ret_ty_s = unify_err ret b_ty (snd b) ~context:"function body" in
     let ret = apply_ty f_ret_ty_s ret in
 
     let gen_f_ty =
       apply_ty bs f_ty
-      |> generalize body_ctx
+      |> generalize !body_ctx.env
       |> apply_scheme f_ret_ty_s in
 
-    ctx := Subst.add (fst name) gen_f_ty !ctx;
+    ctx_define !ctx (fst name) gen_f_ty;
 
     let args = List.combine args_name args_ty in
     oks (TTFun
@@ -628,7 +624,7 @@ let infer_top (ctx : scheme Subst.t ref) e =
   | CTType { name; quantified; typ } ->
     let typ = fst typ in
     let quantified = List.map (fun x -> fst x) quantified in
-    ctx := Subst.add (fst name) (Forall (quantified, typ)) !ctx;
+    ctx_define_type !ctx (fst name) quantified typ;
     Ok (None)
 
 let magic =
@@ -645,9 +641,10 @@ let magic =
   ]
 
 let infer es =
-  let ctx = ref @@ List.fold_left
-    (fun ctx (name, scheme) -> Subst.add name scheme ctx)
+  let env = List.fold_left
+    (fun env (name, scheme) -> Subst.add name scheme env)
     Subst.empty magic in
+  let ctx = ref { env; typedefs = Subst.empty } in
   let (res, err) = map_sep_results @@ List.map (infer_top ctx) es in
   let res = List.filter_map (fun x -> x) res in
   (* res |> List.iter (fun (t, _) -> print_endline @@ show_term_top t); *)
