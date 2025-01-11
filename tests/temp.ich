@@ -1,8 +1,7 @@
-let id (a: 'A): 'A = a
-let foo (n: int) = n + 1
+use std/io
 
-let hi =
-    "Hello" 42
+type foo = int * int
 
 let main () =
-    foo 1 224
+    let a: foo = 1 in
+    log a

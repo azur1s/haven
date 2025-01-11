@@ -6,5 +6,6 @@ type Foo = int
 let succ (x: Foo): Foo = x + 1
 
 let main (): unit =
+  let f : Foo = Foo 1 in
   let my_nums : Foo list = 35 :: [15, 16] in
   log (fold_left (fun acc x -> acc + x) 0 (map succ my_nums))
