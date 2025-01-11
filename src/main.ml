@@ -99,13 +99,15 @@ let compile path output =
   match process path with
   | Ok s -> (
     let oc = open_out output in
+    Printf.fprintf oc "%s\n" [%blob "prelude.js"];
     Printf.fprintf oc "%s" s;
     close_out oc)
   | Error errs ->
     let ic = open_in path in
     try
-      let content = readfile path in
-      List.iter (report path content) errs;
+      List.iter (fun (err: err) ->
+        let content = readfile err.loc.file in
+        report path content err) errs;
       print_endline "";
       exit 1
     with e ->
@@ -168,4 +170,6 @@ let run_cmd =
 
 let cmds = Cmd.group (Cmd.info "") [compile_cmd; run_cmd]
 
-let () = exit (Cmd.eval cmds)
+let () =
+  Printexc.record_backtrace true;
+  exit (Cmd.eval cmds)

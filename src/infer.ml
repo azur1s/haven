@@ -75,22 +75,41 @@ let string_of_scheme = function
 
 module Subst = Map.Make(String)
 
+type context = scheme Subst.t
+
+let fresh =
+  let counter = ref 0 in
+  fun () ->
+    let id = !counter in
+    counter := !counter + 1;
+    TyInfer (str_from_int id)
+
 let to_scheme (s : typ Subst.t) : scheme Subst.t =
   Subst.map (fun t -> Forall ([], t)) s
 
 let rec apply_ty (subst : scheme Subst.t) t =
   match t with
   | TyInfer v -> (try (match Subst.find v subst with
-    | Forall (_, t) -> apply_ty subst t) with Not_found -> t)
+    (* TODO i dont know if i have to apply_ty here because sometimes it overflow :( *)
+    | Forall (_, t) -> t) with Not_found -> t)
   | TyTuple (t1, t2) ->
     TyTuple (apply_ty subst t1, apply_ty subst t2)
   | TyArrow (t1, t2) ->
     TyArrow (apply_ty subst t1, apply_ty subst t2)
   | TyRecord fields ->
     TyRecord (List.map (fun (name, t) -> (name, apply_ty subst t)) fields)
+  | TyEnum variants ->
+    TyEnum (List.map (fun (name, ts) -> (name, Option.map (apply_ty subst) ts)) variants)
   | TyConstructor (name, t) ->
     TyConstructor (name, apply_ty subst t)
   | TyConst _ -> t
+
+let instantiate (Forall (bound, ty)) =
+  let subst = List.fold_left
+    (fun acc var -> Subst.add var (empty_scheme (fresh ())) acc)
+    Subst.empty bound
+  in
+  apply_ty subst ty
 
 let apply_scheme (subst : scheme Subst.t) scheme =
   match scheme with
@@ -111,50 +130,67 @@ let rec occurs v t =
   | TyTuple (t1, t2) -> occurs v t1 || occurs v t2
   | TyArrow (t1, t2) -> occurs v t1 || occurs v t2
   | TyRecord fields -> List.exists (fun (_, t) -> occurs v t) fields
+  | TyEnum variants -> List.exists (fun (_, t) ->
+    if Option.is_some t then occurs v (Option.get t) else false) variants
   | TyConstructor (_, t) -> occurs v t
   | TyConst _ -> false
 
-let rec unify ?(context="") t u =
-  let rec apply_ty subst t =
+let rec unify ?(context="") (ctx : scheme Subst.t) t u =
+  let rec apply_ty0 subst t =
     match t with
     | TyInfer v -> (try Subst.find v subst with Not_found -> t)
     | TyTuple (t1, t2) ->
-      TyTuple (apply_ty subst t1, apply_ty subst t2)
+      TyTuple (apply_ty0 subst t1, apply_ty0 subst t2)
     | TyArrow (t1, t2) ->
-      TyArrow (apply_ty subst t1, apply_ty subst t2)
+      TyArrow (apply_ty0 subst t1, apply_ty0 subst t2)
     | TyRecord fields ->
-      TyRecord (List.map (fun (name, t) -> (name, apply_ty subst t)) fields)
+      TyRecord (List.map (fun (name, t) -> (name, apply_ty0 subst t)) fields)
+    | TyEnum variants ->
+      TyEnum (List.map (fun (name, ts) -> (name, Option.map (apply_ty0 subst) ts)) variants)
     | TyConstructor (name, t) ->
-      TyConstructor (name, apply_ty subst t)
+      TyConstructor (name, apply_ty0 subst t)
     | TyConst _ -> t
   in
   let compose s1 s2 =
-    let s2_mapped = Subst.map (fun t -> apply_ty s1 t) s2 in
+    let s2_mapped = Subst.map (fun t -> apply_ty0 s1 t) s2 in
     Subst.fold Subst.add s2_mapped s1
   in
   match (t, u) with
-  | TyConst l, TyConst r when l = r -> Ok Subst.empty
   | TyInfer v, t | t, TyInfer v ->
     if t = TyInfer v then
       Ok Subst.empty
     else if occurs v t then
-      Error ("Recursive type: " ^ v ^ " occurs in " ^ string_of_typ t)
+      Error ("Recursive type: `" ^ v ^ " occurs in " ^ string_of_typ t)
     else
       Ok (Subst.singleton v t)
+
+  | TyConst l, TyConst r when l = r && List.mem l intrinsic_types -> Ok Subst.empty
+  | TyConst l, t | t, TyConst l ->
+    if List.mem l intrinsic_types then
+      Error (Printf.sprintf "Expected type %s does not match %s%s"
+        (string_of_typ t) l
+        (if context = "" then "" else " in " ^ context))
+    else
+      (* Check if type exists in ctx *)
+      (match Subst.find_opt l ctx with
+      | Some scheme -> unify ctx (apply_ty ctx (instantiate scheme)) t ~context
+      | None -> Error (Printf.sprintf "Unbound type %s%s" l
+        (if context = "" then "" else " in " ^ context)))
+
   | TyTuple (t1, t2), TyTuple (u1, u2)
   | TyArrow (t1, t2), TyArrow (u1, u2) ->
-    let* s1 = unify t1 u1 ~context in
-    let* s2 = unify (apply_ty s1 t2) (apply_ty s1 u2) ~context in
+    let* s1 = unify ctx t1 u1 ~context in
+    let* s2 = unify ctx (apply_ty0 s1 t2) (apply_ty0 s1 u2) ~context in
     Ok (compose s2 s1)
   | TyRecord fields1, TyRecord fields2 when List.length fields1 = List.length fields2 ->
     List.fold_left2
       (fun acc (_l1, t1) (_l2, t2) ->
         let* s = acc in
-        let* s1 = unify t1 t2 ~context:("type " ^ string_of_typ t) in
+        let* s1 = unify ctx t1 t2 ~context:("type " ^ string_of_typ t) in
         Ok (compose s1 s))
       (Ok Subst.empty) fields1 fields2
   | TyConstructor (l, t), TyConstructor (r, u) when l = r ->
-    unify t u ~context
+    unify ctx t u ~context
   | _ -> Error (Printf.sprintf "Expected type %s does not match %s%s"
     (string_of_typ t) (string_of_typ u)
     (if context = "" then "" else " in " ^ context))
@@ -162,10 +198,19 @@ let rec unify ?(context="") t u =
 let rec convert_comma_const_ty = function
   (* Insert 'u' in front to differentiate between types generated by inferrence and
      user defined forall bound types *)
-  | TyConst t when t.[0] = '\'' -> TyInfer ("u" ^ t)
+  | TyConst t when t.[0] = '\'' -> TyInfer ("user" ^ t)
+  | TyConst _ as t -> t
+  | TyInfer _ as t -> t
+  | TyTuple (a, b) ->
+    TyTuple (convert_comma_const_ty a, convert_comma_const_ty b)
   | TyArrow (a, b) -> TyArrow
     (convert_comma_const_ty a, convert_comma_const_ty b)
-  | t -> t
+  (* TODO not sure about this in case of `enum Foo 'a = | Foo 'a ...`
+     and vice versa for records *)
+  | TyRecord fields -> TyRecord fields
+  | TyEnum variants -> TyEnum variants
+  | TyConstructor (name, t) ->
+    TyConstructor (name, convert_comma_const_ty t)
 
 let rec free_vars = function
   | TyInfer v   -> [v]
@@ -173,20 +218,13 @@ let rec free_vars = function
   | TyTuple (t1, t2) -> free_vars t1 @ free_vars t2
   | TyArrow (t1, t2) -> free_vars t1 @ free_vars t2
   | TyRecord fields -> List.fold_left (fun acc (_, t) -> acc @ free_vars t) [] fields
+  | TyEnum variants -> List.fold_left (fun acc (_, t) ->
+    if Option.is_some t then acc @ free_vars (Option.get t) else acc) [] variants
   | TyConstructor (_, t) -> free_vars t
 
 let free_vars_scheme = function
   | Forall (bound, ty) ->
     List.filter (fun v -> not (List.mem v bound)) (free_vars ty)
-
-type context = scheme Subst.t
-
-let fresh =
-  let counter = ref 0 in
-  fun () ->
-    let id = !counter in
-    counter := !counter + 1;
-    TyInfer (str_from_int id)
 
 let generalize ctx t =
   (* Find free vars in the type that are not in the context *)
@@ -202,23 +240,21 @@ let generalize ctx t =
   in
   Forall (free_type_vars, t)
 
-let instantiate (Forall (bound, ty)) =
-  let subst = List.fold_left
-    (fun acc var -> Subst.add var (empty_scheme (fresh ())) acc)
-    Subst.empty bound
-  in
-  apply_ty subst ty
-
 let show_context ctx =
   Subst.fold (fun k v acc -> acc ^ k ^ " : " ^ string_of_scheme v ^ "\n") ctx ""
   |> String.trim
 
-let unify_err ?(context="") ?(hint="") t u where =
-  unify t u ~context
+let unify_err ?(context="") ?(hint="") ctx t u where =
+  unify ctx t u ~context
   |> Result.map to_scheme
   |> Result.map_error (fun m -> err m where ~hint)
 
+let or_fresh = function
+  | Some t -> fst t
+  | None -> fresh ()
+
 let rec infer_expr (ctx : scheme Subst.t) e =
+  let unify_err ?(context="") ?(hint="") t u where = unify_err ~context ~hint ctx t u where in
   let oks x ty subst = Ok ((x, snd e), ty, subst) in
   match (fst e) with
   | CLit (LSym s, span) ->
@@ -349,8 +385,8 @@ let rec infer_expr (ctx : scheme Subst.t) e =
 
   | CLambda { args; ret; body } ->
     let args_name = List.map (fun x -> fst x) args in
-    let args_ty = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) args in
-    let ret = Option.value ret ~default:(fresh ()) in
+    let args_ty = List.map (fun (_, t) -> or_fresh t) args in
+    let ret = or_fresh ret in
 
     let rec make_ft = function
       | [] -> ret
@@ -372,7 +408,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
 
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
-    let* ret_ty_s = unify_err ret b_ty (snd body) in
+    let* ret_ty_s = unify_err ret b_ty (snd body) ~context:"lambda" in
     let ret = apply_ty ret_ty_s ret in
     let f_ty = apply_ty (compose bs ret_ty_s) f_ty in
 
@@ -403,8 +439,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       |> compose unify_cond_s)
 
   | CDef { name; body; typ; in_ } ->
-
-    let typ = Option.value typ ~default:(fresh ()) in
+    let typ = or_fresh typ in
     let* (b, b_ty, bs) = infer_expr ctx body in
 
     let* ty_s = unify_err typ (apply_ty bs b_ty) (snd body) ~context:"definition" in
@@ -427,9 +462,9 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     (* Just the args *)
     let args_name = List.map (fun x -> fst x) args in
     (* Fresh types or the argument's type hints *)
-    let args_ty = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) args in
+    let args_ty = List.map (fun (_, t) -> or_fresh t |> convert_comma_const_ty) args in
     (* Return type *)
-    let ret = Option.value ret ~default:(fresh ()) in
+    let ret = or_fresh ret |> convert_comma_const_ty in
 
     (* Make the function type *)
     let rec make_ft = function
@@ -458,7 +493,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
     (* Unifies that the function's return type match the body type *)
-    let* ret_ty_s = unify_err ret b_ty (snd body) in
+    let* ret_ty_s = unify_err ret b_ty (snd body) ~context:"function body" in
     let ret = apply_ty ret_ty_s ret in
 
     (* Generalize function type *)
@@ -485,7 +520,7 @@ let rec infer_expr (ctx : scheme Subst.t) e =
       (compose bs (compose ret_ty_s in_s))
 
   | CDestruct { names; body; in_ } ->
-    let types = List.map (fun (_, t) -> Option.value t ~default:(fresh ())) names in
+    let types = List.map (fun (_, t) -> or_fresh t) names in
     let names = List.map (fun x -> fst x) names in
     let expect_ty = List.fold_right (fun t acc -> TyTuple (acc, t))
       (List.tl types) (List.hd types) in
@@ -519,15 +554,16 @@ let rec infer_expr (ctx : scheme Subst.t) e =
   | e -> todo @@ __LOC__ ^ " " ^ show_cst e
 
 let infer_top (ctx : scheme Subst.t ref) e =
+  let unify_err ?(context="") ?(hint="") t u where = unify_err ~context ~hint !ctx t u where in
   let oks x = Ok (Some (x, snd e)) in
   match fst e with
   | CTUse _ -> Ok (None)
   | CTDef { name; body; ret } ->
-    let ret = Option.value ret ~default:(fresh ()) in
+    let ret = or_fresh ret in
     let* (b, b_ty, _bs) = infer_expr !ctx body in
 
     (* We probably don't need to `apply_ty bs b_ty` :clueless: *)
-    let* ret_ty_s = unify_err ret b_ty (snd body) in
+    let* ret_ty_s = unify_err ret b_ty (snd body) ~context:"definition" in
 
     let gen_b_ty =
       b_ty
@@ -545,16 +581,15 @@ let infer_top (ctx : scheme Subst.t ref) e =
 
   | CTFun { name; body; args; ret; recr } ->
     let args_name = List.map (fun x -> fst x) args in
-    let args_ty = List.map (fun (_, t) ->
-      Option.value t ~default:(fresh ())) args in
-    let ret = Option.value ret ~default:(fresh ()) in
+    let args_ty = List.map (fun (_, t) -> or_fresh t |> convert_comma_const_ty) args in
+    let ret = or_fresh ret |> convert_comma_const_ty in
 
     let rec make_ft = function
       | [] -> ret
       | arg :: rest ->
         TyArrow (arg, make_ft rest)
     in
-    let f_ty = make_ft args_ty |> convert_comma_const_ty in
+    let f_ty = make_ft args_ty in
 
     let args_scheme = List.combine
       (List.map (fun x -> fst x) args_name)
@@ -572,7 +607,7 @@ let infer_top (ctx : scheme Subst.t ref) e =
 
     let args_ty = List.map (fun x -> apply_ty bs x) args_ty in
 
-    let* f_ret_ty_s = unify_err ret b_ty (snd body) in
+    let* f_ret_ty_s = unify_err ret b_ty (snd body) ~context:"function body" in
     let ret = apply_ty f_ret_ty_s ret in
 
     let gen_f_ty =
@@ -590,15 +625,23 @@ let infer_top (ctx : scheme Subst.t ref) e =
         ; recr
         ; body = b })
 
+  | CTType { name; quantified; typ } ->
+    let typ = fst typ in
+    let quantified = List.map (fun x -> fst x) quantified in
+    ctx := Subst.add (fst name) (Forall (quantified, typ)) !ctx;
+    Ok (None)
+
 let magic =
   (* __js__ ext_fun [args] *)
   [ "__js__", Forall (["_"], TyArrow (TyConst "string", TyInfer "_"))
   (* __inline__ string *)
   ; "__inline__", Forall (["_"], TyArrow (TyConst "string", TyInfer "_"))
-  (* __js_method__ m field [args]*)
-  ; "__js_method__", Forall (["_1"; "_2"], TyArrow (TyInfer "_1", TyArrow (TyConst "string", TyInfer "_2")))
-  (* __js_field__ m field *)
-  ; "__js_field__", Forall (["_"], TyArrow (TyInfer "_", TyConst "string"))
+  (* __js_method__ m field [args] => any -> string -> any list -> any *)
+  ; "__js_method__", Forall (["_1"; "_2"; "_3"],
+    TyArrow (TyInfer "_1", TyArrow (TyConst "string",
+      TyArrow (TyConstructor ("list", TyInfer "_2"), TyInfer "_3"))))
+  (* __js_field__ m field => any -> string -> any *)
+  ; "__js_field__", Forall (["_1"; "_2"], TyArrow (TyInfer "_1", TyArrow (TyConst "string", TyInfer "_2")))
   ]
 
 let infer es =

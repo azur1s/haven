@@ -4,12 +4,12 @@
 let http = __js__ "require" "http"
 
 let server_create f =
-    __js_method__ http "createServer" (fun req res -> f req res)
+  __js_method__ http "createServer" [(fun req res -> f req res)]
 
 let server_start s (port: int) =
-    __js_method__ s "listen" port
+  __js_method__ s "listen" [port]
 
 let res_write res (m: string) =
-    __js_method__ res "write" m
+  __js_method__ res "write" [m]
 
-let res_end res = __js_method__ res "end" ()
+let res_end res = __js_method__ res "end" []

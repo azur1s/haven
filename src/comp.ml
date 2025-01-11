@@ -24,8 +24,8 @@ let string_of_js_bin = function
   | Mul -> "*"
   | Div -> "/"
   | Mod -> "%"
-  | Eq -> "=="
-  | Neq -> "!="
+  | Eq -> "==="
+  | Neq -> "!=="
   | Lt -> "<"
   | Lte -> "<="
   | Gt -> ">"
@@ -45,6 +45,8 @@ let rec string_of_js_expr = function
   | JSObject l -> Printf.sprintf "{%s}"
     (String.concat ", " (List.map (fun (k, v) -> Printf.sprintf "%s: %s" k (string_of_js_expr v)) l))
   | JSAccess (a, b) -> Printf.sprintf "%s.%s" (string_of_js_expr a) b
+  | JSBin (a, Cons, b) ->
+    Printf.sprintf "[%s].concat(%s)" (string_of_js_expr a) (string_of_js_expr b)
   | JSBin (a, op, b) ->
     Printf.sprintf "(%s %s %s)" (string_of_js_expr a) (string_of_js_bin op) (string_of_js_expr b)
   | JSApp (f, args) ->
@@ -76,6 +78,10 @@ let next_id ctx =
   ctx.id <- ctx.id + 1;
   ctx.id
 
+let rec put_return_in_then_chain = function
+  | JSThen (a, b) -> JSThen (a, put_return_in_then_chain b)
+  | x -> JSReturn x
+
 let rec comp_term ctx term =
   match term with
   | KLit l -> JSLit l
@@ -83,6 +89,8 @@ let rec comp_term ctx term =
   | KTuple l -> JSTuple (List.map (comp_term ctx) l)
   | KRecord l -> JSObject (List.map (fun (k, v) -> (k, comp_term ctx v)) l)
   | KAccess (r, k) -> JSAccess (comp_term ctx r, k)
+  | KBin (KList l, Eq, x) | KBin (x, Eq, KList l) ->
+    JSApp (JSLit (LSym "list_eq"), [JSList (List.map (comp_term ctx) l); comp_term ctx x])
   | KBin (a, op, b) -> JSBin (comp_term ctx a, op, comp_term ctx b)
   | KApp (KLit (LSym "__js__"), args) ->
     (match args with
@@ -94,9 +102,7 @@ let rec comp_term ctx term =
       |> failwith)
   | KApp (KLit (LSym "__js_method__"), args) ->
     (match args with
-    | [obj; KLit (LStr field); KLit LUnit] ->
-      JSApp (JSAccess (comp_term ctx obj, field), [])
-    | obj :: KLit (LStr field) :: args ->
+    | [obj; KLit (LStr field); KList args] ->
       JSApp (JSAccess (comp_term ctx obj, field), List.map (comp_term ctx) args)
     | x -> List.map show_kterm x
       |> String.concat ", "
@@ -117,7 +123,9 @@ let rec comp_term ctx term =
     let cond = comp_term ctx cond in
     let t = comp_term ctx t in
     let f = comp_term ctx f in
-    JSTernary (cond, t, f)
+    JSTernary (cond,
+      JSApp (JSArrow ([], JSBlock (put_return_in_then_chain t)), []),
+      JSApp (JSArrow ([], JSBlock (put_return_in_then_chain f)), []))
   | KDef { name; body; in_ } ->
     let body = comp_term ctx body in
     let in_ = comp_term ctx in_ in
@@ -126,10 +134,6 @@ let rec comp_term ctx term =
     Printf.printf "KFun: %s\n" (sexp_of_kterm term |> Sexp.to_string);
     failwith "KFun should've been converted to let lambda"
   | e -> todo __LOC__ ~reason:(show_kterm e)
-
-let rec put_return_in_then_chain = function
-  | JSThen (a, b) -> JSThen (a, put_return_in_then_chain b)
-  | x -> JSReturn x
 
 let comp_top ctx top =
   let process k =

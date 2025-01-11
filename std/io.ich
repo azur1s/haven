@@ -5,8 +5,8 @@ let write s: unit = __js__ "process.stdout.write" s
 let print any: unit = write (to_string any)
 
 let println any: unit =
-    print any;
-    print "\n"
+  print any;
+  print "\n"
 
 (* console.log *)
 let log s: unit = __js__ "console.log" s

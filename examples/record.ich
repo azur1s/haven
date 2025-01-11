@@ -1,9 +1,9 @@
 use std/io
 
 let main () =
-    let a =
-        { id : fun x -> x
-        , me : 42
-        } in
+  let a =
+    { id : fun x -> x
+    , me : 42
+    } in
 
-    log (a.id a.me)
+  log (a.id a.me)

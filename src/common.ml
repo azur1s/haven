@@ -31,6 +31,9 @@ let sexp_of_int    i = Sexp.Atom (string_of_int i)
 let sexp_of_float  f = Sexp.Atom (string_of_float f)
 let sexp_of_string s = Sexp.Atom s
 let sexp_of_list f l = Sexp.List (List.map f l)
+let sexp_of_option f = function
+  | None -> Sexp.Atom "None"
+  | Some x -> Sexp.List [Sexp.Atom "Some"; f x]
 
 type lit =
   | LUnit
@@ -58,8 +61,11 @@ and typ =
   | TyArrow of typ * typ
   | TyConstructor of string * typ
   | TyRecord of (string * typ) list
+  | TyEnum of (string * typ option) list
   | TyInfer of string
   [@@deriving show, sexp_of]
+
+let intrinsic_types = ["int"; "float"; "string"; "bool"; "unit"]
 
 let string_of_lit = function
   | LUnit -> "null"
@@ -92,4 +98,10 @@ let rec string_of_typ = function
   | TyArrow (a, b) -> string_of_typ a ^ " -> " ^ string_of_typ b
   | TyRecord l -> "{" ^ String.concat ", " (List.map (fun (f, t) -> f ^ " : " ^ string_of_typ t) l) ^ "}"
   | TyConstructor (f, b) -> string_of_typ b ^ " " ^ f
-  | TyInfer s -> s
+  | TyEnum l ->
+    let f (f, t) = match t with
+      | None -> f
+      | Some t -> f ^ " of " ^ string_of_typ t
+    in
+    String.concat " | " (List.map f l)
+  | TyInfer s -> "`" ^ s

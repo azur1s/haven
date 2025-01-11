@@ -13,8 +13,8 @@ type cst =
   | CApp    of cst spanned * cst spanned
   | CThen   of cst spanned * cst spanned
   | CLambda of
-    { args: (string spanned * typ option) list
-    ; ret: typ option
+    { args: (string spanned * typ spanned option) list
+    ; ret: typ spanned option
     ; body: cst spanned
     }
   | CIf of
@@ -25,19 +25,19 @@ type cst =
   | CDef of
     { name: string spanned
     ; body: cst spanned
-    ; typ: typ option
+    ; typ: typ spanned option
     ; in_: cst spanned
     }
   | CFun of
     { name: string spanned
-    ; args: (string spanned * typ option) list
+    ; args: (string spanned * typ spanned option) list
     ; body: cst spanned
-    ; ret: typ option
+    ; ret: typ spanned option
     ; recr: bool
     ; in_: cst spanned
     }
   | CDestruct of
-    { names: (string spanned * typ option) list
+    { names: (string spanned * typ spanned option) list
     ; body: cst spanned
     ; in_: cst spanned
     }
@@ -55,14 +55,19 @@ and cst_top =
   | CTDef of
     { name: string spanned
     ; body: cst spanned
-    ; ret: typ option
+    ; ret: typ spanned option
     }
   | CTFun of
     { name: string spanned
     ; body: cst spanned
-    ; args: (string spanned * typ option) list
+    ; args: (string spanned * typ spanned option) list
     ; recr: bool
-    ; ret: typ option
+    ; ret: typ spanned option
+    }
+  | CTType of
+    { name: string spanned
+    ; quantified: string spanned list
+    ; typ: typ spanned
     }
   [@@deriving show]
 
@@ -188,6 +193,19 @@ let many_cond p f =
   in
   many_cond_acc p []
 
+let many_cond_map p f =
+  let rec many_cond_acc p acc =
+    match peek p with
+    | Some t -> (
+      match f t with
+      | Some v -> (
+        let _ = advance p in
+        many_cond_acc p (v :: acc))
+      | None -> Ok (List.rev acc))
+    | None -> Ok (List.rev acc)
+  in
+  many_cond_acc p []
+
 let or_p p p1 p2 =
   let rewind_point = p.loc in
   match p1 p with
@@ -196,7 +214,7 @@ let or_p p p1 p2 =
     rewind p rewind_point;
     p2 p
 
-let rec parse_typ p min_bp =
+let rec parse_typ p min_bp: (typ spanned, err) result =
   let parse_typ_atom p =
     match peek p with
     | Some (TkSym s, span) ->
@@ -210,13 +228,13 @@ let rec parse_typ p min_bp =
       |> advance_return p
     | Some (TkOpen Paren, start) ->
       let _ = advance p in
-      let* typ = parse_typ p 0 in
+      let* (typ, _) = parse_typ p 0 in
       let* (_, end_) = expect p @@ TkClose Paren in
       Ok (typ, span_union start end_)
     | Some (t, s) -> err_ret ("Expected type, found " ^ string_of_token t) s
     | None -> err_ret "Expected type, found end of file" (eof_error_loc p)
   in
-  let rec parse_typ_loop lhs =
+  let rec parse_typ_loop (lhs: typ spanned) =
     let rewind_point = p.loc in
     match peek p with
     | Some (TkArrow, _) ->
@@ -227,26 +245,26 @@ let rec parse_typ p min_bp =
         let _ = advance p in
         let* rhs = parse_typ p @@ power + 1 in
         (* Right-associative so keep parsing in the right direction *)
-        let* rhs = parse_typ_loop rhs in
-        Ok (TyArrow (lhs, rhs))
+        let* (rhs, s) = parse_typ_loop rhs in
+        Ok (TyArrow (fst lhs, rhs), span_union (snd lhs) s)
     | Some (TkBin Mul, _) ->
       let power = 20 in
       if power < min_bp then
         Ok lhs
       else
         let _ = advance p in
-        let* rhs = parse_typ p @@ power + 1 in
-        parse_typ_loop (TyTuple (lhs, rhs))
+        let* (rhs, s) = parse_typ p @@ power + 1 in
+        parse_typ_loop (TyTuple (fst lhs, rhs), span_union (snd lhs) s)
     | Some (TkSym _, _) ->
       (match parse_typ_atom p with
-      | Ok (TyConst x, _) -> parse_typ_loop (TyConstructor (x, lhs))
+      | Ok (TyConst x, s) -> parse_typ_loop (TyConstructor (x, fst lhs), span_union s (snd lhs))
       | Ok (_, where) ->
         rewind p rewind_point;
         err_ret "This type can't be used as a constructor" where
       | Error _ -> Ok lhs)
     | _ -> Ok lhs
   in
-  let* (lhs, _) = parse_typ_atom p in
+  let* lhs = parse_typ_atom p in
   parse_typ_loop lhs
 
 let parse_let_args p =
@@ -573,6 +591,16 @@ and parse_top p =
         ; ret
         ; recr
         }, span_union span (snd body)))
+    | TkType ->
+      (* type foo a b c = ... *)
+      let _ = advance p in
+      let* name = parse_sym p in
+      let* quantified = many_cond_map p (fun t -> match t with
+        | (TkSym s, sp) -> Some (s, sp)
+        | _ -> None) in
+      let* _ = expect p TkAssign in
+      let* typ = parse_typ p 0 in
+      Ok (CTType { name; quantified; typ }, span_union span (snd typ))
     | t -> err_ret ("Expected top level statement, found " ^ string_of_token t) span)
   | None -> err_ret "Expected top level statement, found end of file" (eof_error_loc p)
 
@@ -580,6 +608,7 @@ and parse_tops p =
   many_until_end parse_top p
 
 let parse ?(file="<anonymous>") tks =
+  if tks = [] then Ok ([], []) else
   let p = { input = tks; file = file; loc = 0 } in
   let res = parse_tops p in
   match res with

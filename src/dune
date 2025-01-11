@@ -2,4 +2,5 @@
  (names main)
  (public_names ichor)
  (libraries str cmdliner unix)
- (preprocess (pps ppx_deriving.show ppx_sexp_conv)))
+ (preprocessor_deps (file prelude.js))
+ (preprocess (pps ppx_deriving.show ppx_sexp_conv ppx_blob)))

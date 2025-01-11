@@ -25,6 +25,7 @@ type token =
   (* Keywords *)
   | TkIf  | TkThen | TkElse
   | TkLet | TkIn | TkRec
+  | TkType
   | TkCase | TkOf
   | TkUse | TkFun
   [@@deriving show]
@@ -82,6 +83,7 @@ let string_of_token = function
   | TkLet  -> "let"
   | TkIn   -> "in"
   | TkRec  -> "rec"
+  | TkType -> "type"
   | TkCase -> "case"
   | TkOf   -> "of"
   | TkUse  -> "use"
@@ -337,6 +339,7 @@ let rec tokenize_acc l acc =
           | "let"   -> TkLet
           | "in"    -> TkIn
           | "rec"   -> TkRec
+          | "type"  -> TkType
           | "case"  -> TkCase
           | "of"    -> TkOf
           | "use"   -> TkUse
