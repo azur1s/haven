@@ -11,7 +11,9 @@ I know JavaScript isn't supposed to be on backend, but come on, it works.
 
 ## Progress
 
-The next goal is to be able to write a Discord bot as a dogfooding process.
+This project will be using [this versioning](https://pridever.org/). We are at `0.0.0`
+
+The next goal is to be able to write a Discord bot as a dogfooding process, and after that maybe it'll be `0.1.0`
 
 - Language
     - (X) Basic expressions
