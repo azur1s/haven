@@ -58,7 +58,7 @@ let rec string_of_js_expr = function
   | JSThen (a, b) ->
     Printf.sprintf "%s;\n%s" (string_of_js_expr a) (string_of_js_expr b)
   | JSDef (name, expr) ->
-    Printf.sprintf "var %s = %s" name (string_of_js_expr expr)
+    Printf.sprintf "const %s = %s" name (string_of_js_expr expr)
   | JSBlock expr ->
     Printf.sprintf "{\n%s\n}" (string_of_js_expr expr)
   | JSReturn expr ->
