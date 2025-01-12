@@ -7,4 +7,4 @@ let succ (x: A): A = A (x + 1)
 let logA (x: A): unit = log x
 
 let main () =
-    42 -> A -> id -> succ -> logA
+    42 -> A -> id -> succ -> logA;

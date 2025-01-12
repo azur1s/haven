@@ -464,12 +464,15 @@ let rec parse_atom p =
 
 (* https://ocaml.org/manual/5.2/expr.html#ss:precedence-and-associativity *)
 and binding_power = function
-  | Mul | Div | Mod     -> 120, 121
-  | Add | Sub           -> 110, 111
+  (*Access f.a          -> 200, 201 *)
+  | Mul | Div | Mod     -> 130, 131
+  | Add | Sub           -> 120, 121
+  (*PipeL               -> 110, 111 *)
   | Cons                -> 100, 101
   | Eq | Neq
   | Lt | Lte | Gt | Gte -> 80, 81
   | And | Or            -> 70, 71
+  (*Semicolon           -> 1, 2 *)
 
 and parse_expr p min_bp =
   let rec parse_loop lhs =
@@ -497,13 +500,23 @@ and parse_expr p min_bp =
         parse_loop (CThen (lhs, rhs), span_union (snd lhs) (snd rhs))
     (* Field access *)
     | Some (TkDot, _) ->
-      let l_pw, _r_pw = 160, 161 in
+      let l_pw, _r_pw = 200, 201 in
       if l_pw < min_bp then
         Ok lhs
       else
         let _ = advance p in
         let* (field, span) = parse_sym p in
         parse_loop (CAccess (lhs, (field, span)), span_union (snd lhs) span)
+    (* Pipe *)
+    (* 1 -> (fun x -> x + 1) -> print *)
+    | Some (TkArrow, _) ->
+      let l_pw, r_pw = 110, 111 in
+      if l_pw < min_bp then
+        Ok lhs
+      else
+        let _ = advance p in
+        let* rhs = parse_expr p r_pw in
+        parse_loop (CApp (rhs, lhs), span_union (snd rhs) (snd lhs))
     (* Application *)
     | Some _ ->
       (* Try parse, if goes wrong then just return lhs *)
