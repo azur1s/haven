@@ -1,7 +1,9 @@
 use std/io
+use std/list
+use std/num
+use std/basehttp
 
-type foo = int * int
+let lhs a b = b
 
 let main () =
-    let a: foo = 1 in
-    log a
+    log (lhs 1 2 3)

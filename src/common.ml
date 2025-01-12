@@ -1,6 +1,7 @@
 (* Common types used by representations *)
 open Loc
 open Sexplib0
+open Utils
 
 type err =
   { msg : string
@@ -104,4 +105,24 @@ let rec string_of_typ = function
       | Some t -> f ^ " of " ^ string_of_typ t
     in
     String.concat " | " (List.map f l)
-  | TyInfer s -> "`" ^ s
+  | TyInfer s -> "'" ^ s
+
+(* ['e, 'g1 -> 'e * 'f16] => ['a, 'b -> 'a * 'c] *)
+let floor_types tys =
+  let mappings = Hashtbl.create 10 in
+  let rec floor_typ = function
+    | TyConst _ as t -> t
+    | TyTuple (a, b) -> TyTuple (floor_typ a, floor_typ b)
+    | TyArrow (a, b) -> TyArrow (floor_typ a, floor_typ b)
+    | TyRecord l -> TyRecord (List.map (fun (f, t) -> (f, floor_typ t)) l)
+    | TyConstructor (f, b) -> TyConstructor (f, floor_typ b)
+    | TyEnum l -> TyEnum (List.map (fun (f, t) -> (f, Option.map floor_typ t)) l)
+    | TyInfer s ->
+      if Hashtbl.mem mappings s then
+        TyInfer (Hashtbl.find mappings s)
+      else
+        let i = Hashtbl.length mappings in
+        Hashtbl.add mappings s (string_type_from_int i);
+        TyInfer (string_type_from_int i)
+  in
+  List.map floor_typ tys
