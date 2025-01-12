@@ -3,6 +3,7 @@ open Lex
 open Parse
 open Infer
 open Norm
+open Opt
 open Comp
 open Report
 open Cmdliner
@@ -51,7 +52,7 @@ let rec process_lib path =
     | Error e -> Error [e])
   | Error (m, loc) -> Error [err m loc]
 
-let process path =
+let process path opt_level =
   let ic = open_in path in
   try
     let content = readfile path in
@@ -76,6 +77,7 @@ let process path =
           if infer_errs = [] then (
             (* The rest of the errors after here should be compiler errors, I hope *)
             norm terms
+            |> optim opt_level
             |> comp
             |> List.map string_of_js_expr
             |> String.concat ";\n"
@@ -94,9 +96,9 @@ let output_or_default = function
   | Some s -> s
   | None -> "out.js"
 
-let compile path output =
+let compile path output opt_level =
   let output = output_or_default output in
-  match process path with
+  match process path opt_level with
   | Ok s -> (
     let oc = open_out output in
     Printf.fprintf oc "%s\n" [%blob "prelude.js"];
@@ -114,8 +116,8 @@ let compile path output =
       close_in ic;
       raise e
 
-let run path output args =
-  compile path output;
+let run path output args opt_level =
+  compile path output opt_level;
   let should_clean = output = None in
   let output = output_or_default output in
 
@@ -151,8 +153,12 @@ let output =
   Arg.(value & opt (some string) None & info ["o"; "output"] ~docv:"OUTPUT" ~doc)
   |> Term.app (Term.const map_strip)
 
+let opt_level =
+  let doc = "Optimization level" in
+  Arg.(value & opt int 0 & info ["O"] ~docv:"LEVEL" ~doc)
+
 let process_t =
-  Term.(const compile $ path $ output)
+  Term.(const compile $ path $ output $ opt_level)
 let compile_cmd =
   let doc = "Compile" in
   let info = Cmd.info "compile" ~doc in
@@ -162,7 +168,7 @@ let process_and_run_t =
   let args =
     Arg.(value & pos_right 0 string [] & info [] ~docv:"ARGS" ~doc:"Arguments to the program")
   in
-  Term.(const run $ path $ output $ (const Array.of_list $ args))
+  Term.(const run $ path $ output $ (const Array.of_list $ args) $ opt_level)
 let run_cmd =
   let doc = "Compile and run" in
   let info = Cmd.info "run" ~doc in

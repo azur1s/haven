@@ -1,14 +1,18 @@
 use std/io
+use std/list
+use std/basehttp
+use std/num
 
-type A = int
-type B = int * int
-type C 'a = 'a * int
+type A = int * int
+
+let foo (a: A) = a
+
+let bar (a: A) = foo a
+
+let foo (a: A) = (0, 0)
 
 let main () =
-    log (A 42);
-    log (B (1, 2));
-
-    log (C (true, 1));
-    log (C ("Hello", 2));
+    log (foo (1, 2));
+    log (bar (1, 2));
 
     ()

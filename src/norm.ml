@@ -41,12 +41,13 @@ type kterm =
   [@@deriving show, sexp_of]
 
 and ktop =
-  | KTDef of string * kterm
+  | KTDef of string * kterm * int
   | KTFun of
     { name: string
     ; args: string list
     ; recr: bool
     ; body: kterm
+    ; id: int
     }
   [@@deriving show]
 
@@ -147,13 +148,14 @@ let norm_top top =
   match top with
   | TTDef { name; body; _ } ->
     norm body
-    |> fun body -> KTDef (fst name, body)
-  | TTFun { name; args; recr; body; _ } -> KTFun
-    { name = fst name
-    ; body = norm body
-    ; recr
-    ; args = List.map (fun x -> fst @@ fst x) args
-    }
+    |> fun body -> KTDef (fst name, body, (snd name).start)
+  | TTFun { name; args; recr; body; _ } ->
+    KTFun
+      { name = fst name
+      ; body = norm body
+      ; recr
+      ; args = List.map (fun x -> fst @@ fst x) args
+      ; id = (snd name).start }
 
 let norm tops =
   List.map (fun x -> norm_top @@ fst x) tops

@@ -18,7 +18,10 @@ The next goal is to be able to write a Discord bot as a dogfooding process, and 
 - Language
     - (X) Basic expressions
     - ( ) Type inference (it works but will never be completed)
-    - ( ) Optimization (I will be focusing on making everything works)
+    - (-) Optimization (I will be focusing on making everything works)
+
+        Broken, remove things randomly but at least there's a pipeline for it
+
     - (-) File includes
 
         There is `use` syntax for including files relative to the file being compiled and also for including `std` stuff

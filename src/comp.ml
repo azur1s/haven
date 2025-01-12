@@ -140,7 +140,7 @@ let comp_top ctx top =
     comp_term ctx k
     |> put_return_in_then_chain in
   match top with
-  | KTDef (name, body) ->
+  | KTDef (name, body, _) ->
     reset_id ctx;
     JSDef (name, JSApp (JSArrow ([], JSBlock (process body)), []))
   | KTFun { name; args; body; _ } ->
