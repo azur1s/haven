@@ -1,9 +1,14 @@
 use std/io
-use std/list
-use std/num
-use std/basehttp
 
-let lhs a b = b
+type A = int
+type B = int * int
+type C 'a = 'a * int
 
 let main () =
-    log (lhs 1 2 3)
+    log (A 42);
+    log (B (1, 2));
+
+    log (C (true, 1));
+    log (C ("Hello", 2));
+
+    ()
