@@ -39,11 +39,16 @@ The next goal is to be able to write a Discord bot as a dogfooding process, and 
 
         Should be easy since we use pratt parser and we can probably just add new operators at runtime :clueless:
 
-    - (-) Custom type definitions/alias
+    - (X) Custom type definitions/alias
 
         ```
         type foo = int * int (* DONE *)
-        let new_foo = foo (1, 2) (* TODO *)
+        let a = foo (1, 2) (* DONE *)
+
+        (* TODO *)
+        let bar = bar int
+        let baz = a int | b bool
+        let qux = { a : int, b : bool }
         ```
 
     - ( ) Methods for said custom types
