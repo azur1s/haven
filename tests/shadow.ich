@@ -1,11 +1,13 @@
 use std/io
 
-let foo a = 0
-let bar a = foo a (* bar should use first foo *)
-let foo a = "hi"
+let foo (a: int): int = 0
+let bar (a: int): int = foo a (* bar should use first foo *)
+let foo (a: int): string = "hi"
 
 let main () =
-    log (foo 42); (* should be second foo *)
-    log (bar 42);
+    let a: string = foo 42 in (* should be second foo *)
+    let b: int = bar 42 in
+    log a; (* => hi *)
+    log b; (* => 0 *)
 
     ()

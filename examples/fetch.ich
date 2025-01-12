@@ -1,0 +1,6 @@
+use std/basefetch
+use std/io
+
+let main () =
+  fetch "https://api.github.com/users/torvalds"
+  -> with_callback (fun data -> log data)

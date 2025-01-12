@@ -1,6 +1,6 @@
-let to_string any: string = __js__ "String" any
+let to_string any: string = __js__ "String" [any]
 
-let write s: unit = __js__ "process.stdout.write" s
+let write s: unit = __js__ "process.stdout.write" [s]
 
 let print any: unit = write (to_string any)
 
@@ -9,4 +9,4 @@ let println any: unit =
   print "\n"
 
 (* console.log *)
-let log s: unit = __js__ "console.log" s
+let log s: unit = __js__ "console.log" [s]

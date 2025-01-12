@@ -94,7 +94,7 @@ let rec comp_term ctx term =
   | KBin (a, op, b) -> JSBin (comp_term ctx a, op, comp_term ctx b)
   | KApp (KLit (LSym "__js__"), args) ->
     (match args with
-    | KLit (LStr f) :: args -> JSApp (JSLit (LSym f), List.map (comp_term ctx) args)
+    | [KLit (LStr f); KList args] -> JSApp (JSLit (LSym f), List.map (comp_term ctx) args)
     | x -> List.map show_kterm x
       |> String.concat ", "
       |> (^) __LOC__

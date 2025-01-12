@@ -660,8 +660,9 @@ let infer_top (ctx: context ref) e =
       Ok (None))
 
 let magic =
-  (* __js__ ext_fun [args] *)
-  [ "__js__", Forall (["_"], TyArrow (TyConst "string", TyInfer "_"))
+  (* __js__ ext_fun [args] => string -> any list -> any *)
+  [ "__js__", Forall (["_1"; "_2"],
+    TyArrow (TyConst "string", TyArrow (TyConstructor ("list", TyInfer "_1"), TyInfer "_2")))
   (* __inline__ string *)
   ; "__inline__", Forall (["_"], TyArrow (TyConst "string", TyInfer "_"))
   (* __js_method__ m field [args] => any -> string -> any list -> any *)

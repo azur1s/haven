@@ -1,5 +1,5 @@
-let floor (a: float): float = __js__ "~~" a
-let round (a: float): float = __js__ "Math.round" a
-let ceil (a: float): float = __js__ "Math.ceil" a
+let floor (a: float): float = __js__ "~~" [a]
+let round (a: float): float = __js__ "Math.round" [a]
+let ceil (a: float): float = __js__ "Math.ceil" [a]
 
-let float_to_int (a: float): int = __js__ "~~" a
+let float_to_int (a: float): int = __js__ "~~" [a]
