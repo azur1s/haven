@@ -1,7 +1,0 @@
-use std/io
-
-let main () =
-    print "1\n";
-    print "Hello
-    World";
-    print "2\r\n"

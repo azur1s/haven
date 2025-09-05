@@ -1,7 +1,0 @@
-use std/io
-use std/num
-
-let main () =
-    let a: int = 34 in
-    let b: float = 35.69 in
-    println (a + (float_to_int b))

@@ -1,0 +1,8 @@
+use "../lib/core".
+
+test = \x y -> x + (y * 2).
+
+main : Unit.
+main =
+    println "Hello, World.";
+    println ":)".

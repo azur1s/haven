@@ -1,4 +1,0 @@
-use ./a
-use ./c
-
-let bar = baz foo "Foo"

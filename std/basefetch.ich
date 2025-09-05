@@ -1,9 +1,0 @@
-let fetch
-  (url: string)
-  = __js__ "fetch" [url]
-  -> (fun x -> __js_method__ x "then" [(fun r -> __js_method__ r "json" [])])
-
-let with_callback
-  (fn: 'rsp -> 'a)
-  (rsp: 'jsResponseObject)
-  = __js_method__ rsp "then" [fn]

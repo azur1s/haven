@@ -1,181 +1,88 @@
 open Common
-open Lex
-open Parse
-open Infer
-open Norm
-open Opt
-open Comp
-open Report
-open Cmdliner
-open Unix
 
-let readfile path =
-  let ch = open_in_bin path in
-  let s = really_input_string ch (in_channel_length ch) in
-  close_in ch;
-  s
+let process file =
+  let start_time = Sys.time () in
 
-let handle_relative base_path import_path =
-  (* Relative path (to the file) *)
-  if String.starts_with ~prefix:"./" import_path then
-    let dir = Filename.dirname base_path in
-    let stripped = String.sub import_path 2
-      (String.length import_path - 2) in
-    let path = Filename.concat dir stripped in
-    "./" ^ path ^ ".ich"
-  else
-  (* Standard library *)
-    let importing = Filename.basename import_path in
-    let core_path = match Sys.getenv_opt "ICHOR_LIB" with
-      | Some s -> s ^ "/std/"
-      | None -> "./std/"
-    in core_path ^ importing ^ ".ich"
+  let ic = Stdio.In_channel.create file in
+  let input = (Stdio.In_channel.input_all ic) ^ "\n" in
+  Stdio.In_channel.close ic;
 
-let rec process_lib path =
-  let content = readfile path in
-  match lex content ~file:path with
-  | Ok xs ->
-    (match parse xs ~file:path with
-    | Ok (tops, uses) ->
-      let uses = uses
-        |> List.map (handle_relative path)
-        |> List.map (process_lib) in
+  let parse file str =
+      let* tokens = Lex.lex ~file str
+        |> fun x -> match x with
+          | Ok xs -> Ok xs
+          | Error e -> Error [e]
+      in
 
-      let csts, errs = List.fold_left (fun acc x ->
-        match x with
-        | Ok    s -> ((fst acc) @ s, snd acc)
-        | Error e -> (fst acc, e @ (snd acc))) ([], []) uses in
-
-      (match errs with
-      | [] -> Ok (csts @ tops)
-      | errs -> Error errs)
-    | Error e -> Error [e])
-  | Error (m, loc) -> Error [err m loc]
-
-let process path opt_level =
-  let ic = open_in path in
-  try
-    let content = readfile path in
-    match lex content ~file:path with
-    | Ok xs ->
-      (match parse xs ~file:path with
-      | Ok (tops, uses) ->
-
-        let uses = uses
-          |> List.map (handle_relative path)
-          |> List.map (process_lib) in
-
-        let libs, errs = List.fold_left (fun acc x ->
-          match x with
-          | Ok    s -> ((fst acc) @ s, snd acc)
-          | Error e -> (fst acc, e @ (snd acc))) ([], []) uses in
-
-        (match errs with
-        | [] ->
-          let tops = libs @ tops in
-          let (terms, infer_errs) = infer tops in
-          if infer_errs = [] then (
-            (* The rest of the errors after here should be compiler errors, I hope *)
-            norm terms
-            |> optim opt_level
-            |> comp
-            |> List.map string_of_js_expr
-            |> String.concat ";\n"
-            |> Result.ok)
-          else
-            infer_errs
-            |> Result.error
-        | errs -> Error errs)
-      | Error e -> Error [e])
-    | Error (m, loc) -> Error [err m loc]
-  with e ->
-    close_in ic;
-    raise e
-
-let output_or_default = function
-  | Some s -> s
-  | None -> "out.js"
-
-let compile path output opt_level =
-  let output = output_or_default output in
-  match process path opt_level with
-  | Ok s -> (
-    let oc = open_out output in
-    Printf.fprintf oc "%s\n" [%blob "prelude.js"];
-    Printf.fprintf oc "%s" s;
-    close_out oc)
-  | Error errs ->
-    let ic = open_in path in
-    try
-      List.iter (fun (err: err) ->
-        let content = readfile err.loc.file in
-        report path content err) errs;
-      print_endline "";
-      exit 1
-    with e ->
-      close_in ic;
-      raise e
-
-let run path output args opt_level =
-  compile path output opt_level;
-  let should_clean = output = None in
-  let output = output_or_default output in
-
-  let clean () = Unix.unlink output in
-
-  let args =
-    if args = [||] then
-      "\"\""
-    else
-      String.concat " " (Array.to_list args) in
-  let command = "node " ^ output ^ " " ^ args in
-  match Unix.system command with
-  | WEXITED 0 -> if should_clean then clean ()
-  | WEXITED n ->
-    print_endline "Runtime error of JavaScript execution";
-    print_endline @@ "Ran: " ^ command;
-    exit n
-  | _ ->
-    print_endline "Runtime error of JavaScript execution";
-    exit 1
-
-let path =
-  let doc = "The input file" in
-  Arg.(required & pos 0 (some string) None & info [] ~docv:"INPUT" ~doc)
-
-let map_strip maybe_output =
-  match maybe_output with
-  | Some s -> Some (if Filename.check_suffix s ".js" then s else s ^ ".js")
-  | None -> None
-
-let output =
-  let doc = "The output path without prefix (default: out)" in
-  Arg.(value & opt (some string) None & info ["o"; "output"] ~docv:"OUTPUT" ~doc)
-  |> Term.app (Term.const map_strip)
-
-let opt_level =
-  let doc = "Optimization level" in
-  Arg.(value & opt int 0 & info ["O"] ~docv:"LEVEL" ~doc)
-
-let process_t =
-  Term.(const compile $ path $ output $ opt_level)
-let compile_cmd =
-  let doc = "Compile" in
-  let info = Cmd.info "compile" ~doc in
-  Cmd.v info process_t
-
-let process_and_run_t =
-  let args =
-    Arg.(value & pos_right 0 string [] & info [] ~docv:"ARGS" ~doc:"Arguments to the program")
+      let* ctop = Parse.parse ~file tokens
+        |> fun x -> match x with
+          | Ok xs -> Ok xs
+          | Error e -> Error [e]
+      in
+      Ok ctop
   in
-  Term.(const run $ path $ output $ (const Array.of_list $ args) $ opt_level)
-let run_cmd =
-  let doc = "Compile and run" in
-  let info = Cmd.info "run" ~doc in
-  Cmd.v info process_and_run_t
 
-let cmds = Cmd.group (Cmd.info "") [compile_cmd; run_cmd]
+  let* ctop = parse file input in
+
+  let uses = List.filter_map (fun (ctop, _) -> match ctop with
+    | Parse.CTUse name -> Some name
+    | _ -> None) ctop in
+
+  let* uses_ctop = List.map (fun path ->
+    let use_file = (Filename.dirname file) ^ "/" ^ (fst path) ^ ".hvn" in
+    if Sys.file_exists use_file then (
+      let ic = Stdio.In_channel.create use_file in
+      let input = (Stdio.In_channel.input_all ic) ^ "\n" in
+      Stdio.In_channel.close ic;
+      (* let fp = Unix.realpath use_file in *)
+      let fp = use_file in
+      parse fp input
+    ) else
+      Error [{ msg = "Could not find module: " ^ use_file
+             ; loc = snd path
+             ; hint = None
+             }]
+  ) uses |> combine_results in
+
+  let ctop = List.flatten uses_ctop @ ctop in
+
+  (* List.iter (fun t -> Printf.printf "%s\n" (Parse.show_ctop (fst t))) ctop; *)
+
+  let (top, infer_err) = Infer.infer ctop in
+
+  let* _ = if List.length infer_err > 0 then
+    Error infer_err
+  else (
+    Core.transform top
+    |> List.iter (fun t -> Printf.printf "%s\n" (Core.string_of_ctop t));
+    Ok ()) in
+
+  let end_time = Sys.time () in
+
+  Printf.printf "Compilation successful in %.2f seconds.\n" (end_time -. start_time);
+  (* Printf.printf "Written to %s\n" output_file; *)
+
+  Ok ()
+
+let report err =
+  Printf.eprintf "Error: %s at %s line %s characters %s-%s\n"
+    err.msg
+    err.loc.file
+    (string_of_int (fst err.loc.pos_start))
+    (string_of_int (snd err.loc.pos_start))
+    (string_of_int (snd err.loc.pos_end));
+  (match err.hint with
+    | Some h -> Printf.eprintf "Hint: %s\n" h
+    | None -> ())
 
 let () =
   Printexc.record_backtrace true;
-  exit (Cmd.eval cmds)
+  let args = Array.to_list Sys.argv |> List.tl in
+  match args with
+  | [] -> Printf.eprintf "Usage: %s <file>\n" Sys.argv.(0)
+  | file :: _ ->
+    if Sys.file_exists file then
+      process file
+      |> Result.iter_error (List.iter report)
+    else
+      Printf.eprintf "File not found: %s\n" file

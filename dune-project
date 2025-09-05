@@ -1,11 +1,11 @@
 (lang dune 3.16)
 
-(name ichor)
+(name haven)
 
 (generate_opam_files true)
 
 (source
- (github azur1s/ichor))
+ (github azur1s/haven))
 
 (authors "Azur1s")
 
@@ -16,7 +16,7 @@
 (documentation https://url/to/documentation)
 
 (package
- (name ichor)
+ (name haven)
  (synopsis "A short synopsis")
  (description "A longer description")
  (depends ocaml dune)

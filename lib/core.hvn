@@ -1,0 +1,7 @@
+print : String -> Unit.
+print = \str -> magic1 "print" str.
+
+println : String -> Unit.
+println = \str ->
+    print str;
+    print "\n".

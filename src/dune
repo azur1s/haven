@@ -1,6 +1,5 @@
 (executables
  (names main)
- (public_names ichor)
- (libraries str cmdliner unix)
- (preprocessor_deps (file prelude.js))
- (preprocess (pps ppx_deriving.show ppx_sexp_conv ppx_blob)))
+ (public_names hvn)
+ (libraries unix stdio)
+ (preprocess (pps ppx_deriving.show)))
