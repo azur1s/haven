@@ -2,7 +2,12 @@ use "../lib/core".
 
 test = \x y -> x + (y * 2).
 
+id : a -> a.
+id = \x -> x.
+
 main : Unit.
 main =
+    id 42;
+    id "test";
     println "Hello, World.";
     println ":)".

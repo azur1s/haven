@@ -178,7 +178,12 @@ let anf =
       k (LBin (vl, b, vr))
     ))
   | LLambda (args, body) -> k (LLambda (args, norm body (fun b -> b)))
-  | LCase _ -> failwith "todo: anf for case"
+  | LCase { value; br; default_br } ->
+    norm_bind value (fun v ->
+      let br = List.map (fun (pat, arm) -> (pat, norm arm (fun a -> a))) br in
+      let default_br = norm default_br (fun d -> d) in
+      k (LCase { value = v; br; default_br })
+    )
   | LLet { name; value; body } ->
     norm body (fun b ->
       k (LLet { name; value = value; body = b }))

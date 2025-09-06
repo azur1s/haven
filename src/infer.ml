@@ -138,21 +138,39 @@ let rec infer_cst inf cst =
     let* (c2, c2_t) = infer_cst inf c2 in
     oks (TThen (c1, c2), c2_t)
 
+(* Replace type annotation if it should be fresh e.g. a -> a *)
+let rec anno_to_fresh inf tp =
+  match tp with
+  | Constr (name, []) ->
+    if 'a' <= name.[0] && name.[0] <= 'z' then
+      infer_fresh inf
+    else
+      tp
+  | Constr (name, args) ->
+    Constr (name, List.map (anno_to_fresh inf) args)
+  | Var _ -> tp
+
 let infer_top inf top =
   let (top, span) = top in
   match top with
   | CTUse _ -> Ok (None)
-  | CTAnno (name, tp) ->
-    infer_set_scheme inf (fst name) (tp_generalize (fst tp) []);
+  | CTAnno (name, (tp, _)) ->
+    let tp = anno_to_fresh inf tp in
+    infer_set_scheme inf (fst name) (tp_generalize tp []);
     Ok (None)
   | CTDef (name, body) ->
     let anno_tp = match infer_get_scheme inf (fst name) with
       | Some sch -> sch_instantiate sch inf.ctx
       | None -> infer_fresh inf in
 
+    (* For recursive function *)
+    let fresh_tp = infer_fresh inf in
+    infer_set_scheme inf (fst name) (tp_generalize fresh_tp []);
+
     let* (body, body_tp) = infer_cst inf body in
 
-    let* _ = ctx_unify inf.ctx body_tp anno_tp |>
+    let body_tp_gen = tp_generalize (tp_apply inf.ctx body_tp) [] in
+    let* _ = ctx_unify inf.ctx (sch_instantiate body_tp_gen inf.ctx) anno_tp |>
       (function
         | Ok _ -> Ok ()
         | Error e -> 
@@ -169,10 +187,10 @@ let infer tops =
 
   (* add built-in functions *)
   let builtins =
-    (* magic0: String -> 'a. ex: magic0 "flush" *)
-    [ ("magic0", sch_new [-1]     (arrow (constr "String") [Var (-1)]))
-    (* magic1: String -> 'a -> 'b. ex: magic1 "print" "hi" *)
-    ; ("magic1", sch_new [-1; -2] (arrow (constr "String") [Var (-1); Var (-2)]))
+    (* _magic0: String -> 'a. ex: _magic0 "flush" *)
+    [ ("_magic0", sch_new [-1]     (arrow (constr "String") [Var (-1)]))
+    (* _magic1: String -> 'a -> 'b. ex: _magic1 "print" "hi" *)
+    ; ("_magic1", sch_new [-1; -2] (arrow (constr "String") [Var (-1); Var (-2)]))
     ]
   in
   List.iter (fun (name, sch) -> infer_set_scheme inf name sch) builtins;
