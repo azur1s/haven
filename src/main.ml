@@ -7,6 +7,9 @@ let process file =
   let input = (Stdio.In_channel.input_all ic) ^ "\n" in
   Stdio.In_channel.close ic;
 
+  (* let output_file = (Filename.remove_extension file) ^ ".js" in *)
+  let output_file = "out.js" in
+
   let parse file str =
       let* tokens = Lex.lex ~file str
         |> fun x -> match x with
@@ -53,14 +56,19 @@ let process file =
   let* _ = if List.length infer_err > 0 then
     Error infer_err
   else (
-    Core.transform top
-    |> List.iter (fun t -> Printf.printf "%s\n" (Core.string_of_ctop t));
+    let out = Core.transform top
+      (* |> List.map (fun t -> print_endline (Core.string_of_ctop t); t) *)
+      |> Comp.compile
+    in
+    let oc = Stdio.Out_channel.create output_file in
+    Stdio.Out_channel.output_string oc out;
+    Stdio.Out_channel.close oc;
     Ok ()) in
 
   let end_time = Sys.time () in
 
   Printf.printf "Compilation successful in %.2f seconds.\n" (end_time -. start_time);
-  (* Printf.printf "Written to %s\n" output_file; *)
+  Printf.printf "Written to %s\n" output_file;
 
   Ok ()
 

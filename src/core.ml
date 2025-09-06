@@ -185,19 +185,17 @@ let anf =
       k (LCase { value = v; br; default_br })
     )
   | LLet { name; value; body } ->
-    norm body (fun b ->
-      k (LLet { name; value = value; body = b }))
+    norm_bind value (fun v ->
+      LLet { name; value = v; body = norm body k })
   | LThen (l, r) ->
     norm l (fun vl ->
-    norm r (fun vr ->
-      k (LThen (vl, vr))
-    ))
+      norm r (fun vr ->
+        k (LThen (vl, vr))))
   and norm_bind e k =
     if is_trivial e then k e else
     let x = gensym "t" in
     norm e (fun e' -> LLet
       { name = x
-      (* ; typ = constr "unknown" *)
       ; value = e'
       ; body = k (LSym x) })
   and norm_binds es k =

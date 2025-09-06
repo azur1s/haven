@@ -8,7 +8,7 @@
 *.cmxs
 *.cmxa
 
-# ichor output
+# complier output
 /*.js
 
 # ocamlbuild working directory
