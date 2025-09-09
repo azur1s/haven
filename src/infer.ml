@@ -161,11 +161,8 @@ let infer_top inf top =
   | CTDef (name, body) ->
     let anno_tp = match infer_get_scheme inf (fst name) with
       | Some sch -> sch_instantiate sch inf.ctx
-      | None -> infer_fresh inf in
-
-    (* For recursive function *)
-    let fresh_rec_tp = infer_fresh inf in
-    infer_set_scheme inf (fst name) (tp_generalize fresh_rec_tp []);
+      | None -> infer_fresh inf
+    in
 
     let* (body, body_tp) = infer_cst inf body in
 
@@ -173,14 +170,6 @@ let infer_top inf top =
 
     (* Unify with expected type *)
     let* _ = ctx_unify inf.ctx (sch_instantiate body_tp_gen inf.ctx) anno_tp |>
-      (function
-        | Ok _ -> Ok ()
-        | Error e -> 
-          err_ret (unify_error_to_string e) (snd body))
-    in
-
-    (* Unify with fresh type (for recursive function) *)
-    let* _ = ctx_unify inf.ctx (sch_instantiate body_tp_gen inf.ctx) fresh_rec_tp |>
       (function
         | Ok _ -> Ok ()
         | Error e -> 

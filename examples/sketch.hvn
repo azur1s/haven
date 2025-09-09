@@ -1,4 +1,4 @@
 use "../lib/core".
 
 main : a -> Unit.
-main = \_ -> println "hi".
+main _ = println "hi".

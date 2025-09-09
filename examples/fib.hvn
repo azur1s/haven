@@ -1,12 +1,12 @@
 use "../lib/core".
 
 fib : Int -> Int.
-fib = \x -> case x
+fib x = case x
     | 0 -> x
     | 1 -> x
-    else fib (x - 1) (x - 2).
+    else fib (x - 1) + fib (x - 2).
 
 main : a -> Unit.
-main = \_ ->
+main _ =
     let res = fib 10 in
     println (to_string res).

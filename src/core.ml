@@ -185,7 +185,7 @@ let anf =
       k (LCase { value = v; br; default_br })
     )
   | LLet { name; value; body } ->
-    norm_bind value (fun v ->
+    norm value (fun v ->
       LLet { name; value = v; body = norm body k })
   | LThen (l, r) ->
     norm l (fun vl ->
@@ -232,6 +232,7 @@ let transform ast =
     |> map_top (fun e ->
       pipeline
         [ uncurry_apps
+        ; uncurry_lambdas
         ; anf
         ; constant_folding
         ] e))

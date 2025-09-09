@@ -57,7 +57,7 @@ let process file =
     Error infer_err
   else (
     let out = Core.transform top
-      (* |> List.map (fun t -> print_endline (Core.string_of_ctop t); t) *)
+      |> List.map (fun t -> print_endline (Core.string_of_ctop t); t)
       |> Comp.compile
     in
     let oc = Stdio.Out_channel.create output_file in
