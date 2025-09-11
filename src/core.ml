@@ -133,11 +133,7 @@ let lower_top top =
 let rec collect_apps e acc =
   match e with
   | LApp (f, [a])  -> collect_apps f (a :: acc)
-  (* | LApp (f, args) -> collect_apps f (acc @ args) *)
-  (* This should be unreachable because `lower` will retain curried apps from
-     ((f a) b) to ((f [a]) [b]). *)
-  | LApp _ ->
-    failwith ("collect_apps: unexpected multi-arg application: " ^ show_core e)
+  | LApp (f, args) -> collect_apps f (args @ acc)
   | _ -> (e, acc)
 
 let uncurry_apps e =

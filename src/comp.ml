@@ -54,23 +54,40 @@ let rec string_of_js = function
       (string_of_js body_last)
       (String.concat ", " (List.map string_of_js params))
 
-let magics = [
-  ("print", "process.stdout.write");
-  ("to_string", "String");
-  ("todo", "__todo");
-]
+let magics1 =
+  [ ("print", "process.stdout.write")
+  ; ("to_string", "String")
+  ; ("todo", "__todo")
+  ; ("len", "__len")
+  ; ("cons", "__cons")
+  ]
+
+let magics2 =
+  [ ("index", "__index")
+  ; ("join", "__join")
+  ]
 
 let rec core_to_js c = match c with
   | LValue v -> JsValue v
   | LSym s   -> JsSym s
   | LList xs -> JsList (List.map core_to_js xs)
 
-  | LApp (LSym "_magic1", LValue (VStr f) :: args) when List.mem_assoc f magics ->
-    let js_f = List.assoc f magics in
-    JsApp (JsSym js_f, List.map core_to_js args)
+  | LApp (LSym "_magic1", LValue (VStr f) :: args) when List.mem_assoc f magics1 ->
+    let js_f = List.assoc f magics1 in
+    (match args with
+     | [a1] -> JsApp (JsSym js_f, [core_to_js a1])
+     | _ -> failwith ("_magic1: wrong number of arguments: " ^ (string_of_core c))
+    )
 
   | LApp (LSym "_magic1", x :: _) ->
     failwith ("_magic1: unknown function: " ^ (string_of_core x))
+
+  | LApp (LSym "_magic2", LValue (VStr f) :: args) when List.mem_assoc f magics2 ->
+    let js_f = List.assoc f magics2 in
+    (match args with
+     | [a1; a2] -> JsApp (JsSym js_f, [core_to_js a1; core_to_js a2])
+     | _ -> failwith ("_magic2: wrong number of arguments: " ^ (string_of_core c))
+    )
 
   | LApp (f, args) ->
     JsApp (core_to_js f, List.map core_to_js args)
@@ -103,5 +120,8 @@ let compile cs =
     |> List.map string_of_js
     |> String.concat "\n"
   in
-  "const __todo = (str) => { throw new Error(\"TODO: \" + str) }\n"
-  ^ out ^ "\nmain()\n"
+  "const __todo = (str) => { throw new Error(\"TODO: \" + str) }
+const __len   = (xs) => xs.length
+const __index = (xs, i) => xs[i]
+const __cons  = (xs) => xs.slice(1)
+const __join  = (xs, ys) => xs.concat(ys)\n" ^ out ^ "\nmain()\n"

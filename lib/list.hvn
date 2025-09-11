@@ -1,0 +1,23 @@
+len : a List -> Int.
+len xs = _magic1 "len" xs.
+
+index : a List -> Int -> a.
+index xs i = _magic2 "index" xs i.
+
+cons : a List -> a List.
+cons xs = case len xs
+  | 0 -> []
+  else _magic1 "cons" xs.
+
+join : a List -> a List -> a List.
+join xs ys = _magic2 "join" xs ys.
+
+map f xs =
+  case len xs
+  | 0 -> []
+  | 1 -> [f (index xs 0)]
+  else
+    let r1 = f (index xs 0) in
+    let r2 = f (index xs 1) in
+    let xs = cons (cons xs) in
+    join [r1, r2] (map f xs).

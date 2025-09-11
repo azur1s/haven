@@ -173,6 +173,8 @@ let infer_top inf top =
       | None -> infer_fresh inf
     in
 
+    infer_set_scheme inf (fst name) (tp_generalize anno_tp []);
+
     let* (body, body_tp) = infer_cst inf body in
 
     let body_tp_gen = tp_generalize (tp_apply inf.ctx body_tp) [] in
@@ -197,9 +199,11 @@ let infer tops =
   (* add built-in functions *)
   let builtins =
     (* _magic0: String -> 'a. ex: _magic0 "flush" *)
-    [ ("_magic0", sch_new [-1]     (arrow (constr "String") [Var (-1)]))
+    [ ("_magic0", sch_new [-1]         (arrow (constr "String") [Var (-1)]))
     (* _magic1: String -> 'a -> 'b. ex: _magic1 "print" "hi" *)
-    ; ("_magic1", sch_new [-1; -2] (arrow (constr "String") [Var (-1); Var (-2)]))
+    ; ("_magic1", sch_new [-1; -2]     (arrow (constr "String") [Var (-1); Var (-2)]))
+    (* _magic2: String -> 'a -> 'b -> 'c. ex: _magic2 "index" [1, 2, 3] 0 *)
+    ; ("_magic2", sch_new [-1; -2; -3] (arrow (constr "String") [Var (-1); Var (-2); Var (-3)]))
     ]
   in
   List.iter (fun (name, sch) -> infer_set_scheme inf name sch) builtins;

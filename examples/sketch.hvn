@@ -1,4 +1,7 @@
 use "../lib/core".
+use "../lib/list".
 
 main : a -> Unit.
-main _ = println "hi".
+main _ =
+    println (to_string (len [1, 2, 3]));
+    println (to_string (map (\n -> n * 2) [1, 2, 3])).
