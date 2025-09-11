@@ -5,6 +5,7 @@ open Types
 type core =
   | LValue  of value
   | LSym    of string
+  | LList   of core list
   | LApp    of core * core list
   | LBin    of core * bin * core
   | LLambda of string list * core
@@ -25,6 +26,9 @@ type core =
 let rec string_of_core = function
   | LValue v -> string_of_value v
   | LSym s   -> s
+  | LList xs  ->
+    Printf.sprintf "[%s]"
+      (String.concat ", " (List.map string_of_core xs))
   | LApp (f, args) ->
     Printf.sprintf "(%s %s)"
       (string_of_core f)
@@ -61,6 +65,7 @@ let rec string_of_core = function
 let core_map_child (f : core -> core) e =
   match e with
     | LValue _ | LSym _ -> e
+    | LList xs -> LList (List.map f xs)
     | LApp (e, args) -> LApp (f e, List.map f args)
     | LBin (l, b, r) -> LBin (f l, b, f r)
     | LLambda (args, body) -> LLambda (args, f body)
@@ -104,6 +109,7 @@ let rec lower ast =
   match ast with
   | TValue v -> LValue v
   | TSym s   -> LSym s
+  | TList xs -> LList (List.map lower xs)
   | TApp (f, a) -> LApp (lower f, [lower a])
   | TBin (l, b, r) -> LBin (lower l, b, lower r)
   | TLambda (arg, body) -> LLambda ([fst arg], (lower body))
@@ -167,6 +173,9 @@ let is_trivial e =
 let anf =
   let rec norm e k = match e with
   | LValue _ | LSym _ -> k e
+  | LList es ->
+    norm_binds es (fun ves ->
+      k (LList ves))
   | LApp (f, args) ->
     norm_bind f (fun vf ->
     norm_binds args (fun vargs ->

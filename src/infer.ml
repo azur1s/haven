@@ -5,6 +5,7 @@ open Types
 type ast =
   | TValue  of value
   | TSym    of string
+  | TList   of ast spanned list
   | TApp    of ast spanned * ast spanned
   | TBin    of ast spanned * bin * ast spanned
   | TLambda of string spanned * ast spanned
@@ -58,6 +59,14 @@ let rec infer_cst inf cst =
       let t = sch_instantiate sch inf.ctx in
       oks (TSym s, t)
     | None -> err_ret (Printf.sprintf "Unbound symbol '%s'" s) span)
+  | CList xs ->
+    let* xs = map_early_return (fun x -> infer_cst inf x) xs in
+    let elem_t = infer_fresh inf in
+    let* _ = List.fold_left (fun acc (_, t) ->
+      let* _ = acc in
+      unify inf.ctx t elem_t span
+    ) (Ok ()) xs in
+    oks (TList (xs |> List.map fst), app "List" [tp_apply inf.ctx elem_t])
   | CApp (f, x) ->
     let* (f, f_t) = infer_cst inf f in
     let* (x, x_t) = infer_cst inf x in

@@ -4,6 +4,7 @@ open Core
 type js =
   | JsValue  of value
   | JsSym    of string
+  | JsList   of js list
   | JsApp    of js * js list
   | JsBin    of js * bin * js
   | JsLambda of string list * js
@@ -14,8 +15,12 @@ type js =
   [@@deriving show]
 
 let rec string_of_js = function
+  | JsValue VUnit -> "null"
   | JsValue v -> string_of_value v
   | JsSym s   -> s
+  | JsList xs  ->
+    Printf.sprintf "[%s]"
+      (String.concat ", " (List.map string_of_js xs))
   | JsApp (f, args) ->
     Printf.sprintf "%s(%s)"
       (string_of_js f)
@@ -49,15 +54,20 @@ let rec string_of_js = function
       (string_of_js body_last)
       (String.concat ", " (List.map string_of_js params))
 
+let magics = [
+  ("print", "process.stdout.write");
+  ("to_string", "String");
+  ("todo", "__todo");
+]
+
 let rec core_to_js c = match c with
   | LValue v -> JsValue v
   | LSym s   -> JsSym s
+  | LList xs -> JsList (List.map core_to_js xs)
 
-  | LApp (LSym "_magic1", LValue (VStr "print") :: rest) ->
-    JsApp (JsSym "process.stdout.write", List.map core_to_js rest)
-
-  | LApp (LSym "_magic1", LValue (VStr "to_string") :: rest) ->
-    JsApp (JsSym "String", List.map core_to_js rest)
+  | LApp (LSym "_magic1", LValue (VStr f) :: args) when List.mem_assoc f magics ->
+    let js_f = List.assoc f magics in
+    JsApp (JsSym js_f, List.map core_to_js args)
 
   | LApp (LSym "_magic1", x :: _) ->
     failwith ("_magic1: unknown function: " ^ (string_of_core x))
@@ -93,4 +103,5 @@ let compile cs =
     |> List.map string_of_js
     |> String.concat "\n"
   in
-  out ^ "\nmain()\n"
+  "const __todo = (str) => { throw new Error(\"TODO: \" + str) }\n"
+  ^ out ^ "\nmain()\n"

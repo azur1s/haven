@@ -5,6 +5,7 @@ open Types
 type cst =
   | CValue  of value
   | CSym    of string
+  | CList   of cst spanned list
   | CApp    of cst spanned * cst spanned
   | CBin    of cst spanned * bin * cst spanned
   | CLambda of string spanned * cst spanned
@@ -210,6 +211,11 @@ let rec parse_tp p min_bp =
     match peek p with
     | Some (t, span) -> (match t with
       | TkSym s -> advance_return p (Ok (constr s, span))
+      | TkL '(' ->
+        advance p |> ignore;
+        let* t = parse_tp p 0 in
+        let* _ = just p (TkR ')') in
+        Ok t
       | _ -> err_ret ("Expected a type, found " ^ string_of_token t) span)
     | None -> err_ret "Expected a type, found end of file" (eof_error_loc p)
   in
@@ -225,7 +231,14 @@ let rec parse_tp p min_bp =
         (* Right-associative so keep parsing in the right direction *)
         let* (rhs, s) = parse_tp_loop rhs in
         Ok (arrow (fst lhs) [rhs], span_union (snd lhs) s)
-    | Some (TkSym f, sp) -> failwith ("TODO: type application: " ^ f ^ " at " ^ string_of_span sp)
+    | Some (TkSym f, sp) ->
+      let power = 200 in
+      if power < min_bp then
+        Ok lhs
+      else
+        let _ = advance p in
+        let appt = app f [fst lhs], span_union (snd lhs) sp in
+        parse_tp_loop appt
     | _ -> Ok lhs
   in
   let* lhs = parse_tp_atom p in
@@ -293,6 +306,12 @@ let rec parse_atom p =
         ) args value
         in
         Ok (CLet { name; value = lambda_value; body }, span_union s (snd body))
+
+    | TkL '[' ->
+      advance p |> ignore;
+      let* elements = many_delim p (fun p -> parse_expr p 0) TkComma in
+      let* (_, end_s) = just p (TkR ']') in
+      Ok (CList elements, span_union s end_s)
 
     (* (expr) *)
     | TkL '(' ->

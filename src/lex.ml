@@ -137,6 +137,11 @@ let rec tokenize_acc l acc =
       in
       skip_line ();
       tokenize_acc l acc
+    | c when c = '(' && when_peek_is ((=) ')') ->
+      let _ = advance l in
+      let _ = advance l in
+      let span = make_span l start in
+      tokenize_acc l @@ (TkUnit, span) :: acc
     | c when c = '-' && when_peek_is ((=) '>') ->
       let _ = advance l in
       let _ = advance l in
