@@ -216,6 +216,11 @@ let rec parse_tp p min_bp =
         let* t = parse_tp p 0 in
         let* _ = just p (TkR ')') in
         Ok t
+      | TkL '[' ->
+        advance p |> ignore;
+        let* (t, _) = parse_tp p 0 in
+        let* (_, end_s) = just p (TkR ']') in
+        Ok (app "List" [t], span_union span end_s)
       | _ -> err_ret ("Expected a type, found " ^ string_of_token t) span)
     | None -> err_ret "Expected a type, found end of file" (eof_error_loc p)
   in

@@ -1,5 +1,6 @@
 use "../lib/core".
 
+test : [Int].
 test = [1, 2, (41 + 1), 4, 5].
 
 main _ = println (to_string test).

@@ -1,17 +1,18 @@
-len : a List -> Int.
+len : [a] -> Int.
 len xs = _magic1 "len" xs.
 
-index : a List -> Int -> a.
+index : [a] -> Int -> a.
 index xs i = _magic2 "index" xs i.
 
-cons : a List -> a List.
+cons : [a] -> [a].
 cons xs = case len xs
   | 0 -> []
   else _magic1 "cons" xs.
 
-join : a List -> a List -> a List.
+join : [a] -> [a] -> [a].
 join xs ys = _magic2 "join" xs ys.
 
+map : (a -> b) -> [a] -> [b].
 map f xs =
   case len xs
   | 0 -> []
