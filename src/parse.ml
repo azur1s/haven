@@ -23,7 +23,8 @@ type cst =
   [@@deriving show]
 
 type ctop =
-  | CTUse  of string spanned
+  (* name and path, e.g. io "lib/core/io" *)
+  | CTUse  of (string spanned * string spanned) list
   | CTAnno of string spanned * tp spanned
   | CTDef  of string spanned * cst spanned
   [@@deriving show]
@@ -71,10 +72,10 @@ let eof_error_loc p =
 
 (** [many0 f p] Parse zero or more times with the parser [f]. If the parser
     fails or there are no more tokens then it returns the accumulated values.
-  - [f] the parser to be applied zero or more times
   - [p] the input stream
+  - [f] the parser to be applied zero or more times
 *)
-let many0 f p =
+let many0 p f =
   let rec aux acc =
     match peek p, f p with
     | Some _, Ok v -> aux (v :: acc)
@@ -83,10 +84,10 @@ let many0 f p =
 
 (** Like `many0` but only ends when the parser [f] ran out of input. If the
     parser fails then the error is returned.
-  - [f] the parser to be applied zero or more times
   - [p] the input stream
+  - [f] the parser to be applied zero or more times
 *)
-let many0_no_err f p =
+let many0_no_err p f =
   let rec aux acc =
     match peek p, f p with
     | Some _, Ok v -> aux (v :: acc)
@@ -94,20 +95,20 @@ let many0_no_err f p =
     | None, _ -> Ok (List.rev acc)
   in aux []
 
-let many1 f p =
-  let* xs = many0 f p in
+let many1 p f =
+  let* xs = many0 p f in
   match xs with
   | [] -> err_ret "Expected at least one value" (eof_error_loc p)
   | _ -> Ok xs
 
 (** [many_until f p end_token] Parse multiple values with the parser [f] until
     it encounters the specified [end_token].
-  - [f] is a function that takes a parser [p] and returns a result of type ['a].
   - [p] is a parser that provides a stream of tokens.
+  - [f] is a function that takes a parser [p] and returns a result of type ['a].
   - [end_token] is the token that marks the end of the parsing process.
     @example {[many_until (fun p -> parse_int p) p Semicolon]}
 *)
-let many_until f p end_token =
+let many_until p f end_token =
   let rec aux acc =
     match peek p, f p with
     (* If peek returns the end_token, we stop parsing and return the accumulated
@@ -129,11 +130,11 @@ let many_until f p end_token =
 
 (** [many_until_end f p] Parse multiple values with the parser [f] until it
     encounters the end of the input stream.
-  - [f] is a function that takes a parser [p] and returns a result of type ['a].
   - [p] is a parser that provides a stream of tokens.
+  - [f] is a function that takes a parser [p] and returns a result of type ['a].
     @example {[many_until_end (fun p -> parse_int p) p]}
 *)
-let many_until_end f p =
+let many_until_end p f =
   let rec aux acc =
     match peek p, f p with
     | Some _, Ok v -> aux (v :: acc)
@@ -176,6 +177,12 @@ let many_delim p f delim =
     | Error _ -> Ok (List.rev acc)
   in
   many_acc p []
+
+let many1_delim p f delim =
+  let* xs = many_delim p f delim in
+  match xs with
+  | [] -> err_ret "Expected at least one value" (eof_error_loc p)
+  | _ -> Ok xs
 
 let or_else p f1 f2 =
   let before = p.loc in
@@ -259,7 +266,7 @@ let rec parse_atom p =
     | TkLambda ->
       advance p |> ignore;
       (* let* arg = parse_sym p in *)
-      let* args = many1 parse_sym p in
+      let* args = many1 p parse_sym in
       let* _ = just p TkArrow in
       let* body = parse_expr p 0 in
       (* Ok (CLambda (arg, body), span_union s (snd body)) *)
@@ -286,7 +293,7 @@ let rec parse_atom p =
 
       advance p |> ignore;
       let* value = parse_expr p 0 in
-      let* branches = many1 parse_br p in
+      let* branches = many1 p parse_br in
       let* default_br = parse_br_default p in
       let span =
         match branches with
@@ -298,7 +305,7 @@ let rec parse_atom p =
     | TkLet ->
       advance p |> ignore;
       let* name = parse_sym p in
-      let* args = many0 parse_sym p in
+      let* args = many0 p parse_sym in
       let* _ = just p TkAssign in
       let* value = parse_expr p 0 in
       let* _ = just p TkIn in
@@ -393,19 +400,27 @@ let parse_top p =
   | Some (t, s) -> (match t with
     | TkUse ->
       let* _ = just p TkUse in
-      let* name = satisfy p (fun x -> match x with
-        | TkStr _ -> true
-        | _ -> false)
-        "a symbol"
-      in
-      (match name with
-      | TkStr name, span ->
-        let* _ = just p TkDot in
-        Ok (CTUse (name, span), span_union s span)
-      | _ -> assert false)
+      let* names = many1_delim p (fun p ->
+        let* name = satisfy p (fun x -> match x with
+          | TkSym _ -> true
+          | _ -> false)
+          "a string"
+        in
+        let* path = satisfy p (fun x -> match x with
+          | TkStr _ -> true
+          | _ -> false)
+          "a string"
+        in
+        match (name, path) with
+        | ((TkSym name, ns), (TkStr path, ps)) ->
+          Ok ((name, ns), (path, ps))
+        | _ -> assert false
+      ) TkComma in
+      let* (_, end_span) = just p TkDot in
+      Ok (CTUse names, span_union s end_span)
     | TkSym _ ->
       let* name = parse_sym p in
-      let* args = many0 parse_sym p in
+      let* args = many0 p parse_sym in
       if args = [] then
         (* = or : *)
         let* typ = or_else p
@@ -442,5 +457,5 @@ let parse_top p =
 
 let parse ?(file="<anonymous>") tks =
   let p = parser_init file tks in
-  let res = many0_no_err parse_top p in
+  let res = many0_no_err p parse_top in
   res

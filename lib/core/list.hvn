@@ -12,6 +12,15 @@ cons xs = case len xs
 join : [a] -> [a] -> [a].
 join xs ys = _magic2 "join" xs ys.
 
+rev_append : [a] -> [a] -> [a].
+rev_append l1 l2 =
+  case len l1
+  | 0 -> l2
+  else rev_append (cons l1) (join [index l1 0] l2).
+
+rev : [a] -> [a].
+rev l = rev_append l [].
+
 map : (a -> b) -> [a] -> [b].
 map f xs =
   case len xs

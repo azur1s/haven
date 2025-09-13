@@ -1,4 +1,4 @@
-use "../lib/core".
+use "../lib/core/io".
 
 make_adder : Int -> Int -> Int.
 make_adder x =
@@ -7,6 +7,6 @@ make_adder x =
 
 main : a -> Unit.
 main _ =
-    let add1 = make_adder 1 in
-    let res = add1 41 in
-    println (to_string res).
+  let add1 = make_adder 1 in
+  let res = add1 41 in
+  println (to_string res).

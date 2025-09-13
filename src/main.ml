@@ -31,21 +31,25 @@ let process file =
     | Parse.CTUse name -> Some name
     | _ -> None) ctop in
 
-  let* uses_ctop = List.map (fun path ->
-    let use_file = (Filename.dirname file) ^ "/" ^ (fst path) ^ ".hvn" in
-    if Sys.file_exists use_file then (
-      let ic = Stdio.In_channel.create use_file in
-      let input = (Stdio.In_channel.input_all ic) ^ "\n" in
-      Stdio.In_channel.close ic;
-      (* let fp = Unix.realpath use_file in *)
-      let fp = use_file in
-      parse fp input
-    ) else
-      Error [{ msg = "Could not find module: " ^ use_file
-             ; loc = snd path
-             ; hint = None
-             }]
-  ) uses |> combine_results in
+  let* uses_ctop =
+    uses
+    |> List.flatten
+    |> (fun xs -> List.map (fun (_name, path) ->
+      let use_file = (Filename.dirname file) ^ "/" ^ (fst path) ^ ".hvn" in
+      if Sys.file_exists use_file then (
+        let ic = Stdio.In_channel.create use_file in
+        let input = (Stdio.In_channel.input_all ic) ^ "\n" in
+        Stdio.In_channel.close ic;
+        (* let fp = Unix.realpath use_file in *)
+        let fp = use_file in
+        parse fp input
+      ) else
+        Error [{ msg = "Could not find module: " ^ use_file
+               ; loc = snd path
+               ; hint = None
+               }]
+    ) xs)
+    |> combine_results in
 
   let ctop = List.flatten uses_ctop @ ctop in
 
