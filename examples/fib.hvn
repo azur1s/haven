@@ -1,4 +1,4 @@
-use "../lib/core/io".
+use io "../lib/core/io".
 
 fib : Int -> Int.
 fib x = case x

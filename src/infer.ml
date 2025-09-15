@@ -198,12 +198,12 @@ let infer tops =
 
   (* add built-in functions *)
   let builtins =
-    (* _magic0: String -> 'a. ex: _magic0 "flush" *)
-    [ ("_magic0", sch_new [-1]         (arrow (constr "String") [Var (-1)]))
-    (* _magic1: String -> 'a -> 'b. ex: _magic1 "print" "hi" *)
-    ; ("_magic1", sch_new [-1; -2]     (arrow (constr "String") [Var (-1); Var (-2)]))
-    (* _magic2: String -> 'a -> 'b -> 'c. ex: _magic2 "index" [1, 2, 3] 0 *)
-    ; ("_magic2", sch_new [-1; -2; -3] (arrow (constr "String") [Var (-1); Var (-2); Var (-3)]))
+    (* _call0: String -> 'a. ex: _call0 "flush" *)
+    [ ("_call0", sch_new [-1]         (arrow (constr "String") [Var (-1)]))
+    (* _call1: String -> 'a -> 'b. ex: _call1 "print" "hi" *)
+    ; ("_call1", sch_new [-1; -2]     (arrow (constr "String") [Var (-1); Var (-2)]))
+    (* _call2: String -> 'a -> 'b -> 'c. ex: _call2 "index" [1, 2, 3] 0 *)
+    ; ("_call2", sch_new [-1; -2; -3] (arrow (constr "String") [Var (-1); Var (-2); Var (-3)]))
     ]
   in
   List.iter (fun (name, sch) -> infer_set_scheme inf name sch) builtins;

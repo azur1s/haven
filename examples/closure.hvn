@@ -1,4 +1,4 @@
-use "../lib/core/io".
+use io "../lib/core/io".
 
 make_adder : Int -> Int -> Int.
 make_adder x =

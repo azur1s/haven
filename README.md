@@ -2,7 +2,8 @@
 
 # haven
 
-haven is a ML-like language hoping to be used for writing backends. Target JavaScript.
+haven is a ML-like language hoping to be used for writing backends.
+Target (Chez) Scheme.
 
 I know JavaScript isn't supposed to be on backend, but come on, it works.
 

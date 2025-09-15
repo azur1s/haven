@@ -9,7 +9,7 @@
 *.cmxa
 
 # complier output
-/*.js
+/*.scm
 
 # ocamlbuild working directory
 _build/

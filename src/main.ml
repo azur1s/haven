@@ -8,7 +8,7 @@ let process file =
   Stdio.In_channel.close ic;
 
   (* let output_file = (Filename.remove_extension file) ^ ".js" in *)
-  let output_file = "out.js" in
+  let output_file = "out.scm" in
 
   let parse file str =
       let* tokens = Lex.lex ~file str
@@ -62,8 +62,12 @@ let process file =
   else (
     let out = Core.transform top
       (* |> List.map (fun t -> print_endline (Core.string_of_ctop t); t) *)
-      |> Comp.compile
+      |> Scheme.compile
     in
+
+    let prelude = In_channel.with_open_text "lib/scheme/prelude.scm" In_channel.input_all in
+    let out = prelude ^ out in
+
     let oc = Stdio.Out_channel.create output_file in
     Stdio.Out_channel.output_string oc out;
     Stdio.Out_channel.close oc;

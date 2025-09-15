@@ -163,7 +163,9 @@ let gensym =
 
 let is_trivial e =
   match e with
-  | LValue _ | LSym _ -> true
+  | LValue _
+  | LSym _
+  | LList [] -> true
   | _ -> false
 
 let anf =

@@ -1,22 +1,27 @@
+head : [a] -> a.
+head xs = _call1 "car" xs.
+
+tail : [a] -> [a].
+tail xs = case xs == []
+  | true -> []
+  else _call1 "cdr" xs.
+
 len : [a] -> Int.
-len xs = _magic1 "len" xs.
+len xs = case xs == []
+  | true -> 0
+  else 1 + len (tail xs).
 
 index : [a] -> Int -> a.
-index xs i = _magic2 "index" xs i.
-
-cons : [a] -> [a].
-cons xs = case len xs
-  | 0 -> []
-  else _magic1 "cons" xs.
+index xs i = _call2 "list-ref" xs i.
 
 join : [a] -> [a] -> [a].
-join xs ys = _magic2 "join" xs ys.
+join xs ys = _call2 "append" xs ys.
 
 rev_append : [a] -> [a] -> [a].
 rev_append l1 l2 =
   case len l1
   | 0 -> l2
-  else rev_append (cons l1) (join [index l1 0] l2).
+  else rev_append (tail l1) (join [index l1 0] l2).
 
 rev : [a] -> [a].
 rev l = rev_append l [].
@@ -29,5 +34,5 @@ map f xs =
   else
     let r1 = f (index xs 0) in
     let r2 = f (index xs 1) in
-    let xs = cons (cons xs) in
+    let xs = tail (tail xs) in
     join [r1, r2] (map f xs).

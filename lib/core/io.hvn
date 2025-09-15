@@ -1,13 +1,10 @@
 to_string : a -> String.
-to_string a = _magic1 "to_string" a.
+to_string a = _call1 "_hvn_any->string" a.
 
 print : String -> Unit.
-print str = _magic1 "print" str.
+print str = _call1 "display" str.
 
 println : String -> Unit.
 println str =
     print str;
     print "\n".
-
-todo : String -> a.
-todo str = _magic1 "todo" str.
