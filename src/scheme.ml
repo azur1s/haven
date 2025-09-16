@@ -5,6 +5,7 @@ type schm_expr =
   | SValue of value
   | SSym   of string
   | SCons  of schm_expr list
+  | SCommented of string * schm_expr
   [@@deriving show]
 
 let rec string_of_schm_expr = function
@@ -12,6 +13,8 @@ let rec string_of_schm_expr = function
   | SSym s   -> s
   | SCons [] -> "()"
   | SCons l  -> "(" ^ (String.concat " " (List.map string_of_schm_expr l)) ^ ")"
+  | SCommented (s, e) ->
+    Printf.sprintf ";; %s\n%s" s (string_of_schm_expr e)
 
 let rec core_to_schm c = match c with
   | LValue (VUnit)   -> [ SCons [ SSym "quote"; SCons [] ] ]
@@ -78,10 +81,17 @@ let rec core_to_schm c = match c with
     let r = core_to_schm r in
     l @ r
 
-let ctop_to_schm c = match c with
+let ctop_to_schm c =
+  let (c, span) = c in
+  match c with
   | LTDef (name, _typ, body) ->
     let body = core_to_schm body in
-    SCons (SSym "define" :: SSym name :: body)
+    let pos = Printf.sprintf "%s:%s:%s-%s"
+      span.file
+      (string_of_int (fst span.pos_start))
+      (string_of_int (snd span.pos_start))
+      (string_of_int (snd span.pos_end)) in
+    SCommented (pos, SCons (SSym "define" :: SSym name :: body))
 
 let compile cs =
   let out = List.map ctop_to_schm cs

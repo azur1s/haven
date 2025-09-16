@@ -10,11 +10,10 @@
 
 (define (_hvn_any->string x)
   (cond
+    ((null? x) "()")
+    ((boolean? x) (if x "true" "false"))
     ((number? x) (number->string x))
     ((string? x) x)
-    ((boolean? x) (if x "true" "false"))
-    ((null? x) "()")
-    ; format list as = [1, 2, 3...]
     ((list? x) (string-append "[" (_hvn_string-join (map _hvn_any->string x) ", ") "]"))
     (else (error "Unsupported type" x))))
 ; ---

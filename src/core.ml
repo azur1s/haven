@@ -124,7 +124,6 @@ let rec lower ast =
   | TThen (l, r) -> LThen (lower l, lower r)
 
 let lower_top top =
-  let (top, _span) = top in
   match top with
   | TTDef (name, typ, value) ->
     LTDef (fst name, typ, lower value)
@@ -234,12 +233,14 @@ let pipeline (passes : 'a pass list) : 'a pass =
   List.fold_left ( >-> ) (fun x -> x) passes
 
 let transform ast =
-  ast |> List.map (fun t -> t
+  ast |> List.map (fun (t, span) ->
+    t
     |> lower_top
     |> map_top (fun e ->
       pipeline
         [ uncurry_apps
         ; uncurry_lambdas
-        ; anf
         ; constant_folding
-        ] e))
+        ; anf
+        ] e)
+    |> fun t -> (t, span))
