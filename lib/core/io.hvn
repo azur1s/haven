@@ -1,10 +1,10 @@
-to_string : a -> String.
-to_string a = _call1 "_hvn_any->string" a.
+val to_string : a -> String
+let to_string a = _call1 "_hvn_any->string" a
 
-print : String -> Unit.
-print str = _call1 "display" str.
+val print : String -> Unit
+let print str = _call1 "display" str
 
-println : String -> Unit.
-println str =
+val println : String -> Unit
+let println str =
     print str;
-    print "\n".
+    print "\n"

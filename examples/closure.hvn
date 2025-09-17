@@ -1,12 +1,12 @@
-use io "../lib/core/io".
+use io "../lib/core/io"
 
-make_adder : Int -> Int -> Int.
-make_adder x =
+val make_adder : Int -> Int -> Int
+let make_adder x =
   let adder y = x + y in
-  adder.
+  adder
 
-main : a -> Unit.
-main _ =
+val main : a -> Unit
+let main _ =
   let add1 = make_adder 1 in
   let res = add1 41 in
-  println (to_string res).
+  println (to_string res)

@@ -8,7 +8,7 @@ type token =
   | TkSym of string
   | TkBin of bin
   | TkCase | TkElse | TkBar
-  | TkLet | TkIn | TkSemi
+  | TkVal | TkLet | TkIn | TkSemi
   | TkAssign | TkColon | TkDot
   | TkLambda | TkArrow
   | TkComma
@@ -27,6 +27,7 @@ let string_of_token = function
   | TkCase -> "case"
   | TkElse -> "else"
   | TkBar -> "|"
+  | TkVal -> "val"
   | TkLet -> "let"
   | TkIn -> "in"
   | TkSemi -> ";"
@@ -246,6 +247,7 @@ let rec tokenize_acc l acc =
           | "false" -> TkBool false
           | "case"  -> TkCase
           | "else"  -> TkElse
+          | "val"   -> TkVal
           | "let"   -> TkLet
           | "in"    -> TkIn
           | "use"   -> TkUse

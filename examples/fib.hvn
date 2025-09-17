@@ -1,12 +1,12 @@
-use io "../lib/core/io".
+use io "../lib/core/io"
 
-fib : Int -> Int.
-fib x = case x
+val fib : Int -> Int
+let fib x = case x
   | 0 -> x
   | 1 -> x
-  else fib (x - 1) + fib (x - 2).
+  else fib (x - 1) + fib (x - 2)
 
-main : a -> Unit.
-main _ =
+val main : a -> Unit
+let main _ =
   let res = fib 10 in
-  println (to_string res).
+  println (to_string res)

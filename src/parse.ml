@@ -399,8 +399,8 @@ let parse_top p =
   match peek p with
   | Some (t, s) -> (match t with
     | TkUse ->
-      let* _ = just p TkUse in
-      let* names = many1_delim p (fun p ->
+      advance p |> ignore;
+      let* names = many1 p (fun p ->
         let* name = satisfy p (fun x -> match x with
           | TkSym _ -> true
           | _ -> false)
@@ -415,42 +415,29 @@ let parse_top p =
         | ((TkSym name, ns), (TkStr path, ps)) ->
           Ok ((name, ns), (path, ps))
         | _ -> assert false
-      ) TkComma in
-      let* (_, end_span) = just p TkDot in
+      ) in
+      let (_, end_span) = List.nth names (List.length names - 1) |> snd in
       Ok (CTUse names, span_union s end_span)
-    | TkSym _ ->
+    | TkLet ->
+      advance p |> ignore;
       let* name = parse_sym p in
       let* args = many0 p parse_sym in
+      let* _ = just p TkAssign in
+      let* body = parse_expr p 0 in
       if args = [] then
-        (* = or : *)
-        let* typ = or_else p
-          (fun p -> just p TkColon)
-          (fun p -> just p TkAssign)
-          |> Result.map (fun (tk, _) ->
-            match tk with
-            | TkAssign -> true
-            | TkColon  -> false
-            | _ -> assert false)
-        in
-        (match typ with
-        | true ->
-          let* body = parse_expr p 0 in
-          let* _ = just p TkDot in
-          Ok (CTDef (name, body), span_union s (snd body))
-        | false ->
-          let* tp = parse_tp p 0 in
-          let* _ = just p TkDot in
-          Ok (CTAnno (name, tp), span_union s (snd tp))
-        )
+        Ok (CTDef (name, body), span_union s (snd body))
       else
-        let* _ = just p TkAssign in
-        let* body = parse_expr p 0 in
-        let* _ = just p TkDot in
         let lambda_body = List.fold_right (fun arg acc ->
           (CLambda (arg, acc), span_union s (snd acc))
         ) args body
         in
         Ok (CTDef (name, lambda_body), span_union s (snd body))
+    | TkVal ->
+      advance p |> ignore;
+      let* name = parse_sym p in
+      let* _ = just p TkColon in
+      let* tp = parse_tp p 0 in
+      Ok (CTAnno (name, tp), span_union s (snd tp))
     | t -> err_ret
       ("Expected a top-level statement, found " ^ string_of_token t) s)
   | None -> Error (err "Expected a top-level statement, found end of file" (eof_error_loc p))

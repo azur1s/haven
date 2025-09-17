@@ -1,6 +1,15 @@
-use io "../lib/core/io".
+use
+  io   "../lib/core/io"
+  list "../lib/core/list"
 
-test : [Int].
-test = [1, 2, (41 + 1), 4, 5].
+val xs : [Int]
+let xs = [1, 2, 3, 4, 5]
 
-main _ = println (to_string test).
+let double x = x * 2
+
+val main : a -> Unit
+let main _ =
+  print "Reversed: ";
+  println (to_string (rev xs));
+  print "Map: ";
+  println (to_string (map double xs))

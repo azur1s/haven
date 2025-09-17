@@ -1,15 +1,17 @@
-use
-  io   "../lib/core/io",
-  list "../lib/core/list".
+use io "../lib/core/io".
 
-xs : [Int].
-xs = [1, 2, 3, 4, 5].
+type Foo =
+  { x : Int
+  ; y : Int
+  }
 
-double x = x * 2.
+type Bar =
+  | a : Int
+  | b : Int
 
-main : a -> Unit.
-main _ =
-  print "Reversed: ";
-  println (to_string (rev xs));
-  print "Map: ";
-  println (to_string (map double xs)).
+val add_foo : Foo -> Foo
+let add_foo a b = a.x + a.y
+
+val main : a -> Unit
+let main _ =
+  println "hi"
