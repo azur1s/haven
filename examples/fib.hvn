@@ -6,7 +6,7 @@ let fib x = case x
   | 1 -> x
   else fib (x - 1) + fib (x - 2)
 
-val main : a -> Unit
+val main : 'a -> Unit
 let main _ =
   let res = fib 10 in
   println (to_string res)

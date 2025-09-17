@@ -5,7 +5,7 @@ let make_adder x =
   let adder y = x + y in
   adder
 
-val main : a -> Unit
+val main : 'a -> Unit
 let main _ =
   let add1 = make_adder 1 in
   let res = add1 41 in

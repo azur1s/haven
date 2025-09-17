@@ -1,32 +1,32 @@
-val head : [a] -> a
+val head : ['a] -> 'a
 let head xs = _call1 "car" xs
 
-val tail : [a] -> [a]
+val tail : ['a] -> ['a]
 let tail xs = case xs == []
   | true -> []
   else _call1 "cdr" xs
 
-val len : [a] -> Int
+val len : ['a] -> Int
 let len xs = case xs == []
   | true -> 0
   else 1 + len (tail xs)
 
-val index : [a] -> Int -> a
+val index : ['a] -> Int -> 'a
 let index xs i = _call2 "list-ref" xs i
 
-val join : [a] -> [a] -> [a]
+val join : ['a] -> ['a] -> ['a]
 let join xs ys = _call2 "append" xs ys
 
-val rev_append : [a] -> [a] -> [a]
+val rev_append : ['a] -> ['a] -> ['a]
 let rev_append l1 l2 =
   case len l1
   | 0 -> l2
   else rev_append (tail l1) (join [index l1 0] l2)
 
-val rev : [a] -> [a]
+val rev : ['a] -> ['a]
 let rev l = rev_append l []
 
-val map : (a -> b) -> [a] -> [b]
+val map : ('a -> 'b) -> ['a] -> ['b]
 let map f xs =
   case len xs
   | 0 -> []

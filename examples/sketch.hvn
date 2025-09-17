@@ -1,17 +1,5 @@
-use io "../lib/core/io".
+use io "../lib/core/io"
 
-type Foo =
-  { x : Int
-  ; y : Int
-  }
-
-type Bar =
-  | a : Int
-  | b : Int
-
-val add_foo : Foo -> Foo
-let add_foo a b = a.x + a.y
-
-val main : a -> Unit
+val main : 'a -> Unit
 let main _ =
   println "hi"

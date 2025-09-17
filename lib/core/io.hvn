@@ -1,4 +1,4 @@
-val to_string : a -> String
+val to_string : 'a -> String
 let to_string a = _call1 "_hvn_any->string" a
 
 val print : String -> Unit

@@ -151,7 +151,7 @@ let rec infer_cst inf cst =
 let rec anno_to_fresh inf tp =
   match tp with
   | Constr (name, []) ->
-    if 'a' <= name.[0] && name.[0] <= 'z' then
+    if name.[0] == '\'' then
       infer_fresh inf
     else
       tp

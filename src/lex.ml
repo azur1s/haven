@@ -82,7 +82,7 @@ let is_digit = function
   | _ -> false
 
 let is_atom_char = function
-  | 'a'..'z' | 'A'..'Z' | '_' -> true
+  | 'a'..'z' | 'A'..'Z' | '_' | '\'' -> true
   | _ -> false
 
 let rec tokenize_acc l acc =
