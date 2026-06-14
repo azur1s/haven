@@ -1,0 +1,11 @@
+extern printfloat(f: f32) void;
+
+proc main() i32 {
+    let a: f32 = 0.0;
+    let ptr_a: *f32 = &a;
+    let val_a: f32 = *ptr_a;
+
+    printfloat(val_a);
+
+    return 0;
+}

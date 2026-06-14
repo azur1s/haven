@@ -1,0 +1,398 @@
+use std::collections::HashMap;
+use crate::{ast::*, intrinsics::Intrinsic};
+
+#[derive(Clone, Debug)]
+pub struct Error {
+    pub msg: String,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct Context<'a> {
+    pub scopes: Vec<HashMap<&'a str, Type<'a>>>,
+    /// Map from Expr/Stmt/TopLevel IDs to their inferred types, for use in later codegen
+    pub node_types: HashMap<usize, Type<'a>>,
+}
+
+impl<'a> Context<'a> {
+    pub fn new() -> Self {
+        Self {
+            scopes: vec![HashMap::new()], // global scope
+            node_types: HashMap::new(),
+        }
+    }
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    pub fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    pub fn insert(&mut self, name: &'a str, ty: Type<'a>) {
+        self.scopes.last_mut().unwrap().insert(name, ty);
+    }
+
+    /// Walk scopes from innermost to outermost, returning the first match for `name`
+    pub fn lookup(&self, name: &str) -> Option<&Type<'a>> {
+        self.scopes.iter().rev().find_map(|scope| scope.get(name))
+    }
+}
+
+fn typecheck_intrinsic<'a>(
+    cx: &mut Context<'a>,
+    intrinsic: Intrinsic,
+    args: &[Expr<'a>],
+    span: Span,
+    expr_id: usize,
+) -> Result<Type<'a>, Error> {
+    match intrinsic {
+        Intrinsic::Len => {
+            if args.len() != 1 {
+                return Err(Error { msg: "len() takes exactly one argument".into(), span });
+            }
+            let arg_ty = infer(cx, &args[0])?;
+            if !matches!(arg_ty, Type::Slice(_)) {
+                return Err(Error {
+                    msg: format!("len() expects a slice, got {}", arg_ty),
+                    span,
+                });
+            }
+            cx.node_types.insert(expr_id, Type::Int32);
+            Ok(Type::Int32)
+        }
+    }
+}
+
+pub fn check_expr<'a>(
+    cx: &mut Context<'a>,
+    expected: &Type<'a>,
+    expr: &Expr<'a>,
+) -> Result<(), Error> {
+    let metadata = expr;
+    let value = &metadata.value;
+    let span = metadata.span.clone();
+
+    let actual = match value {
+        ExprNode::Bool(_)    => Type::Bool,
+        ExprNode::Int32(_)   => Type::Int32,
+        ExprNode::Float32(_) => Type::Float32,
+        // ExprNode::Str(_)     => Type::Str,
+
+        // let xs: []i32 = []; so the type of [] is i32
+        // else, if [...] is populated, infer it
+        ExprNode::Slice(inner) if inner.len() == 0 => {
+            match expected {
+                Type::Slice(elem_ty) => Type::Slice(elem_ty.clone()),
+                _ => {
+                    let msg = format!("Expected {expected}, got []");
+                    return Err(Error {
+                        msg,
+                        span,
+                    });
+                }
+            }
+        },
+
+        _ => infer(cx, expr)?,
+    };
+
+    if actual != *expected {
+        let msg = format!("Expected {expected}, got {actual}");
+        return Err(Error {
+            msg,
+            span,
+        });
+    }
+
+    cx.node_types.insert(metadata.id, actual);
+    Ok(())
+}
+
+pub fn infer<'a>(
+    cx: &mut Context<'a>,
+    expr: &Expr<'a>,
+) -> Result<Type<'a>, Error> {
+    let metadata = expr;
+    let value = &metadata.value;
+    let span = metadata.span.clone();
+
+    let ty = match value {
+        ExprNode::Bool(_)    => Type::Bool,
+        ExprNode::Int32(_)   => Type::Int32,
+        ExprNode::Float32(_) => Type::Float32,
+        // ExprNode::Str(_)     => Type::Str,
+
+        ExprNode::Var(name) => {
+            match cx.lookup(name) {
+                Some(ty) => ty.clone(),
+                None => {
+                    let msg = format!("Undefined variable '{}'", name);
+                    return Err(Error {
+                        msg,
+                        span,
+                    });
+                }
+            }
+        },
+
+        ExprNode::Slice(inner) if inner.len() == 0 => {
+            return Err(Error {
+                msg: "Cannot infer type of empty slice literal".to_string(),
+                span,
+            });
+        },
+        ExprNode::Slice(inner) => {
+            let first_ty = infer(cx, &inner[0])?;
+            for elem in inner.iter().skip(1) {
+                check_expr(cx, &first_ty, elem)?;
+            }
+            Type::Slice(Box::new(first_ty))
+        },
+
+        ExprNode::Index { slice, index } => {
+            let slice_ty = infer(cx, slice)?;
+            let index_ty = infer(cx, index)?;
+            if index_ty != Type::Int32 {
+                let msg = format!(
+                    "Expected index of type i32, got {}",
+                    index_ty
+                );
+                return Err(Error {
+                    msg,
+                    span,
+                });
+            }
+            match slice_ty {
+                Type::Slice(inner) => *inner,
+                _ => {
+                    let msg = format!(
+                        "Expected a slice type for indexing, got {}",
+                        slice_ty
+                    );
+                    return Err(Error {
+                        msg,
+                        span,
+                    });
+                }
+            }
+        },
+
+        ExprNode::Unary { op, operand } => {
+            let operand_ty = infer(cx, operand)?;
+            match op {
+                UnaryOp::AddrOf => Type::Pointer(Box::new(operand_ty)),
+                UnaryOp::Deref => match operand_ty {
+                    Type::Pointer(inner) => *inner,
+                    _ => {
+                        let msg = format!(
+                            "Expected a pointer type for dereference, got {}",
+                            operand_ty
+                        );
+                        return Err(Error {
+                            msg,
+                            span,
+                        });
+                    }
+                },
+                UnaryOp::Neg => match operand_ty {
+                    Type::Int32 | Type::Float32 => operand_ty,
+                    _ => {
+                        let msg = format!(
+                            "Expected a numeric type for negation, got {}",
+                            operand_ty
+                        );
+                        return Err(Error {
+                            msg,
+                            span,
+                        });
+                    }
+                },
+                UnaryOp::Not => Type::Bool,
+            }
+        },
+
+        ExprNode::Binary { op, left, right } => {
+            use crate::ast::BinaryOp::*;
+            match op {
+                Eq | Ne => {
+                    let left_ty = infer(cx, left)?;
+                    check_expr(cx, &left_ty, right)?;
+                    Type::Bool
+                },
+                Add | Sub | Mul | Div | Mod
+                | Lt | Gt | Le | Ge => {
+                    let left_ty = infer(cx, left)?;
+                    check_expr(cx, &left_ty, right)?;
+                    match op {
+                        Add | Sub | Mul | Div | Mod => left_ty,
+                        Lt | Gt | Le | Ge => Type::Bool,
+                        _ => unreachable!(),
+                    }
+                },
+                And | Or => {
+                    let expected = Type::Bool;
+                    check_expr(cx, &expected, left)?;
+                    check_expr(cx, &expected, right)?;
+                    Type::Bool
+                },
+                Xor => {
+                    let expected = Type::Int32;
+                    check_expr(cx, &expected, left)?;
+                    check_expr(cx, &expected, right)?;
+                    Type::Int32
+                },
+            }
+        },
+
+        ExprNode::Call { func, args }
+            if matches!(&func.value, ExprNode::Var(name)
+                if Intrinsic::lookup(name).is_some()) => {
+            let ExprNode::Var(name) = &func.value else { unreachable!() };
+            let intrinsic = Intrinsic::lookup(name).unwrap();
+            typecheck_intrinsic(cx, intrinsic, args, span, metadata.id)?
+        },
+        ExprNode::Call { func, args } => {
+            let callee_ty = infer(cx, func)?;
+            match callee_ty {
+                Type::Function { params, return_type } => {
+                    if params.len() != args.len() {
+                        let msg = format!(
+                            "Expected {} arguments, got {}",
+                            params.len(),
+                            args.len()
+                        );
+                        return Err(Error {
+                            msg,
+                            span,
+                        });
+                    }
+
+                    for (param_ty, arg_expr) in params.iter().zip(args.iter()) {
+                        check_expr(cx, param_ty, arg_expr)?;
+                    }
+
+                    *return_type
+                }
+                _ => {
+                    let msg = format!("Expected a function, got {}", callee_ty);
+                    return Err(Error {
+                        msg,
+                        span,
+                    });
+                }
+            }
+        },
+    };
+
+    cx.node_types.insert(expr.id, ty.clone());
+    Ok(ty)
+}
+
+pub fn check_stmt<'a>(
+    cx: &mut Context<'a>,
+    return_ty: &Type<'a>,
+    stmt: &Stmt<'a>,
+) -> Result<(), Error> {
+    match &stmt.value {
+        StmtNode::Expr(expr) => {
+            infer(cx, expr)?;
+        },
+
+        StmtNode::Block(stmts) => {
+            cx.push_scope();
+            for stmt in stmts {
+                check_stmt(cx, return_ty, stmt)?;
+            }
+            cx.pop_scope();
+        },
+
+        StmtNode::Declare { name, ty, value } => {
+            check_expr(cx, ty, value)?;
+            cx.insert(name, ty.clone());
+        },
+
+        StmtNode::Assign { left, value } => {
+            let left_ty = infer(cx, left)?;
+            check_expr(cx, &left_ty, value)?;
+        },
+
+        StmtNode::If { condition, then_branch, else_branch } => {
+            check_expr(cx, &Type::Bool, condition)?;
+
+            cx.push_scope();
+            check_stmt(cx, return_ty, then_branch)?;
+            cx.pop_scope();
+
+            if let Some(else_branch) = else_branch {
+                cx.push_scope();
+                check_stmt(cx, return_ty, else_branch)?;
+                cx.pop_scope();
+            }
+        },
+
+        StmtNode::While { condition, body } => {
+            check_expr(cx, &Type::Bool, condition)?;
+
+            cx.push_scope();
+            check_stmt(cx, return_ty, body)?;
+            cx.pop_scope();
+        },
+
+        StmtNode::Return(expr) => {
+            check_expr(cx, return_ty, expr)?;
+        },
+    }
+
+    Ok(())
+}
+
+fn check_toplevel<'a>(
+    cx: &mut Context<'a>,
+    node: &TopLevel<'a>,
+) -> Result<(), Error> {
+    match &node.value {
+        TopLevelNode::Function { name, params, return_type, body, .. } => {
+            cx.push_scope();
+
+            // Push params into scope
+            for (name, ty) in params {
+                cx.insert(name, ty.clone());
+            }
+
+            for stmt in body {
+                check_stmt(cx, return_type, stmt)?;
+            }
+
+            cx.pop_scope();
+            cx.insert(name, Type::Function {
+                params: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                return_type: Box::new(return_type.clone()),
+            });
+        }
+
+        // Extern declarations have no body to check
+        TopLevelNode::Extern { name, params, return_type, .. } => {
+            cx.insert(name, Type::Function {
+                params: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                return_type: Box::new(return_type.clone()),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+pub fn typecheck_program<'a>(program: &[TopLevel<'a>]) -> (Vec<Error>, HashMap<usize, Type<'a>>) {
+    let mut cx = Context::new();
+    let mut errors = Vec::new();
+
+    for node in program {
+        if let Err(err) = check_toplevel(&mut cx, node) {
+            errors.push(err);
+        }
+    }
+
+    (errors, cx.node_types)
+}
