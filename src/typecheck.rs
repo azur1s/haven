@@ -184,14 +184,14 @@ fn typecheck_intrinsic<'a>(
             }
 
             match slice_ty {
-                Type::Slice(inner) if *inner == ty => {
+                Type::Slice(inner) | Type::Pointer(inner) if *inner == ty => {
                     let simd_ty = Type::Simd(Box::new(ty), size);
                     cx.node_types.insert(expr_id, simd_ty.clone());
                     Ok(simd_ty)
-                }
+                },
                 _ => {
                     return Err(Error {
-                        msg: format!("simd_load() third argument must be a slice of the element type, got {}", slice_ty),
+                        msg: format!("simd_load() third argument must be a slice or pointer to the element type, got {}", slice_ty),
                         span,
                     });
                 }
@@ -233,10 +233,10 @@ fn typecheck_intrinsic<'a>(
             }
 
             match slice_ty {
-                Type::Slice(inner) if *inner == ty => Ok(Type::Void),
+                Type::Slice(inner) | Type::Pointer(inner) if *inner == ty => Ok(Type::Void),
                 _ => {
                     return Err(Error {
-                        msg: format!("simd_store() third argument must be a slice of the element type, got {}", slice_ty),
+                        msg: format!("simd_store() third argument must be a slice or pointer to the element type, got {}", slice_ty),
                         span,
                     });
                 }
@@ -429,10 +429,11 @@ pub fn infer<'a>(
                 });
             }
             match slice_ty {
-                Type::Slice(inner) => *inner,
+                Type::Slice(inner)
+                | Type::Pointer(inner) => *inner,
                 _ => {
                     let msg = format!(
-                        "Expected a slice type for indexing, got {}",
+                        "Expected a slice or pointer type for indexing, got {}",
                         slice_ty
                     );
                     return Err(Error {

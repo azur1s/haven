@@ -1,11 +1,6 @@
 use crate::ast::*;
 use crate::mil::*;
 
-// fn emit_float32(val: f32) -> String {
-//     let bits = val.to_bits();
-//     format!("0x{:08X}", bits)
-// }
-
 fn emit_value(val: Value) -> String {
     match val {
         Value::Const(Const::Float32(f)) => format!("0x{:016X}", (f as f64).to_bits()),
@@ -227,20 +222,23 @@ fn emit_block<'a>(cx: &mut EmitCtx, block: BasicBlock<'a>) {
 }
 
 fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {
+    let mut export = false;
     let attrs = func.attributes.iter()
         .filter_map(|a| match (a.value.name, a.value.value.as_deref()) {
             ("inline", Some("always")) => Some("alwaysinline"),
             ("inline", Some("never"))  => Some("noinline"),
+            ("export", None) => { export = true; None },
             _ => None,
         }).collect::<Vec<_>>()
         .join(" ");
+    let linkage = if export { "dso_local" } else { "internal" };
     let attrs_str = if attrs.is_empty() { String::new() } else { format!(" {attrs}") };
 
     let params_str = func.params.into_iter()
         .map(|(reg, ty)| format!("{} {reg}", emit_type(&ty)))
         .collect::<Vec<_>>()
         .join(", ");
-    emitln!(cx, "define {} @{}({params_str}){attrs_str} {{", emit_type(&func.return_type), func.name);
+    emitln!(cx, "define {linkage} {} @{}({params_str}){attrs_str} {{", emit_type(&func.return_type), func.name);
     func.blocks.into_iter().for_each(|block| emit_block(cx, block));
     emitln!(cx, "}}");
 }

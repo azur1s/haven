@@ -290,10 +290,23 @@ fn lower_intrinsic<'a>(
             let slice_val = lower_expr(cx, &args[2]);
             let offset_val = lower_expr(cx, &args[3]);
 
-            // extract the data pointer from the fat pointer struct
-            let data_ptr = cx.fresh_reg();
             cx.emit(Inst::Comment(format!("simd_load")));
-            cx.emit(Inst::ExtractValue { dst: data_ptr, val: slice_val, index: 0 });
+            // extract the data pointer from the fat pointer struct, or use directly if it's already a pointer
+            let data_ptr = match cx.node_types[&args[2].id] {
+                Type::Slice(_) => {
+                    let extracted = cx.fresh_reg();
+                    cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
+                    extracted
+                }
+                Type::Pointer(_) => {
+                    // already a raw pointer, use it directly
+                    match slice_val {
+                        Value::Reg(r) => r,
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            };
             // get the element pointer with the offset
             let elem_ptr = cx.fresh_reg();
             cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, element_ty: ty.clone() });
@@ -324,9 +337,21 @@ fn lower_intrinsic<'a>(
             let offset_val = lower_expr(cx, &args[3]);
             let value_val = lower_expr(cx, &args[4]);
 
-            // extract the data pointer from the fat pointer struct
-            let data_ptr = cx.fresh_reg();
-            cx.emit(Inst::ExtractValue { dst: data_ptr, val: slice_val, index: 0 });
+            // like simd_load
+            let data_ptr = match cx.node_types[&args[2].id] {
+                Type::Slice(_) => {
+                    let extracted = cx.fresh_reg();
+                    cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
+                    extracted
+                }
+                Type::Pointer(_) => {
+                    match slice_val {
+                        Value::Reg(r) => r,
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            };
             // get the element pointer with the offset
             let elem_ptr = cx.fresh_reg();
             cx.emit(Inst::Comment(format!("simd_store")));
@@ -565,13 +590,24 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             let index_val = lower_expr(cx, index);
             let element_ty = match &cx.node_types[&slice.id] {
                 Type::Slice(inner) => *inner.clone(),
+                Type::Pointer(inner) => *inner.clone(),
                 _ => unreachable!(),
             };
 
-            // extract the data pointer from the fat pointer struct
-            let data_ptr = cx.fresh_reg();
-            cx.emit(Inst::ExtractValue { dst: data_ptr, val: slice_val, index: 0 });
-
+            let data_ptr = match cx.node_types[&slice.id] {
+                Type::Slice(_) => {
+                    let extracted = cx.fresh_reg();
+                    cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
+                    extracted
+                }
+                Type::Pointer(_) => {
+                    match slice_val {
+                        Value::Reg(r) => r,
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            };
             let elem_ptr = cx.fresh_reg();
             cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: index_val, element_ty: element_ty.clone() });
 
@@ -600,13 +636,25 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
             let index_val = lower_expr(cx, index);
             let element_ty = match cx.node_types[&slice.id].clone() {
                 Type::Slice(inner) => *inner,
+                Type::Pointer(inner) => *inner,
                 _ => unreachable!(),
             };
 
             // same extraction as rvalue
-            let data_ptr = cx.fresh_reg();
-            cx.emit(Inst::ExtractValue { dst: data_ptr, val: slice_val, index: 0 });
-
+            let data_ptr = match cx.node_types[&slice.id] {
+                Type::Slice(_) => {
+                    let extracted = cx.fresh_reg();
+                    cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
+                    extracted
+                }
+                Type::Pointer(_) => {
+                    match slice_val {
+                        Value::Reg(r) => r,
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            };
             // return the address of the element instead of loading
             let dst = cx.fresh_reg();
             cx.emit(Inst::Index { dst, slice: data_ptr, index: index_val, element_ty });
@@ -745,23 +793,64 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(&'a str, Type<'a>)>) {
 fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 -> Vec<(Register, Type<'a>)> {
     match &func.value {
-        TopLevelNode::Function { params, body, .. } => {
+        TopLevelNode::Function { attributes, params, body, .. } => {
             let entry = cx.fresh_block();
             cx.current_block = entry;
 
             let mut param_regs = Vec::new();
             for (name, ty) in params {
-                // actual register for the parameter value
-                // e.g. @foo(T %param_regN, ...)
-                // and then use param_ptr so we can treat it like normal mutable locals
-                let param_reg = cx.fresh_reg();
-                let param_ptr = cx.fresh_reg();
-                cx.emit(Inst::Comment(format!("params {}: {}", name, ty)));
-                cx.emit(Inst::Alloca { dst: param_ptr, ty: ty.clone(), align: None });
-                cx.emit(Inst::Store { ptr: param_ptr, val: Value::Reg(param_reg), ty: ty.clone(), align: None });
+                if attributes.iter().any(|a| a.value.name == "export")
+                && matches!(ty, Type::Slice(_)) {
+                    // split the fat pointer into 2 parameters for the data pointer and length
+                    // e.g. foo(buf: T[]) -> @foo(*T %buf_ptr, i32 %buf_len)
+                    let ptr_reg = cx.fresh_reg();
+                    let len_reg = cx.fresh_reg();
 
-                param_regs.push((param_reg, ty.clone()));
-                cx.env.insert(name, (param_ptr, ty.clone()));
+                    let inner_ty = match ty {
+                        Type::Slice(inner) => *inner.clone(),
+                        _ => unreachable!(),
+                    };
+
+                    let fat0 = cx.fresh_reg();
+                    cx.emit(Inst::Comment(format!("params {}: {} (splitted)", name, ty)));
+                    cx.emit(Inst::InsertValue {
+                        dst: fat0,
+                        elem: Value::Const(Const::Undef),
+                        ty: Type::Pointer(Box::new(inner_ty.clone())),
+                        val: Value::Reg(ptr_reg),
+                        index: 0,
+                    });
+                    let fat1 = cx.fresh_reg();
+                    cx.emit(Inst::InsertValue {
+                        dst: fat1,
+                        elem: Value::Reg(fat0),
+                        ty: Type::Int32,
+                        val: Value::Reg(len_reg),
+                        index: 1,
+                    });
+
+                    // store the reconstructed fat pointer into the alloca'd local
+                    let param_ptr = cx.fresh_reg();
+                    cx.emit(Inst::Alloca { dst: param_ptr, ty: ty.clone(), align: None });
+                    cx.emit(Inst::Store { ptr: param_ptr, val: Value::Reg(fat1), ty: ty.clone(), align: None });
+                    cx.env.insert(name, (param_ptr, ty.clone()));
+
+                    // push BOTH as incoming params
+                    param_regs.push((ptr_reg, Type::Pointer(Box::new(inner_ty.clone()))));
+                    param_regs.push((len_reg, Type::Int32));
+                } else {
+                    // actual register for the parameter value
+                    // e.g. @foo(T %param_regN, ...)
+                    // and then use param_ptr so we can treat it like normal mutable locals
+                    let param_reg = cx.fresh_reg();
+                    let param_ptr = cx.fresh_reg();
+                    cx.emit(Inst::Comment(format!("params {}: {}", name, ty)));
+                    cx.emit(Inst::Alloca { dst: param_ptr, ty: ty.clone(), align: None });
+                    cx.emit(Inst::Store { ptr: param_ptr, val: Value::Reg(param_reg), ty: ty.clone(), align: None });
+
+                    param_regs.push((param_reg, ty.clone()));
+                    cx.env.insert(name, (param_ptr, ty.clone()));
+                }
             }
 
             // collect all local variable declarations in the function body and emit Allocas for them

@@ -30,7 +30,6 @@ proc apply_gain_simd(buf: *[]f32, gain: f32) {
 
 // Process a buffer
 @alloc(false)
-@export
 proc process(buffer: *[]f32, state: *f32) {
     let coeff: f32 = 0.8;
     let i: i32 = 0;
@@ -41,6 +40,7 @@ proc process(buffer: *[]f32, state: *f32) {
     apply_gain_simd(buffer, 0.5);
 }
 
+@export
 proc main() {
     let buffer: []f32 = [1.0, 0.9, 0.5, 0.1, 0.0, 0.1];
     let state: f32 = 0.0;
