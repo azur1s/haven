@@ -34,7 +34,11 @@ pub enum Const {
     Undef, // for uninitialized values (e.g. insertvalue with undef)
     Bool(bool),
     Int32(i32),
+    Int64(i64),
+    Uint32(u32),
+    Uint64(u64),
     Float32(f32),
+    Float64(f64),
 }
 
 impl Display for Const {
@@ -43,7 +47,11 @@ impl Display for Const {
             Const::Undef => write!(f, "undef"),
             Const::Bool(b) => write!(f, "{}", b),
             Const::Int32(n) => write!(f, "{}", n),
-            Const::Float32(n) => write!(f, "{:?}", n),
+            Const::Int64(n) => write!(f, "{}", n),
+            Const::Uint32(n) => write!(f, "{}", n),
+            Const::Uint64(n) => write!(f, "{}", n),
+            Const::Float32(n)=> write!(f, "{:?}", n),
+            Const::Float64(n)=> write!(f, "{:?}", n),
         }
     }
 }
@@ -94,6 +102,9 @@ pub enum Inst<'a> {
     AllocaArray { dst: Register, ty: Type<'a>, length: usize },
     // %dst = getelemptr [length X ty] %array, %index
     IndexArray { dst: Register, ty: Type<'a>, length: usize, array: Register, index: usize },
+
+    // Intrinsic related instructions
+    Extend { dst: Register, val: Value, from_ty: Type<'a>, to_ty: Type<'a> },
 }
 
 #[derive(Clone, Debug)]
@@ -206,6 +217,22 @@ fn lower_intrinsic<'a>(
             cx.emit(Inst::ExtractValue { dst, val: slice_val, index: 1 });
             Value::Reg(dst)
         }
+        Intrinsic::Bitcast => {
+                let val = lower_expr(cx, &args[0]);
+            let from_ty = cx.node_types[&args[0].id].clone();
+            let to_ty = match &args[1].value {
+                ExprNode::Var("i32") => Type::Int32,
+                ExprNode::Var("i64") => Type::Int64,
+                ExprNode::Var("u32") => Type::Uint32,
+                ExprNode::Var("u64") => Type::Uint64,
+                ExprNode::Var("f32") => Type::Float32,
+                ExprNode::Var("f64") => Type::Float64,
+                _ => unreachable!(),
+            };
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Extend { dst, val, from_ty, to_ty });
+            Value::Reg(dst)
+        }
     }
 }
 
@@ -213,7 +240,11 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
     match &expr.value {
         ExprNode::Bool(b)    => Value::Const(Const::Bool(*b)),
         ExprNode::Int32(n)   => Value::Const(Const::Int32(*n)),
+        ExprNode::Int64(n)   => Value::Const(Const::Int64(*n)),
+        ExprNode::Uint32(n)  => Value::Const(Const::Uint32(*n)),
+        ExprNode::Uint64(n)  => Value::Const(Const::Uint64(*n)),
         ExprNode::Float32(n) => Value::Const(Const::Float32(*n)),
+        ExprNode::Float64(n) => Value::Const(Const::Float64(*n)),
 
         ExprNode::Var(name) => {
             let (reg, ty) = cx.env[name].clone();

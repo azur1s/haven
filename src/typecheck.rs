@@ -62,6 +62,45 @@ fn typecheck_intrinsic<'a>(
             cx.node_types.insert(expr_id, Type::Int32);
             Ok(Type::Int32)
         }
+        Intrinsic::Bitcast => {
+            if args.len() != 2 {
+                return Err(Error { msg: "bitcast() takes exactly two arguments".into(), span });
+            }
+            let value_ty = infer(cx, &args[0])?;
+            let target_ty = match &args[1].value {
+                ExprNode::Var(name) => match *name {
+                    "i32" => Type::Int32,
+                    "i64" => Type::Int64,
+                    "u32" => Type::Uint32,
+                    "u64" => Type::Uint64,
+                    "f32" => Type::Float32,
+                    "f64" => Type::Float64,
+                    _ => {
+                        return Err(Error {
+                            msg: "width_cast() second argument must be `iN`, `uN` or `fN`".into(),
+                            span,
+                        });
+                    }
+                }
+                _ => {
+                    return Err(Error {
+                        msg: "width_cast() second argument must be `iN`, `uN` or `fN`".into(),
+                        span,
+                    });
+                }
+            };
+
+            // check if target_width is equal or wider than value_ty
+            if !is_numeric(&value_ty) {
+                return Err(Error {
+                    msg: format!("width_cast() first argument must be a numeric type, got {}", value_ty),
+                    span,
+                });
+            }
+
+            cx.node_types.insert(expr_id, target_ty.clone());
+            Ok(target_ty)
+        }
     }
 }
 
@@ -77,7 +116,11 @@ pub fn check_expr<'a>(
     let actual = match value {
         ExprNode::Bool(_)    => Type::Bool,
         ExprNode::Int32(_)   => Type::Int32,
+        ExprNode::Int64(_)   => Type::Int64,
+        ExprNode::Uint32(_)  => Type::Uint32,
+        ExprNode::Uint64(_)  => Type::Uint64,
         ExprNode::Float32(_) => Type::Float32,
+        ExprNode::Float64(_) => Type::Float64,
         // ExprNode::Str(_)     => Type::Str,
 
         // let xs: []i32 = []; so the type of [] is i32
@@ -110,6 +153,17 @@ pub fn check_expr<'a>(
     Ok(())
 }
 
+fn is_integer(ty: &Type) -> bool {
+    matches!(ty, Type::Int32 | Type::Int64 | Type::Uint32 | Type::Uint64)
+}
+
+fn is_numeric(ty: &Type) -> bool {
+    matches!(ty,
+        Type::Int32 | Type::Int64
+        | Type::Uint32 | Type::Uint64
+        | Type::Float32 | Type::Float64)
+}
+
 pub fn infer<'a>(
     cx: &mut Context<'a>,
     expr: &Expr<'a>,
@@ -121,7 +175,11 @@ pub fn infer<'a>(
     let ty = match value {
         ExprNode::Bool(_)    => Type::Bool,
         ExprNode::Int32(_)   => Type::Int32,
+        ExprNode::Int64(_)   => Type::Int64,
+        ExprNode::Uint32(_)  => Type::Uint32,
+        ExprNode::Uint64(_)  => Type::Uint64,
         ExprNode::Float32(_) => Type::Float32,
+        ExprNode::Float64(_) => Type::Float64,
         // ExprNode::Str(_)     => Type::Str,
 
         ExprNode::Var(name) => {
@@ -154,7 +212,7 @@ pub fn infer<'a>(
         ExprNode::Index { slice, index } => {
             let slice_ty = infer(cx, slice)?;
             let index_ty = infer(cx, index)?;
-            if index_ty != Type::Int32 {
+            if !is_integer(&index_ty) {
                 let msg = format!(
                     "Expected index of type i32, got {}",
                     index_ty
@@ -196,18 +254,17 @@ pub fn infer<'a>(
                         });
                     }
                 },
-                UnaryOp::Neg => match operand_ty {
-                    Type::Int32 | Type::Float32 => operand_ty,
-                    _ => {
-                        let msg = format!(
-                            "Expected a numeric type for negation, got {}",
-                            operand_ty
-                        );
-                        return Err(Error {
-                            msg,
-                            span,
-                        });
-                    }
+                UnaryOp::Neg => if is_numeric(&operand_ty) {
+                    operand_ty
+                } else {
+                    let msg = format!(
+                        "Expected a numeric type for negation, got {}",
+                        operand_ty
+                    );
+                    return Err(Error {
+                        msg,
+                        span,
+                    });
                 },
                 UnaryOp::Not => Type::Bool,
             }
@@ -225,6 +282,16 @@ pub fn infer<'a>(
                 | Lt | Gt | Le | Ge => {
                     let left_ty = infer(cx, left)?;
                     check_expr(cx, &left_ty, right)?;
+                    if !is_numeric(&left_ty) {
+                        let msg = format!(
+                            "Expected a numeric type for binary operator, got {}",
+                            left_ty
+                        );
+                        return Err(Error {
+                            msg,
+                            span,
+                        });
+                    }
                     match op {
                         Add | Sub | Mul | Div | Mod => left_ty,
                         Lt | Gt | Le | Ge => Type::Bool,

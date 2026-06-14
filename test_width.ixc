@@ -1,0 +1,63 @@
+proc main() i32 {
+    let a: i32 = 0; // default
+    let b: i32 = 0i32;
+    let c: i64 = 0i64;
+    let d: u32 = 0u32;
+    let e: u64 = 0u64;
+
+    let f: f32 = 0.0; // default
+    let g: f32 = 0.0f32;
+    let h: f64 = 0.0f64;
+
+    // behold the casts table
+
+    // from i32
+    let u1: i32 = bitcast(0i32, i32);
+    let u2: i64 = bitcast(0i32, i64);
+    let u3: u32 = bitcast(0i32, u32);
+    let u4: u64 = bitcast(0i32, u64);
+    let u5: f32 = bitcast(0i32, f32);
+    let u6: f64 = bitcast(0i32, f64);
+
+    // from i64
+    let v1: i32 = bitcast(0i64, i32);
+    let v2: i64 = bitcast(0i64, i64);
+    let v3: u32 = bitcast(0i64, u32);
+    let v4: u64 = bitcast(0i64, u64);
+    let v5: f32 = bitcast(0i64, f32);
+    let v6: f64 = bitcast(0i64, f64);
+
+    // from u32
+    let w1: i32 = bitcast(0u32, i32);
+    let w2: i64 = bitcast(0u32, i64);
+    let w3: u32 = bitcast(0u32, u32);
+    let w4: u64 = bitcast(0u32, u64);
+    let w5: f32 = bitcast(0u32, f32);
+    let w6: f64 = bitcast(0u32, f64);
+
+    // from u64
+    let x1: i32 = bitcast(0u64, i32);
+    let x2: i64 = bitcast(0u64, i64);
+    let x3: u32 = bitcast(0u64, u32);
+    let x4: u64 = bitcast(0u64, u64);
+    let x5: f32 = bitcast(0u64, f32);
+    let x6: f64 = bitcast(0u64, f64);
+
+    // from f32
+    let y1: i32 = bitcast(0.0f32, i32);
+    let y2: i64 = bitcast(0.0f32, i64);
+    let y3: u32 = bitcast(0.0f32, u32);
+    let y4: u64 = bitcast(0.0f32, u64);
+    let y5: f32 = bitcast(0.0f32, f32);
+    let y6: f64 = bitcast(0.0f32, f64);
+
+    // from f64
+    let z1: i32 = bitcast(0.0f64, i32);
+    let z2: i64 = bitcast(0.0f64, i64);
+    let z3: u32 = bitcast(0.0f64, u32);
+    let z4: u64 = bitcast(0.0f64, u64);
+    let z5: f32 = bitcast(0.0f64, f32);
+    let z6: f64 = bitcast(0.0f64, f64);
+
+    return 0;
+}

@@ -9,6 +9,7 @@ use crate::mil::*;
 fn emit_value(val: Value) -> String {
     match val {
         Value::Const(Const::Float32(f)) => format!("0x{:016X}", (f as f64).to_bits()),
+        Value::Const(Const::Float64(f)) => format!("0x{:016X}", f.to_bits()),
         Value::Const(Const::Bool(b)) => if b { "1".to_string() } else { "0".to_string() },
         _ => format!("{}", val),
     }
@@ -21,7 +22,13 @@ fn emit_type(ty: Type) -> String {
         Void => "void".to_string(),
         Bool => "i1".to_string(),
         Int32 => "i32".to_string(),
+        Int64 => "i64".to_string(),
+        // LLVM just use i32 for unsigned integers and rely on the
+        // instructions (or us) to interpret them correctly
+        Uint32 => "i32".to_string(),
+        Uint64 => "i64".to_string(),
         Float32 => "float".to_string(),
+        Float64 => "double".to_string(),
         Pointer(_) => "ptr".to_string(),
 
         Slice(_) => "{ ptr, i32 }".to_string(), // struct { ptr, len }
@@ -57,6 +64,8 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
         Unary { dst, op, val, ty } =>
             emitln!(cx, "    {dst} = {}, {}", match op {
                 UnaryOp::Neg if ty == Type::Int32 => "sub i32 0",
+                UnaryOp::Neg if ty == Type::Int64 => "sub i64 0",
+
                 // UnaryOp::Neg if ty == Type::Float32 => "fneg float",
                 UnaryOp::Neg => unreachable!(),
                 UnaryOp::Not if ty == Type::Int32 => "xor i32 -1",
@@ -122,6 +131,60 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
         AllocaArray { dst, ty, length } => emitln!(cx, "    {dst} = alloca [{} x {}]", length, emit_type(ty)),
         IndexArray { dst, ty, length, array, index } =>
             emitln!(cx, "    {dst} = getelementptr [{length} x {}], ptr {array}, i32 0, i32 {index}", emit_type(ty)),
+
+        Extend { dst, val, from_ty, to_ty } => {
+            use Type::*;
+            let value = emit_value(val);
+            // die typkonvertierungstabelle
+            match (from_ty, to_ty) {
+                // same-type or identity casts (no-op)
+                (Int32, Int32) | (Int32, Uint32) | (Uint32, Int32) | (Uint32, Uint32) => emitln!(cx, "    {dst} = bitcast i32 {} to i32", value),
+                (Int64, Int64) | (Int64, Uint64) | (Uint64, Int64) | (Uint64, Uint64) => emitln!(cx, "    {dst} = bitcast i64 {} to i64", value),
+                (Float32, Float32) => emitln!(cx, "    {dst} = bitcast float {} to float", value),
+                (Float64, Float64) => emitln!(cx, "    {dst} = bitcast double {} to double", value),
+
+                // downcasting
+                (Int64, Int32) | (Int64, Uint32)   => emitln!(cx, "    {dst} = trunc i64 {} to i32", value),
+                (Uint64, Int32) | (Uint64, Uint32) => emitln!(cx, "    {dst} = trunc i64 {} to i32", value),
+
+                // upcasting/extension
+                // signed source -> sign extension
+                (Int32, Int64) | (Int32, Uint64) => emitln!(cx, "    {dst} = sext i32 {} to i64", value),
+                // unsigned source -> zero extension
+                (Uint32, Int64) | (Uint32, Uint64) => emitln!(cx, "    {dst} = zext i32 {} to i64", value),
+
+                // float to float
+                (Float32, Float64) => emitln!(cx, "    {dst} = fpext float {} to double", value),
+                (Float64, Float32) => emitln!(cx, "    {dst} = fptrunc double {} to float", value),
+
+                // integer to float
+                (Int32, Float32) => emitln!(cx, "    {dst} = sitofp i32 {} to float", value),
+                (Int32, Float64) => emitln!(cx, "    {dst} = sitofp i32 {} to double", value),
+                (Int64, Float32) => emitln!(cx, "    {dst} = sitofp i64 {} to float", value),
+                (Int64, Float64) => emitln!(cx, "    {dst} = sitofp i64 {} to double", value),
+
+                (Uint32, Float32) => emitln!(cx, "    {dst} = uitofp i32 {} to float", value),
+                (Uint32, Float64) => emitln!(cx, "    {dst} = uitofp i32 {} to double", value),
+                (Uint64, Float32) => emitln!(cx, "    {dst} = uitofp i64 {} to float", value),
+                (Uint64, Float64) => emitln!(cx, "    {dst} = uitofp i64 {} to double", value),
+
+                // float to integer (saturating)
+                // this is like Rust where it defaults to saturating casts (`@llvm.fptosi.sat` / `@llvm.fptoui.sat`)
+                // to prevent UB if a float overflows the target integer type (i hope)
+                (Float32, Int32)  => emitln!(cx, "    {dst} = call i32 @llvm.fptosi.sat.i32.f32(float {value})"),
+                (Float32, Uint32) => emitln!(cx, "    {dst} = call i32 @llvm.fptoui.sat.i32.f32(float {value})"),
+                (Float32, Int64)  => emitln!(cx, "    {dst} = call i64 @llvm.fptosi.sat.i64.f32(float {value})"),
+                (Float32, Uint64) => emitln!(cx, "    {dst} = call i64 @llvm.fptoui.sat.i64.f32(float {value})"),
+
+                (Float64, Int32)  => emitln!(cx, "    {dst} = call i32 @llvm.fptosi.sat.i32.f64(double {value})"),
+                (Float64, Uint32) => emitln!(cx, "    {dst} = call i32 @llvm.fptoui.sat.i32.f64(double {value})"),
+                (Float64, Int64)  => emitln!(cx, "    {dst} = call i64 @llvm.fptosi.sat.i64.f64(double {value})"),
+                (Float64, Uint64) => emitln!(cx, "    {dst} = call i64 @llvm.fptoui.sat.i64.f64(double {value})"),
+
+                (f, t) => unreachable!("unsupported type extension from {f:?} to {t:?}"),
+            };
+            // emitln!(cx, "    {dst} = {inst} {from_ty_str} {} to {to_ty_str}", emit_value(val));
+        }
     };
 }
 
@@ -184,8 +247,21 @@ fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
     module.functions.into_iter().for_each(|func| emit_function(cx, func));
 }
 
+// I hope LLVM will optimize these away if it's not used
+const PREPEND: &str = r#"
+; casts (for bitwise_cast())
+declare i32 @llvm.fptosi.sat.i32.f32(float)
+declare i32 @llvm.fptoui.sat.i32.f32(float)
+declare i64 @llvm.fptosi.sat.i64.f32(float)
+declare i64 @llvm.fptoui.sat.i64.f32(float)
+declare i32 @llvm.fptosi.sat.i32.f64(double)
+declare i32 @llvm.fptoui.sat.i32.f64(double)
+declare i64 @llvm.fptosi.sat.i64.f64(double)
+declare i64 @llvm.fptoui.sat.i64.f64(double)
+"#;
+
 pub fn emit<'a>(module: Module<'a>) -> String {
-    let mut cx = EmitCtx { buf: String::new() };
+    let mut cx = EmitCtx { buf: PREPEND.trim_start().to_string() };
     emit_module(&mut cx, module);
     cx.buf
 }

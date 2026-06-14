@@ -60,8 +60,9 @@ impl<T> Metadata<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token<'a> {
     Bool(bool),
-    Int32(i32),
-    Float32(f32),
+    Int32(i32), Int64(i64),
+    Uint32(u32), Uint64(u64),
+    Float32(f32), Float64(f64),
     Var(&'a str),
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
@@ -82,7 +83,11 @@ impl Display for Token<'_> {
         match self {
             Token::Bool(b)      => write!(f, "{}", b),
             Token::Int32(n)     => write!(f, "{}i32", n),
+            Token::Int64(n)     => write!(f, "{}i64", n),
+            Token::Uint32(n)    => write!(f, "{}u32", n),
+            Token::Uint64(n)    => write!(f, "{}u64", n),
             Token::Float32(n)   => write!(f, "{}f32", n),
+            Token::Float64(n)   => write!(f, "{}f64", n),
             Token::Var(s)       => write!(f, "{}", s),
             Token::BinaryOp(op) => write!(f, "{}", op),
             Token::UnaryOp(op)  => write!(f, "{}", op),
@@ -154,8 +159,9 @@ impl Display for BinaryOp {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type<'a> {
     Void, Bool,
-    Int32,
-    Float32,
+    Int32, Int64,
+    Uint32, Uint64,
+    Float32, Float64,
     Function {
         params: Vec<Type<'a>>,
         return_type: Box<Type<'a>>,
@@ -167,18 +173,20 @@ pub enum Type<'a> {
 
 impl<'a> Display for Type<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use Type::*;
         match self {
-            Type::Void => write!(f, "void"),
-            Type::Bool => write!(f, "bool"),
-            Type::Int32 => write!(f, "i32"),
-            Type::Float32 => write!(f, "f32"),
-            Type::Function { params, return_type } => {
+            Void => write!(f, "void"),
+            Bool => write!(f, "bool"),
+            Uint32 => write!(f, "u32"), Uint64 => write!(f, "u64"),
+            Int32 => write!(f, "i32"), Int64 => write!(f, "i64"),
+            Float32 => write!(f, "f32"), Float64 => write!(f, "f64"),
+            Function { params, return_type } => {
                 let params_str = params.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "fn({}) -> {}", params_str, return_type)
             },
-            Type::Pointer(inner) => write!(f, "*{}", inner),
-            Type::Slice(inner) => write!(f, "{}[]", inner),
-            Type::Defined(name) => write!(f, "{}", name),
+            Pointer(inner) => write!(f, "*{}", inner),
+            Slice(inner) => write!(f, "{}[]", inner),
+            Defined(name) => write!(f, "{}", name),
         }
     }
 }
@@ -186,8 +194,9 @@ impl<'a> Display for Type<'a> {
 #[derive(Clone, Debug)]
 pub enum ExprNode<'a> {
     Bool(bool),
-    Int32(i32),
-    Float32(f32),
+    Int32(i32), Int64(i64),
+    Uint32(u32), Uint64(u64),
+    Float32(f32), Float64(f64),
     Var(&'a str),
     Slice(Vec<Expr<'a>>),
     Index {
@@ -214,7 +223,11 @@ impl<'a> Display for ExprNode<'a> {
         match self {
             ExprNode::Bool(val) => write!(f, "{}", val),
             ExprNode::Int32(val) => write!(f, "{}i32", val),
+            ExprNode::Int64(val) => write!(f, "{}i64", val),
+            ExprNode::Uint32(val) => write!(f, "{}u32", val),
+            ExprNode::Uint64(val) => write!(f, "{}u64", val),
             ExprNode::Float32(val) => write!(f, "{}f32", val),
+            ExprNode::Float64(val) => write!(f, "{}f64", val),
             ExprNode::Var(name) => write!(f, "{}", name),
             ExprNode::Slice(elements) => {
                 let elements_str = elements.iter()

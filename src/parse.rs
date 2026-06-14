@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, u64};
 use chumsky::{
     input::MappedInput,
     pratt::*,
@@ -16,18 +16,49 @@ fn lexer<'a> (
     Vec<Metadata<Token<'a>>>,
     extra::Err<Rich<'a, char>>,
 > {
-    let float = text::int(10)
+    macro_rules! try_parse_int {
+        ($ty:ty, $val:expr, $span:expr) => {
+            $val.parse::<$ty>()
+                .map_err(|_| Rich::custom($span,
+                    format!("failed to parse literal: {} does not fit in {}", $val, stringify!($ty))))
+        };
+    }
+
+    // defaults ints and floats to 32 bits and use suffixes to disambiguate
+    let float = text::int::<_, extra::Err<Rich<'a, char>>>(10)
         .then(just('.').then(text::digits(10)))
         .to_slice()
-        .from_str()
+        .from_str::<f64>()
         .unwrapped()
-        .map(Token::Float32);
+        .then(just('f').or(just('F'))
+            .ignore_then(text::int(10).from_str::<u32>().unwrapped())
+            .or_not())
+        .try_map(|(f, width), span| {
+            match width {
+                Some(32) => Ok(Token::Float32(f as f32)),
+                Some(64) => Ok(Token::Float64(f)),
+                None => Ok(Token::Float32(f as f32)),
+                Some(other) => Err(Rich::custom(span, format!("invalid float literal suffix 'f{other}'"))),
+            }
+        });
 
     let int = text::int(10)
         .to_slice()
-        .from_str()
-        .unwrapped()
-        .map(Token::Int32);
+        .then(
+            just('i').or(just('I')).or(just('u')).or(just('U'))
+                .map(|c| c.to_ascii_lowercase())
+                .then(text::int(10).from_str::<u32>().unwrapped())
+                .or_not()
+        ).try_map(|(n, suffix): (&str, _), span| {
+            match suffix {
+                Some(('i', 32)) => try_parse_int!(i32, n, span).map(Token::Int32),
+                Some(('i', 64)) => try_parse_int!(i64, n, span).map(Token::Int64),
+                Some(('u', 32)) => try_parse_int!(u32, n, span).map(Token::Uint32),
+                Some(('u', 64)) => try_parse_int!(u64, n, span).map(Token::Uint64),
+                None => try_parse_int!(i32, n, span).map(Token::Int32),
+                Some((other, width)) => Err(Rich::custom(span, format!("invalid integer literal suffix '{other}{width}'"))),
+            }
+        });
 
     // let str_ = just('"')
     //     .ignore_then(none_of('"').repeated().to_slice())
@@ -182,7 +213,11 @@ fn parse_expr<'tks, 'src: 'tks>()
             select_ref! {
                 Token::Bool(b)    => ExprNode::Bool(*b),
                 Token::Int32(i)   => ExprNode::Int32(*i),
+                Token::Int64(i)   => ExprNode::Int64(*i),
+                Token::Uint32(u)  => ExprNode::Uint32(*u),
+                Token::Uint64(u)  => ExprNode::Uint64(*u),
                 Token::Float32(f) => ExprNode::Float32(*f),
+                Token::Float64(f) => ExprNode::Float64(*f),
                 // Token::Str(s)     => ExprNode::Str(*s),
             },
 
@@ -319,7 +354,11 @@ fn parse_type<'tks, 'src: 'tks>()
             "void" => Type::Void,
             "bool" => Type::Bool,
             "i32"  => Type::Int32,
+            "i64"  => Type::Int64,
+            "u32"  => Type::Uint32,
+            "u64"  => Type::Uint64,
             "f32"  => Type::Float32,
+            "f64"  => Type::Float64,
             // "str"  => Type::Str,
             other  => Type::Defined(other),
         })
