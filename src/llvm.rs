@@ -15,7 +15,7 @@ fn emit_value(val: Value) -> String {
     }
 }
 
-fn emit_type(ty: Type) -> String {
+fn emit_type(ty: &Type) -> String {
     use Type::*;
 
     match ty {
@@ -32,6 +32,8 @@ fn emit_type(ty: Type) -> String {
         Pointer(_) => "ptr".to_string(),
 
         Slice(_) => "{ ptr, i32 }".to_string(), // struct { ptr, len }
+        // <size x element_type>
+        Simd(ty, size) => format!("<{} x {}>", size, emit_type(ty)),
         Function { .. } => todo!("function pointer type"),
         Defined(name) => todo!("defined types ({name})"),
     }
@@ -75,28 +77,35 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
             }, emit_value(val)),
         Binary { dst, op, lhs, rhs, ty } => {
             use BinaryOp::*;
+
+            // extract SIMD inner type for instruction selection
+            let inner = match &ty {
+                Type::Simd(inner, _) => inner.as_ref(),
+                _ => &ty,
+            };
+
             emitln!(cx, "    {dst} = {} {} {}, {}", match op {
-                Add if ty == Type::Int32   => "add",
-                Add if ty == Type::Float32 => "fadd",
-                Add => unreachable!(),
-                Sub if ty == Type::Int32   => "sub",
-                Sub if ty == Type::Float32 => "fsub",
-                Sub => unreachable!(),
-                Mul if ty == Type::Int32   => "mul",
-                Mul if ty == Type::Float32 => "fmul",
-                Mul => unreachable!(),
-                Div if ty == Type::Int32   => "sdiv",
-                Div if ty == Type::Float32 => "fdiv",
-                Div => unreachable!(),
-                Mod if ty == Type::Int32   => "srem",
-                Mod if ty == Type::Float32 => "frem",
-                Mod => unreachable!(),
-                Eq if ty == Type::Float32 => "fcmp oeq",
-                Ne if ty == Type::Float32 => "fcmp one",
-                Lt if ty == Type::Float32 => "fcmp olt",
-                Le if ty == Type::Float32 => "fcmp ole",
-                Gt if ty == Type::Float32 => "fcmp ogt",
-                Ge if ty == Type::Float32 => "fcmp oge",
+                Add if *inner == Type::Int32   => "add",
+                Add if *inner == Type::Float32 => "fadd",
+                Add => unreachable!("{}", ty),
+                Sub if *inner == Type::Int32   => "sub",
+                Sub if *inner == Type::Float32 => "fsub",
+                Sub => unreachable!("{}", ty),
+                Mul if *inner == Type::Int32   => "mul",
+                Mul if *inner == Type::Float32 => "fmul",
+                Mul => unreachable!("{}", ty),
+                Div if *inner == Type::Int32   => "sdiv",
+                Div if *inner == Type::Float32 => "fdiv",
+                Div => unreachable!("{}", ty),
+                Mod if *inner == Type::Int32   => "srem",
+                Mod if *inner == Type::Float32 => "frem",
+                Mod => unreachable!("{}", ty),
+                Eq if *inner == Type::Float32 => "fcmp oeq",
+                Ne if *inner == Type::Float32 => "fcmp one",
+                Lt if *inner == Type::Float32 => "fcmp olt",
+                Le if *inner == Type::Float32 => "fcmp ole",
+                Gt if *inner == Type::Float32 => "fcmp ogt",
+                Ge if *inner == Type::Float32 => "fcmp oge",
                 Eq => "icmp eq",
                 Ne => "icmp ne",
                 Lt => "icmp slt",
@@ -106,31 +115,31 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                 And => "and",
                 Or => "or",
                 Xor => "xor",
-            }, emit_type(ty), emit_value(lhs), emit_value(rhs));
+            }, emit_type(&ty), emit_value(lhs), emit_value(rhs));
         }
         Call { dst, func, args, return_type } => {
             // %result = call <return_type> @<function_name>(<arg_type> <arg_val>, ...)
             let dst_prefix = dst.map(|dst| format!("{dst} = ")).unwrap_or_default();
             let args_str = args.into_iter()
-                .map(|(val, ty)| format!("{} {}", emit_type(ty), emit_value(val)))
+                .map(|(val, ty)| format!("{} {}", emit_type(&ty), emit_value(val)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            emitln!(cx, "    {dst_prefix}call {} @{func}({args_str})", emit_type(return_type));
+            emitln!(cx, "    {dst_prefix}call {} @{func}({args_str})", emit_type(&return_type));
         }
         Index { dst, slice, index, element_ty } =>
             // %result = getelementptr <PointeeTy>, ptr <BasePtr> {, <IdxTy> <Idx> }*
-            emitln!(cx, "    {dst} = getelementptr {}, ptr {slice}, i32 {index}", emit_type(element_ty)),
+            emitln!(cx, "    {dst} = getelementptr {}, ptr {slice}, i32 {index}", emit_type(&element_ty)),
         InsertValue { dst, elem, ty, val, index } =>
-            emitln!(cx, "    {dst} = insertvalue {{ ptr, i32 }} {elem}, {} {}, {index}", emit_type(ty), emit_value(val)),
+            emitln!(cx, "    {dst} = insertvalue {{ ptr, i32 }} {elem}, {} {}, {index}", emit_type(&ty), emit_value(val)),
         ExtractValue { dst, val, index } => emitln!(cx, "    {dst} = extractvalue {{ ptr, i32 }} {}, {index}", emit_value(val)),
 
-        Alloca { dst, ty } =>  emitln!(cx, "    {dst} = alloca {}", emit_type(ty)),
-        Store { ptr, val, ty } => emitln!(cx, "    store {} {}, ptr {ptr}", emit_type(ty), emit_value(val)),
-        Load { dst, ptr, ty } => emitln!(cx, "    {dst} = load {}, ptr {ptr}", emit_type(ty)),
+        Alloca { dst, ty, align } =>  emitln!(cx, "    {dst} = alloca {}, align {}", emit_type(&ty), align.unwrap_or(1)),
+        Store { ptr, val, ty, align } => emitln!(cx, "    store {} {}, ptr {ptr}, align {}", emit_type(&ty), emit_value(val), align.unwrap_or(1)),
+        Load { dst, ptr, ty, align } => emitln!(cx, "    {dst} = load {}, ptr {ptr}, align {}", emit_type(&ty), align.unwrap_or(1)),
 
-        AllocaArray { dst, ty, length } => emitln!(cx, "    {dst} = alloca [{} x {}]", length, emit_type(ty)),
+        AllocaArray { dst, ty, length } => emitln!(cx, "    {dst} = alloca [{} x {}]", length, emit_type(&ty)),
         IndexArray { dst, ty, length, array, index } =>
-            emitln!(cx, "    {dst} = getelementptr [{length} x {}], ptr {array}, i32 0, i32 {index}", emit_type(ty)),
+            emitln!(cx, "    {dst} = getelementptr [{length} x {}], ptr {array}, i32 0, i32 {index}", emit_type(&ty)),
 
         Extend { dst, val, from_ty, to_ty } => {
             use Type::*;
@@ -185,6 +194,17 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
             };
             // emitln!(cx, "    {dst} = {inst} {from_ty_str} {} to {to_ty_str}", emit_value(val));
         }
+        Splat { dst, val, ty, size } => {
+            let ty_str = emit_type(&ty);
+            let simd_ty = format!("<{size} x {}>", ty_str);
+            emitln!(cx, "    {dst} = insertelement {simd_ty} undef, {ty_str} {}, i32 0", emit_value(val));
+        }
+        Shuffle { dst, value_size, v0, v1, ty, size, mask } => {
+            let ty_str = emit_type(&ty);
+            let simd_ty = format!("<{} x {}>", value_size, ty_str);
+            let mask = mask.into_iter().map(|i| format!("i32 {}", i)).collect::<Vec<_>>().join(", ");
+            emitln!(cx, "    {dst} = shufflevector {simd_ty} {v0}, {simd_ty} {v1}, <{size} x i32> <{mask}>");
+        }
     };
 }
 
@@ -193,7 +213,7 @@ fn emit_terminator<'a>(cx: &mut EmitCtx, term: Terminator<'a>) {
 
     match term {
         Return(None) => emitln!(cx, "    ret void"),
-        Return(Some((value, ty))) => emitln!(cx, "    ret {} {value}", emit_type(ty)),
+        Return(Some((value, ty))) => emitln!(cx, "    ret {} {value}", emit_type(&ty)),
         Jump(label) => emitln!(cx, "    br label %{label}"),
         Branch { cond, then_block, else_block } =>
             emitln!(cx, "    br i1 {cond}, label %{then_block}, label %{else_block}"),
@@ -217,10 +237,10 @@ fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {
     let attrs_str = if attrs.is_empty() { String::new() } else { format!(" {attrs}") };
 
     let params_str = func.params.into_iter()
-        .map(|(reg, ty)| format!("{} {reg}", emit_type(ty)))
+        .map(|(reg, ty)| format!("{} {reg}", emit_type(&ty)))
         .collect::<Vec<_>>()
         .join(", ");
-    emitln!(cx, "define {} @{}({params_str}){attrs_str} {{", emit_type(func.return_type), func.name);
+    emitln!(cx, "define {} @{}({params_str}){attrs_str} {{", emit_type(&func.return_type), func.name);
     func.blocks.into_iter().for_each(|block| emit_block(cx, block));
     emitln!(cx, "}}");
 }
@@ -236,10 +256,10 @@ fn emit_extern<'a>(cx: &mut EmitCtx, ext: ExternDecl<'a>) {
     let attrs_str = if attrs.is_empty() { String::new() } else { format!(" {attrs}") };
 
     let params_str = ext.params.into_iter()
-        .map(emit_type)
+        .map(|ty| emit_type(&ty))
         .collect::<Vec<_>>()
         .join(", ");
-    emitln!(cx, "declare {} @{}({params_str}){attrs_str}", emit_type(ext.return_type), ext.name);
+    emitln!(cx, "declare {} @{}({params_str}){attrs_str}", emit_type(&ext.return_type), ext.name);
 }
 
 fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
@@ -258,6 +278,7 @@ declare i32 @llvm.fptosi.sat.i32.f64(double)
 declare i32 @llvm.fptoui.sat.i32.f64(double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare i64 @llvm.fptoui.sat.i64.f64(double)
+
 "#;
 
 pub fn emit<'a>(module: Module<'a>) -> String {

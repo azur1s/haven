@@ -168,7 +168,25 @@ pub enum Type<'a> {
     },
     Pointer(Box<Self>),
     Slice(Box<Self>),
+    Simd(Box<Self>, usize),
     Defined(&'a str),
+}
+
+impl<'a> Type<'a> {
+    pub fn is_numeric(&self) -> bool {
+        matches!(self,
+            Type::Int32 | Type::Int64
+            | Type::Uint32 | Type::Uint64
+            | Type::Float32 | Type::Float64)
+    }
+
+    pub fn is_integer(&self) -> bool {
+        matches!(self, Type::Int32 | Type::Int64 | Type::Uint32 | Type::Uint64)
+    }
+
+    pub fn is_numeric_or_numeric_simd(&self) -> bool {
+        self.is_numeric() || matches!(self, Type::Simd(inner, _) if inner.is_numeric())
+    }
 }
 
 impl<'a> Display for Type<'a> {
@@ -186,6 +204,7 @@ impl<'a> Display for Type<'a> {
             },
             Pointer(inner) => write!(f, "*{}", inner),
             Slice(inner) => write!(f, "{}[]", inner),
+            Simd(inner, size) => write!(f, "simd[{}, {}]", inner, size),
             Defined(name) => write!(f, "{}", name),
         }
     }

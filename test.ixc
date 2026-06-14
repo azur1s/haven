@@ -1,10 +1,34 @@
 @inline(always) extern print_float(f: f32) void;
 
+// First-order IIR lowpass filters
+// Updates state in-place and returns the filtered sample
+// coeff close to 1.0 = slow response, close to 0.0 = fast response
 proc lowpass(state: *f32, x: f32, coeff: f32) f32 {
     *state = coeff * *state + (1.0 - coeff) * x;
     return *state;
 }
 
+// Apply a gain to a buffer of samples using SIMD where possible
+// Processes 4 samples at a time, with a scalar fallback for the remainder
+proc apply_gain_simd(buf: *[]f32, gain: f32) {
+    let v_gain: simd<f32, 4> = simd_splat(f32, 4, gain);
+    let n: i32 = len(*buf);
+    let i: i32 = 0;
+
+    while (i + 4 <= n) {
+        let v: simd<f32, 4> = simd_load(f32, 4, *buf, i);
+        simd_store(f32, 4, *buf, i, v * v_gain);
+        i = i + 4;
+    }
+
+    // Scalar tail for remainder
+    while (i < n) {
+        (*buf)[i] = (*buf)[i] * gain;
+        i = i + 1;
+    }
+}
+
+// Process a buffer
 @alloc(false)
 @export
 proc process(buffer: *[]f32, state: *f32) {
@@ -14,22 +38,25 @@ proc process(buffer: *[]f32, state: *f32) {
         (*buffer)[i] = lowpass(state, (*buffer)[i], coeff);
         i = i + 1;
     }
+    apply_gain_simd(buffer, 0.5);
 }
 
 proc main() {
-    let dspbuf: []f32 = [1.0, 0.9, 0.5, 0.1, 0.0];
+    let buffer: []f32 = [1.0, 0.9, 0.5, 0.1, 0.0, 0.1];
     let state: f32 = 0.0;
-    process(&dspbuf, &state);
+    process(&buffer, &state);
+
+    // Expected output (lowpass then * 0.5):
+    // 0.100000
+    // 0.170000
+    // 0.186000
+    // 0.158800
+    // 0.127040
+    // 0.111632
 
     let i: i32 = 0;
-    while (i < len(dspbuf)) {
-        print_float(dspbuf[i]);
+    while (i < len(buffer)) {
+        print_float(buffer[i]);
         i = i + 1;
     }
-
-    // 0.2000
-    // 0.3400
-    // 0.3720
-    // 0.3176
-    // 0.25408
 }

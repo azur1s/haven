@@ -47,6 +47,34 @@ fn typecheck_intrinsic<'a>(
     span: Span,
     expr_id: usize,
 ) -> Result<Type<'a>, Error> {
+    // let is_simd_compatible = |expr: &Expr<'a>| -> Result<Type<'a>, Error> {
+    macro_rules! is_simd_compatible {
+        ($expr:expr) => {
+            match &($expr).value {
+                ExprNode::Var(name) => match *name {
+                    "i32" => Ok(Type::Int32),
+                    "i64" => Ok(Type::Int64),
+                    "u32" => Ok(Type::Uint32),
+                    "u64" => Ok(Type::Uint64),
+                    "f32" => Ok(Type::Float32),
+                    "f64" => Ok(Type::Float64),
+                    _ => {
+                        Err(Error {
+                            msg: format!("{}() first argument must be a SIMD compatible type`", intrinsic),
+                            span: span.clone(),
+                        })
+                    }
+                }
+                _ => {
+                    Err(Error {
+                        msg: format!("{}() first argument must be a SIMD compatible type`", intrinsic),
+                        span: span.clone(),
+                    })
+                }
+            }
+        }
+    }
+
     match intrinsic {
         Intrinsic::Len => {
             if args.len() != 1 {
@@ -91,7 +119,7 @@ fn typecheck_intrinsic<'a>(
             };
 
             // check if target_width is equal or wider than value_ty
-            if !is_numeric(&value_ty) {
+            if value_ty.is_numeric() {
                 return Err(Error {
                     msg: format!("width_cast() first argument must be a numeric type, got {}", value_ty),
                     span,
@@ -100,6 +128,195 @@ fn typecheck_intrinsic<'a>(
 
             cx.node_types.insert(expr_id, target_ty.clone());
             Ok(target_ty)
+        }
+        Intrinsic::SimdSplat => {
+            if args.len() != 3 {
+                return Err(Error { msg: "simd_splat() takes exactly three arguments".into(), span });
+            }
+
+            let ty = is_simd_compatible!(&args[0])?;
+            let size = match &args[1].value {
+                ExprNode::Int32(x) if *x > 0 && *x <= 64 => *x as usize,
+                _ => {
+                    return Err(Error {
+                        msg: "simd_splat() second argument must be a positive integer literal between 1 and 64".into(),
+                        span,
+                    });
+                }
+             };
+
+             let value_ty = infer(cx, &args[2])?;
+             if value_ty != ty {
+                 return Err(Error {
+                     msg: format!("simd_splat() third argument must be of the element type, got {}", value_ty),
+                     span,
+                 });
+             }
+
+             let simd_ty = Type::Simd(Box::new(ty), size);
+             cx.node_types.insert(expr_id, simd_ty.clone());
+             Ok(simd_ty)
+        }
+        Intrinsic::SimdLoad => {
+            if args.len() != 4 {
+                return Err(Error { msg: "simd_load() takes exactly four arguments".into(), span });
+            }
+
+            let ty = is_simd_compatible!(&args[0])?;
+            let size = match &args[1].value {
+                ExprNode::Int32(x) if *x > 0 && *x <= 64 => *x as usize,
+                _ => {
+                    return Err(Error {
+                        msg: "simd_load() second argument must be a positive integer literal between 1 and 64".into(),
+                        span,
+                    });
+                }
+            };
+
+            let slice_ty = infer(cx, &args[2])?;
+            let offset_ty = infer(cx, &args[3])?;
+
+            if !offset_ty.is_integer() {
+                return Err(Error {
+                    msg: format!("simd_load() fourth argument must be an integer type, got {}", offset_ty),
+                    span,
+                });
+            }
+
+            match slice_ty {
+                Type::Slice(inner) if *inner == ty => {
+                    let simd_ty = Type::Simd(Box::new(ty), size);
+                    cx.node_types.insert(expr_id, simd_ty.clone());
+                    Ok(simd_ty)
+                }
+                _ => {
+                    return Err(Error {
+                        msg: format!("simd_load() third argument must be a slice of the element type, got {}", slice_ty),
+                        span,
+                    });
+                }
+            }
+        }
+        Intrinsic::SimdStore => {
+            if args.len() != 5 {
+                return Err(Error { msg: "simd_store() takes exactly five arguments".into(), span });
+            }
+
+            let ty = is_simd_compatible!(&args[0])?;
+            let size = match &args[1].value {
+                ExprNode::Int32(x) if *x > 0 && *x <= 64 => *x as usize,
+                _ => {
+                    return Err(Error {
+                        msg: "simd_store() second argument must be a positive integer literal between 1 and 64".into(),
+                        span,
+                    });
+                }
+            };
+
+            let slice_ty = infer(cx, &args[2])?;
+            let offset_ty = infer(cx, &args[3])?;
+            let value_ty = infer(cx, &args[4])?;
+
+            if !offset_ty.is_integer() {
+                return Err(Error {
+                    msg: format!("simd_store() fourth argument must be an integer type, got {}", offset_ty),
+                    span,
+                });
+            }
+
+            let expected_value_ty = Type::Simd(Box::new(ty.clone()), size);
+            if value_ty != expected_value_ty {
+                return Err(Error {
+                    msg: format!("simd_store() fifth argument must be a SIMD vector of the element type and size, got {}", value_ty),
+                    span,
+                });
+            }
+
+            match slice_ty {
+                Type::Slice(inner) if *inner == ty => Ok(Type::Void),
+                _ => {
+                    return Err(Error {
+                        msg: format!("simd_store() third argument must be a slice of the element type, got {}", slice_ty),
+                        span,
+                    });
+                }
+            }
+        }
+        Intrinsic::SimdConcat => {
+            if args.len() != 4 {
+                return Err(Error { msg: "simd_concat() takes exactly four arguments".into(), span });
+            }
+
+            let ty = is_simd_compatible!(&args[0])?;
+            let size = match &args[1].value {
+                ExprNode::Int32(x) if *x > 0 && *x <= 64 && *x % 2 == 0 => *x as usize,
+                _ => {
+                    return Err(Error {
+                        msg: "simd_concat() second argument must be an even positive integer literal between 1 and 64".into(),
+                        span,
+                    });
+                }
+            };
+
+            let value1_ty = infer(cx, &args[2])?;
+            let value2_ty = infer(cx, &args[3])?;
+
+            let expected_value_ty = Type::Simd(Box::new(ty.clone()), size / 2);
+            if value1_ty != expected_value_ty {
+                return Err(Error {
+                    msg: format!("simd_concat() third argument must be a SIMD vector of the element type and half the size, got {}", value1_ty),
+                    span,
+                });
+            }
+            if value2_ty != expected_value_ty {
+                return Err(Error {
+                    msg: format!("simd_concat() fourth argument must be a SIMD vector of the element type and half the size, got {}", value2_ty),
+                    span,
+                });
+            }
+
+            let result_ty = Type::Simd(Box::new(ty), size);
+            cx.node_types.insert(expr_id, result_ty.clone());
+            Ok(result_ty)
+        }
+        Intrinsic::SimdLow | Intrinsic::SimdHigh => {
+            // simd_low/high(f32, N, value: simd[f32, M]) -> simd[f32, N] where N < M
+            let fn_str = match intrinsic {
+                Intrinsic::SimdLow => "simd_low",
+                Intrinsic::SimdHigh => "simd_high",
+                _ => unreachable!(),
+            };
+            if args.len() != 3 {
+                return Err(Error { msg: format!("{}() takes exactly three arguments", fn_str), span });
+            }
+
+            let ty = is_simd_compatible!(&args[0])?;
+
+            let size = match &args[1].value {
+                ExprNode::Int32(x) if *x > 0 && *x <= 64 && *x % 2 == 0 => *x as usize,
+                _ => {
+                    return Err(Error {
+                        msg: format!("{}() second argument must be an even positive integer literal between 1 and 64", fn_str),
+                        span,
+                    });
+                }
+            };
+
+            let value_ty = infer(cx, &args[2])?;
+            // Only check if inner type is the same, because size can be different
+            match value_ty {
+                Type::Simd(inner_ty, inner_size) if *inner_ty == ty && inner_size > size => {
+                    let result_ty = Type::Simd(Box::new(ty), size);
+                    cx.node_types.insert(expr_id, result_ty.clone());
+                    Ok(result_ty)
+                }
+                _ => {
+                    return Err(Error {
+                        msg: format!("{}() third argument must be a SIMD vector of the element type and larger size, got {}", fn_str, value_ty),
+                        span,
+                    });
+                }
+            }
         }
     }
 }
@@ -153,17 +370,6 @@ pub fn check_expr<'a>(
     Ok(())
 }
 
-fn is_integer(ty: &Type) -> bool {
-    matches!(ty, Type::Int32 | Type::Int64 | Type::Uint32 | Type::Uint64)
-}
-
-fn is_numeric(ty: &Type) -> bool {
-    matches!(ty,
-        Type::Int32 | Type::Int64
-        | Type::Uint32 | Type::Uint64
-        | Type::Float32 | Type::Float64)
-}
-
 pub fn infer<'a>(
     cx: &mut Context<'a>,
     expr: &Expr<'a>,
@@ -212,7 +418,7 @@ pub fn infer<'a>(
         ExprNode::Index { slice, index } => {
             let slice_ty = infer(cx, slice)?;
             let index_ty = infer(cx, index)?;
-            if !is_integer(&index_ty) {
+            if !index_ty.is_integer() {
                 let msg = format!(
                     "Expected index of type i32, got {}",
                     index_ty
@@ -254,7 +460,7 @@ pub fn infer<'a>(
                         });
                     }
                 },
-                UnaryOp::Neg => if is_numeric(&operand_ty) {
+                UnaryOp::Neg => if operand_ty.is_numeric() {
                     operand_ty
                 } else {
                     let msg = format!(
@@ -282,18 +488,18 @@ pub fn infer<'a>(
                 | Lt | Gt | Le | Ge => {
                     let left_ty = infer(cx, left)?;
                     check_expr(cx, &left_ty, right)?;
-                    if !is_numeric(&left_ty) {
+
+                    // check if both are numeric (scalar or SIMD)
+                    if !left_ty.is_numeric_or_numeric_simd() {
                         let msg = format!(
                             "Expected a numeric type for binary operator, got {}",
                             left_ty
                         );
-                        return Err(Error {
-                            msg,
-                            span,
-                        });
+                        return Err(Error { msg, span });
                     }
+
                     match op {
-                        Add | Sub | Mul | Div | Mod => left_ty,
+                        Add | Sub | Mul | Div | Mod => left_ty, // returns scalar or SIMD
                         Lt | Gt | Le | Ge => Type::Bool,
                         _ => unreachable!(),
                     }

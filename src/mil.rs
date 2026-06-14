@@ -91,11 +91,11 @@ pub enum Inst<'a> {
     ExtractValue { dst: Register, val: Value, index: usize },
 
     // %dst = alloca ty (for mutable locals, if needed)
-    Alloca { dst: Register, ty: Type<'a> },
+    Alloca { dst: Register, ty: Type<'a>, align: Option<usize> },
     // store ty %val, ptr %ptr
-    Store { ptr: Register, val: Value, ty: Type<'a> },
-    // %dst = load %ptr
-    Load { dst: Register, ptr: Register, ty: Type<'a> },
+    Store { ptr: Register, val: Value, ty: Type<'a>, align: Option<usize> },
+    // %dst = load ty %ptr
+    Load { dst: Register, ptr: Register, ty: Type<'a>, align: Option<usize> },
 
     // since Type doesn't encode length for slices and I'm too lazy to change it
     // %dst = alloca [length x ty]
@@ -103,8 +103,12 @@ pub enum Inst<'a> {
     // %dst = getelemptr [length X ty] %array, %index
     IndexArray { dst: Register, ty: Type<'a>, length: usize, array: Register, index: usize },
 
-    // Intrinsic related instructions
+    // Intrinsic/SIMD related instructions
     Extend { dst: Register, val: Value, from_ty: Type<'a>, to_ty: Type<'a> },
+    // %v0 = insertelement ty(simd) undef, %value, 0
+    Splat { dst: Register, val: Value, ty: Type<'a>, size: usize },
+    // %dst = shufflevector ty(simd) %v0, ty(simd) %v1, <size x i32> <mask>
+    Shuffle { dst: Register, value_size: usize, v0: Value, v1: Value, ty: Type<'a>, size: usize, mask: Vec<usize> },
 }
 
 #[derive(Clone, Debug)]
@@ -218,7 +222,7 @@ fn lower_intrinsic<'a>(
             Value::Reg(dst)
         }
         Intrinsic::Bitcast => {
-                let val = lower_expr(cx, &args[0]);
+            let val = lower_expr(cx, &args[0]);
             let from_ty = cx.node_types[&args[0].id].clone();
             let to_ty = match &args[1].value {
                 ExprNode::Var("i32") => Type::Int32,
@@ -231,6 +235,180 @@ fn lower_intrinsic<'a>(
             };
             let dst = cx.fresh_reg();
             cx.emit(Inst::Extend { dst, val, from_ty, to_ty });
+            Value::Reg(dst)
+        }
+        Intrinsic::SimdSplat => {
+            let ty = match &args[0].value {
+                ExprNode::Var(name) => match *name {
+                    "i32" => Type::Int32,
+                    "i64" => Type::Int64,
+                    "u32" => Type::Uint32,
+                    "u64" => Type::Uint64,
+                    "f32" => Type::Float32,
+                    "f64" => Type::Float64,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+            let size = match &args[1].value {
+                ExprNode::Int32(n) => *n as usize,
+                _ => unreachable!(),
+            };
+            let value_val = lower_expr(cx, &args[2]);
+
+            let v0 = cx.fresh_reg();
+            cx.emit(Inst::Splat { dst: v0, val: value_val, ty: ty.clone(), size });
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Shuffle {
+                dst,
+                value_size: size,
+                v0: Value::Reg(v0),
+                v1: Value::Const(Const::Undef),
+                ty, size,
+                mask: vec![0; size],
+            });
+            Value::Reg(dst)
+        }
+        Intrinsic::SimdLoad => {
+            // simd_load(T, N, slice, offset) -> T where T = simd[T, N]
+            let ty = match &args[0].value {
+                ExprNode::Var(name) => match *name {
+                    "i32" => Type::Int32,
+                    "i64" => Type::Int64,
+                    "u32" => Type::Uint32,
+                    "u64" => Type::Uint64,
+                    "f32" => Type::Float32,
+                    "f64" => Type::Float64,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+            let size = match &args[1].value {
+                ExprNode::Int32(n) => *n as usize,
+                _ => unreachable!(),
+            };
+            let slice_val = lower_expr(cx, &args[2]);
+            let offset_val = lower_expr(cx, &args[3]);
+
+            // extract the data pointer from the fat pointer struct
+            let data_ptr = cx.fresh_reg();
+            cx.emit(Inst::Comment(format!("simd_load")));
+            cx.emit(Inst::ExtractValue { dst: data_ptr, val: slice_val, index: 0 });
+            // get the element pointer with the offset
+            let elem_ptr = cx.fresh_reg();
+            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, element_ty: ty.clone() });
+            // load the SIMD vector from the element pointer
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Load { dst, ptr: elem_ptr, ty: Type::Simd(Box::new(ty), size), align: None });
+            Value::Reg(dst)
+        }
+        Intrinsic::SimdStore => {
+            // simd_store(T, N, slice, offset, value) -> () where T = simd[T, N]
+            let ty = match &args[0].value {
+                ExprNode::Var(name) => match *name {
+                    "i32" => Type::Int32,
+                    "i64" => Type::Int64,
+                    "u32" => Type::Uint32,
+                    "u64" => Type::Uint64,
+                    "f32" => Type::Float32,
+                    "f64" => Type::Float64,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+            let size = match &args[1].value {
+                ExprNode::Int32(n) => *n as usize,
+                _ => unreachable!(),
+            };
+            let slice_val = lower_expr(cx, &args[2]);
+            let offset_val = lower_expr(cx, &args[3]);
+            let value_val = lower_expr(cx, &args[4]);
+
+            // extract the data pointer from the fat pointer struct
+            let data_ptr = cx.fresh_reg();
+            cx.emit(Inst::ExtractValue { dst: data_ptr, val: slice_val, index: 0 });
+            // get the element pointer with the offset
+            let elem_ptr = cx.fresh_reg();
+            cx.emit(Inst::Comment(format!("simd_store")));
+            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, element_ty: ty.clone() });
+            // store the SIMD vector to the element pointer
+            cx.emit(Inst::Store { ptr: elem_ptr, val: value_val, ty: Type::Simd(Box::new(ty), size), align: None });
+            Value::Const(Const::Undef) // placeholder since void return
+        }
+        Intrinsic::SimdConcat => {
+            let ty = match &args[0].value {
+                ExprNode::Var(name) => match *name {
+                    "i32" => Type::Int32,
+                    "i64" => Type::Int64,
+                    "u32" => Type::Uint32,
+                    "u64" => Type::Uint64,
+                    "f32" => Type::Float32,
+                    "f64" => Type::Float64,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+            let size = match &args[1].value {
+                ExprNode::Int32(n) => *n as usize,
+                _ => unreachable!(),
+            };
+            let value1_val = lower_expr(cx, &args[2]);
+            let value2_val = lower_expr(cx, &args[3]);
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Comment(format!("simd_concat({}, {}, ..., ...)", ty, size)));
+            cx.emit(Inst::Shuffle {
+                dst,
+                value_size: match cx.node_types[&args[2].id] {
+                    Type::Simd(_, s) => s,
+                    _ => unreachable!(),
+                },
+                v0: value1_val,
+                v1: value2_val,
+                ty,
+                size,
+                mask: (0..size).collect(),
+            });
+            Value::Reg(dst)
+        }
+        Intrinsic::SimdLow
+        | Intrinsic::SimdHigh => {
+            // simd_low(T, N, value) -> T where T = simd[T, N]
+            let ty = match &args[0].value {
+                ExprNode::Var(name) => match *name {
+                    "i32" => Type::Int32,
+                    "i64" => Type::Int64,
+                    "u32" => Type::Uint32,
+                    "u64" => Type::Uint64,
+                    "f32" => Type::Float32,
+                    "f64" => Type::Float64,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+            let size = match &args[1].value {
+                ExprNode::Int32(n) => *n as usize,
+                _ => unreachable!(),
+            };
+            let value_val = lower_expr(cx, &args[2]);
+
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Comment(format!("{}({}, {}, ...)", intrinsic, ty, size)));
+            cx.emit(Inst::Shuffle {
+                dst,
+                value_size: match cx.node_types[&args[2].id] {
+                    Type::Simd(_, s) => s,
+                    _ => unreachable!(),
+                },
+                v0: value_val,
+                v1: Value::Const(Const::Undef),
+                ty,
+                size,
+                mask: match intrinsic {
+                    Intrinsic::SimdLow => (0..size).collect(),
+                    Intrinsic::SimdHigh => (size..size*2).collect(),
+                    _ => unreachable!(),
+                },
+            });
             Value::Reg(dst)
         }
     }
@@ -251,7 +429,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             // match ty {
             //     Type::Pointer(_) => {
                     let dst = cx.fresh_reg();
-                    cx.emit(Inst::Load { dst, ptr: reg, ty });
+                    cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
                     Value::Reg(dst)
             //     }
             //     _ => Value::Reg(reg),
@@ -288,7 +466,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 });
 
                 let elem_val = lower_expr(cx, element);
-                cx.emit(Inst::Store { ptr, val: elem_val, ty: ty.clone() });
+                cx.emit(Inst::Store { ptr, val: elem_val, ty: ty.clone(), align: None });
             }
 
             // construct fat pointer struct { ptr, len }
@@ -326,7 +504,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 _ => unreachable!(),
             };
             let dst = cx.fresh_reg();
-            cx.emit(Inst::Load { dst, ptr: ptr_reg, ty });
+            cx.emit(Inst::Load { dst, ptr: ptr_reg, ty, align: None });
             Value::Reg(dst)
         }
 
@@ -398,7 +576,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: index_val, element_ty: element_ty.clone() });
 
             let dst = cx.fresh_reg();
-            cx.emit(Inst::Load { dst, ptr: elem_ptr, ty: element_ty });
+            cx.emit(Inst::Load { dst, ptr: elem_ptr, ty: element_ty, align: None });
 
             Value::Reg(dst)
         }
@@ -454,14 +632,14 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
         StmtNode::Declare { name, ty, value } => {
             let val = lower_expr(cx, value);
             let (ptr, _) = cx.env[name]; // already alloca'd
-            cx.emit(Inst::Store { ptr, val, ty: ty.clone() });
+            cx.emit(Inst::Store { ptr, val, ty: ty.clone(), align: None });
         }
 
         StmtNode::Assign { left, value } => {
             let ptr = lower_lvalue(cx, left);  // see below
             let val = lower_expr(cx, value);
             let ty = cx.node_types[&left.id].clone();
-            cx.emit(Inst::Store { ptr, val, ty });
+            cx.emit(Inst::Store { ptr, val, ty, align: None });
         }
 
         StmtNode::If { condition, then_branch, else_branch } => {
@@ -512,10 +690,10 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                 // the value into a register first to branch on it
                 v => {
                     let r = cx.fresh_reg();
-                    cx.emit(Inst::Alloca { dst: r, ty: Type::Bool });
-                    cx.emit(Inst::Store { ptr: r, val: v, ty: Type::Bool });
+                    cx.emit(Inst::Alloca { dst: r, ty: Type::Bool, align: None });
+                    cx.emit(Inst::Store { ptr: r, val: v, ty: Type::Bool, align: None });
                     let s = cx.fresh_reg();
-                    cx.emit(Inst::Load { dst: s, ptr: r, ty: Type::Bool });
+                    cx.emit(Inst::Load { dst: s, ptr: r, ty: Type::Bool, align: None });
                     s
                 }
             };
@@ -579,8 +757,8 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                 let param_reg = cx.fresh_reg();
                 let param_ptr = cx.fresh_reg();
                 cx.emit(Inst::Comment(format!("params {}: {}", name, ty)));
-                cx.emit(Inst::Alloca { dst: param_ptr, ty: ty.clone() });
-                cx.emit(Inst::Store { ptr: param_ptr, val: Value::Reg(param_reg), ty: ty.clone() });
+                cx.emit(Inst::Alloca { dst: param_ptr, ty: ty.clone(), align: None });
+                cx.emit(Inst::Store { ptr: param_ptr, val: Value::Reg(param_reg), ty: ty.clone(), align: None });
 
                 param_regs.push((param_reg, ty.clone()));
                 cx.env.insert(name, (param_ptr, ty.clone()));
@@ -595,7 +773,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
             for (name, ty) in locals {
                 let local_reg = cx.fresh_reg();
                 cx.emit(Inst::Comment(format!("local {}: {}", name, ty)));
-                cx.emit(Inst::Alloca { dst: local_reg, ty: ty.clone() });
+                cx.emit(Inst::Alloca { dst: local_reg, ty: ty.clone(), align: None });
                 cx.env.insert(name, (local_reg, ty.clone()));
             }
 
