@@ -321,7 +321,7 @@ fn typecheck_intrinsic<'a>(
     }
 }
 
-pub fn check_expr<'a>(
+fn check_expr<'a>(
     cx: &mut Context<'a>,
     expected: &Type<'a>,
     expr: &Expr<'a>,
@@ -370,7 +370,7 @@ pub fn check_expr<'a>(
     Ok(())
 }
 
-pub fn infer<'a>(
+fn infer<'a>(
     cx: &mut Context<'a>,
     expr: &Expr<'a>,
 ) -> Result<Type<'a>, Error> {
@@ -564,7 +564,7 @@ pub fn infer<'a>(
     Ok(ty)
 }
 
-pub fn check_stmt<'a>(
+fn check_stmt<'a>(
     cx: &mut Context<'a>,
     return_ty: &Type<'a>,
     stmt: &Stmt<'a>,
@@ -622,12 +622,48 @@ pub fn check_stmt<'a>(
     Ok(())
 }
 
+fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
+    match ty {
+        Type::Slice(inner) =>
+            Err(format!("slice type '{}' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", ty, inner)),
+        Type::Pointer(inner) => check_export_type(inner), // recurse: *[]f32 is also banned
+        Type::Simd(_, _) =>
+            Err(format!("SIMD type '{}' is not allowed in @export functions because its calling convention is target-specific and not guaranteed to match the expected caller, or that's what I'm told", ty)),
+        Type::Function { .. } =>
+            Err("function pointer types are not supported in @export functions".into()),
+        Type::Defined(_) =>
+            Err(format!("user-defined type '{}' has unknown layout and cannot be used in @export functions", ty)),
+        // these are all fine across FFI
+        Type::Void | Type::Bool
+        | Type::Int32 | Type::Int64
+        | Type::Uint32 | Type::Uint64
+        | Type::Float32 | Type::Float64 => Ok(()),
+    }
+}
+
 fn check_toplevel<'a>(
     cx: &mut Context<'a>,
     node: &TopLevel<'a>,
 ) -> Result<(), Error> {
     match &node.value {
-        TopLevelNode::Function { name, params, return_type, body, .. } => {
+        TopLevelNode::Function { name, attributes, params, return_type, body, .. } => {
+            if attributes.iter().any(|a| a.value.name == "export") {
+                for (param_name, ty) in params {
+                    if let Err(msg) = check_export_type(ty) {
+                        return Err(Error {
+                            msg: format!("parameter '{}' in @export function '{}': {}", param_name, name, msg),
+                            span: node.span.clone(),
+                        });
+                    }
+                }
+                if let Err(msg) = check_export_type(return_type) {
+                    return Err(Error {
+                        msg: format!("return type in @export function '{}': {}", name, msg),
+                        span: node.span.clone(),
+                    });
+                }
+            }
+
             cx.push_scope();
 
             // Push params into scope
