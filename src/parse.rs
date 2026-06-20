@@ -66,15 +66,17 @@ fn lexer<'a> (
     //     .map(Token::Str);
 
     let ident = text::ascii::ident().map(|ident: &str| match ident {
-        "true"   => Token::Bool(true),
-        "false"  => Token::Bool(false),
-        "let"    => Token::Let,
-        "if"     => Token::If,
-        "else"   => Token::Else,
-        "while"  => Token::While,
-        "return" => Token::Return,
-        "proc"   => Token::Proc,
-        "extern" => Token::Extern,
+        "true"     => Token::Bool(true),
+        "false"    => Token::Bool(false),
+        "let"      => Token::Let,
+        "if"       => Token::If,
+        "else"     => Token::Else,
+        "return"   => Token::Return,
+        "while"    => Token::While,
+        "break"    => Token::Break,
+        "continue" => Token::Continue,
+        "proc"     => Token::Proc,
+        "extern"   => Token::Extern,
         _ => Token::Var(ident),
     });
 

@@ -2,9 +2,9 @@
 pub enum Intrinsic {
     /// `len(slice) -> usize`
     Len,
-    /// Direct bitwise casting, will never panic but will wrap around silently
-    /// `bitcast(0, iN, uN, fN) -> iN/uN/fN`
-    Bitcast,
+    /// Numerical type cast
+    /// `numerical_cast(0, iN, uN, fN) -> iN/uN/fN`
+    NumericalCast,
 
     /// `simd_splat(T, N, value) -> T where T = simd[T, N]`
     /// e.g. `value = simd_splat(f32, 4, 1.0) -> simd[f32, 4] (1.0, 1.0, 1.0, 1.0)`
@@ -28,7 +28,7 @@ impl Intrinsic {
     pub fn lookup(name: &str) -> Option<Self> {
         match name {
             "len" => Some(Self::Len),
-            "bitcast" => Some(Self::Bitcast),
+            "numerical_cast" => Some(Self::NumericalCast),
             "simd_splat" => Some(Self::SimdSplat),
             "simd_load" => Some(Self::SimdLoad),
             "simd_store" => Some(Self::SimdStore),
@@ -44,7 +44,7 @@ impl std::fmt::Display for Intrinsic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
             Self::Len => "len",
-            Self::Bitcast => "bitcast",
+            Self::NumericalCast => "numerical_cast",
             Self::SimdSplat => "simd_splat",
             Self::SimdLoad => "simd_load",
             Self::SimdStore => "simd_store",

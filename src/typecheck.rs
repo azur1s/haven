@@ -90,9 +90,9 @@ fn typecheck_intrinsic<'a>(
             cx.node_types.insert(expr_id, Type::Int32);
             Ok(Type::Int32)
         }
-        Intrinsic::Bitcast => {
+        Intrinsic::NumericalCast => {
             if args.len() != 2 {
-                return Err(Error { msg: "bitcast() takes exactly two arguments".into(), span });
+                return Err(Error { msg: "numerical_cast() takes exactly two arguments".into(), span });
             }
             let value_ty = infer(cx, &args[0])?;
             let target_ty = match &args[1].value {
@@ -105,23 +105,23 @@ fn typecheck_intrinsic<'a>(
                     "f64" => Type::Float64,
                     _ => {
                         return Err(Error {
-                            msg: "width_cast() second argument must be `iN`, `uN` or `fN`".into(),
+                            msg: "numerical_cast() second argument must be `iN`, `uN` or `fN`".into(),
                             span,
                         });
                     }
                 }
                 _ => {
                     return Err(Error {
-                        msg: "width_cast() second argument must be `iN`, `uN` or `fN`".into(),
+                        msg: "numerical_cast() second argument must be `iN`, `uN` or `fN`".into(),
                         span,
                     });
                 }
             };
 
-            // check if target_width is equal or wider than value_ty
-            if value_ty.is_numeric() {
+            if !value_ty.is_numeric() {
+                println!("{value_ty:?}");
                 return Err(Error {
-                    msg: format!("width_cast() first argument must be a numeric type, got {}", value_ty),
+                    msg: format!("numerical_cast() first argument must be a numeric type, got {}", value_ty),
                     span,
                 });
             }
@@ -676,19 +676,10 @@ fn check_toplevel<'a>(
             }
 
             cx.pop_scope();
-            cx.insert(name, Type::Function {
-                params: params.iter().map(|(_, ty)| ty.clone()).collect(),
-                return_type: Box::new(return_type.clone()),
-            });
         }
 
         // Extern declarations have no body to check
-        TopLevelNode::Extern { name, params, return_type, .. } => {
-            cx.insert(name, Type::Function {
-                params: params.iter().map(|(_, ty)| ty.clone()).collect(),
-                return_type: Box::new(return_type.clone()),
-            });
-        }
+        TopLevelNode::Extern { .. } => {}
     }
 
     Ok(())
@@ -697,6 +688,19 @@ fn check_toplevel<'a>(
 pub fn typecheck_program<'a>(program: &[TopLevel<'a>]) -> (Vec<Error>, HashMap<usize, Type<'a>>) {
     let mut cx = Context::new();
     let mut errors = Vec::new();
+
+    // forward declaration pass
+    for node in program {
+        match &node.value {
+            TopLevelNode::Function { name, params, return_type, .. }
+            | TopLevelNode::Extern { name, params, return_type, .. } => {
+                cx.insert(name, Type::Function {
+                    params: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                    return_type: Box::new(return_type.clone()),
+                });
+            }
+        }
+    }
 
     for node in program {
         if let Err(err) = check_toplevel(&mut cx, node) {

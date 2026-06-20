@@ -74,7 +74,8 @@ pub enum Token<'a> {
     Dot, Comma, Semicolon,
     Colon, Assign, At,
 
-    Let, If, Else, While, Return,
+    Let, If, Else, Return,
+    While, Break, Continue,
     Proc, Extern
 }
 
@@ -106,8 +107,10 @@ impl Display for Token<'_> {
             Token::Let          => write!(f, "let"),
             Token::If           => write!(f, "if"),
             Token::Else         => write!(f, "else"),
-            Token::While        => write!(f, "while"),
             Token::Return       => write!(f, "return"),
+            Token::While        => write!(f, "while"),
+            Token::Break        => write!(f, "break"),
+            Token::Continue     => write!(f, "continue"),
             Token::Proc         => write!(f, "proc"),
             Token::Extern       => write!(f, "extern"),
         }

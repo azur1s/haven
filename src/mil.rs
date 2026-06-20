@@ -221,7 +221,7 @@ fn lower_intrinsic<'a>(
             cx.emit(Inst::ExtractValue { dst, val: slice_val, index: 1 });
             Value::Reg(dst)
         }
-        Intrinsic::Bitcast => {
+        Intrinsic::NumericalCast => {
             let val = lower_expr(cx, &args[0]);
             let from_ty = cx.node_types[&args[0].id].clone();
             let to_ty = match &args[1].value {
