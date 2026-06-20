@@ -299,7 +299,7 @@ fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {
             _ => None,
         }).collect::<Vec<_>>()
         .join(" ");
-    let linkage = if export { "dso_local" } else { "internal" };
+    let linkage = if export { "dso_local dllexport" } else { "internal" };
     let attrs_str = if attrs.is_empty() { String::new() } else { format!(" {attrs}") };
 
     let params_str = func.params.into_iter()

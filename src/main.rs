@@ -48,6 +48,28 @@ fn main() {
         if let Some(ast) = ast.filter(|_| errors.len() + parse_errs.len() == 0) {
             let (typecheck_errs, node_types) = typecheck::typecheck_program(&ast);
 
+            // check if there is no main function when compiling an executable
+            if !args.shared && !args.static_lib {
+                let main_fn = ast.iter().find_map(|item| {
+                    if let ast::TopLevelNode::Function { name, .. } = item.value {
+                        if name == "main" {
+                            Some(())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                });
+
+                if main_fn.is_none() {
+                    eprintln!("Error: No 'main' function exported");
+                    eprintln!("If you intended to compile a shared/static library, use the --shared or --static-lib flag.");
+                    eprintln!("Otherwise, add a 'main' function to your program and an @export attribute to it.");
+                    std::process::exit(1);
+                }
+            }
+
             if !typecheck_errs.is_empty() {
                 typecheck_errs.into_iter()
                     .for_each(|typecheck::Error { msg, span, .. }| {
@@ -100,13 +122,23 @@ fn main() {
 
                 let status = if args.shared {
                     println!("Compiling as a shared library...");
+
+                    #[cfg(target_os = "windows")]
+                    let shared_output_path = args.output.with_extension("dll");
+                    #[cfg(target_os = "macos")]
+                    let shared_output_path = args.output.with_extension("dylib");
+                    #[cfg(target_os = "linux")]
+                    let shared_output_path = args.output.with_extension("so");
+                    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+                    let shared_output_path = args.output.with_extension("so"); // Default to .so for other platforms
+
                     std::process::Command::new(&args.compiler)
                         .arg(&llvm_ir_output_path)
                         .arg(temp_runtime.path())
                         .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
                         .arg("-shared")
                         .arg("-o")
-                        .arg(&args.output)
+                        .arg(&shared_output_path)
                         .status()
                         .expect("Failed to execute compiler for shared library")
                 } else if args.static_lib {

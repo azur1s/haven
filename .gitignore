@@ -1,3 +1,5 @@
 /target
 *.exe
 *.ll
+*.dll
+*.lib
