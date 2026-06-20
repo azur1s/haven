@@ -34,8 +34,49 @@ fn emit_type(ty: &Type) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FastMathFlags {
+    None,
+    Fast,
+    Reassoc,
+    NNaN,
+    NInf,
+    NSZ,
+    Arcp,
+    Contract,
+}
+
+impl FastMathFlags {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "fast"     => Some(FastMathFlags::Fast),
+            "reassoc"  => Some(FastMathFlags::Reassoc),
+            "nnan"     => Some(FastMathFlags::NNaN),
+            "ninf"     => Some(FastMathFlags::NInf),
+            "nsz"      => Some(FastMathFlags::NSZ),
+            "arcp"     => Some(FastMathFlags::Arcp),
+            "contract" => Some(FastMathFlags::Contract),
+            _ => None,
+        }
+    }
+
+    fn to_str(&self) -> &'static str {
+        match self {
+            FastMathFlags::None     => "",
+            FastMathFlags::Fast     => "fast",
+            FastMathFlags::Reassoc  => "reassoc",
+            FastMathFlags::NNaN     => "nnan",
+            FastMathFlags::NInf     => "ninf",
+            FastMathFlags::NSZ      => "nsz",
+            FastMathFlags::Arcp     => "arcp",
+            FastMathFlags::Contract => "contract",
+        }
+    }
+}
+
 struct EmitCtx {
     buf: String,
+    current_fast_math_flags: FastMathFlags,
 }
 
 impl EmitCtx {
@@ -79,28 +120,36 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                 _ => &ty,
             };
 
-            emitln!(cx, "    {dst} = {} {} {}, {}", match op {
+            let is_float = matches!(inner, Type::Float32 | Type::Float64);
+
+            let flags_str = if *inner == Type::Float32 || *inner == Type::Float64 {
+                format!(" {}", cx.current_fast_math_flags.to_str())
+            } else {
+                String::new()
+            };
+
+            emitln!(cx, "    {dst} = {}{flags_str} {} {}, {}", match op {
                 Add if *inner == Type::Int32   => "add",
-                Add if *inner == Type::Float32 => "fadd",
+                Add if is_float => "fadd",
                 Add => unreachable!("{}", ty),
                 Sub if *inner == Type::Int32   => "sub",
-                Sub if *inner == Type::Float32 => "fsub",
+                Sub if is_float => "fsub",
                 Sub => unreachable!("{}", ty),
                 Mul if *inner == Type::Int32   => "mul",
-                Mul if *inner == Type::Float32 => "fmul",
+                Mul if is_float => "fmul",
                 Mul => unreachable!("{}", ty),
                 Div if *inner == Type::Int32   => "sdiv",
-                Div if *inner == Type::Float32 => "fdiv",
+                Div if is_float => "fdiv",
                 Div => unreachable!("{}", ty),
                 Mod if *inner == Type::Int32   => "srem",
-                Mod if *inner == Type::Float32 => "frem",
+                Mod if is_float => "frem",
                 Mod => unreachable!("{}", ty),
-                Eq if *inner == Type::Float32 => "fcmp oeq",
-                Ne if *inner == Type::Float32 => "fcmp one",
-                Lt if *inner == Type::Float32 => "fcmp olt",
-                Le if *inner == Type::Float32 => "fcmp ole",
-                Gt if *inner == Type::Float32 => "fcmp ogt",
-                Ge if *inner == Type::Float32 => "fcmp oge",
+                Eq if is_float => "fcmp oeq",
+                Ne if is_float => "fcmp one",
+                Lt if is_float => "fcmp olt",
+                Le if is_float => "fcmp ole",
+                Gt if is_float => "fcmp ogt",
+                Ge if is_float => "fcmp oge",
                 Eq => "icmp eq",
                 Ne => "icmp ne",
                 Lt => "icmp slt",
@@ -227,11 +276,26 @@ fn emit_block<'a>(cx: &mut EmitCtx, block: BasicBlock<'a>) {
 
 fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {
     let mut export = false;
+
     let attrs = func.attributes.iter()
         .filter_map(|a| match (a.value.name, a.value.value.as_deref()) {
-            ("inline", Some("always")) => Some("alwaysinline"),
-            ("inline", Some("never"))  => Some("noinline"),
+            ("inline", Some("always")) => Some(String::from("alwaysinline")),
+            ("inline", Some("never"))  => Some(String::from("noinline")),
+            ("inline", _) => panic!("invalid inline attribute value (got {:?})", a.value.value),
+
             ("export", None) => { export = true; None },
+            ("export", _) => panic!("invalid export attribute value (got {:?})", a.value.value),
+
+            ("fastmath", Some(flag)) => {
+                cx.current_fast_math_flags = match FastMathFlags::from_str(flag) {
+                    Some(f) => f,
+                    None => panic!("invalid fastmath attribute value (got {:?})", a.value.value),
+                };
+
+                None
+            }
+            ("fastmath", _) => panic!("invalid fastmath attribute value (got {:?})", a.value.value),
+
             _ => None,
         }).collect::<Vec<_>>()
         .join(" ");
@@ -284,7 +348,10 @@ declare i64 @llvm.fptoui.sat.i64.f64(double)
 "#;
 
 pub fn emit<'a>(module: Module<'a>) -> String {
-    let mut cx = EmitCtx { buf: PREPEND.trim_start().to_string() };
+    let mut cx = EmitCtx {
+        buf: PREPEND.trim_start().to_string(),
+        current_fast_math_flags: FastMathFlags::None,
+    };
     emit_module(&mut cx, module);
     cx.buf
 }

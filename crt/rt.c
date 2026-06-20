@@ -8,6 +8,7 @@ struct Slice {
 
 void print_i32(int i) { printf("%d\n", i); }
 void print_float(float f) { printf("%f\n", f); }
+void print_double(double d) { printf("%f\n", d); }
 void print_float_slice(struct Slice* slice) {
     printf("Slice length: %d\n", slice->length);
     float* data = (float*)slice->data;

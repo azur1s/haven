@@ -1,0 +1,20 @@
+@inline(always) extern print_float(f: f32) void;
+@inline(always) extern print_double(f: f64) void;
+
+// fast, reassoc, nnan, ninf, nsz, arcp, contract
+@fastmath(fast)
+proc f(x: f32) f32 {
+    let y: f32 = (x / 0.5) + 0.001042;
+    return y;
+}
+
+proc g(x: f64) f64 {
+    let y: f64 = (x / 0.5f64) + 0.001042f64;
+    return y;
+}
+
+@export
+proc main() {
+    print_float(f(1.0));
+    print_double(g(1.0f64));
+}
