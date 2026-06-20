@@ -297,6 +297,10 @@ pub enum StmtNode<'a> {
         condition: Expr<'a>,
         body: Box<Stmt<'a>>,
     },
+
+    // TODO add label? (e.g. `continue 'label;`)
+    Continue,
+    Break,
     Return(Expr<'a>),
 }
 
@@ -319,6 +323,9 @@ impl<'a> Display for StmtNode<'a> {
                 write!(f, "if ({}) {}{}", condition.value, then_branch.value, else_str)
             },
             StmtNode::While { condition, body } => write!(f, "while ({}) {}", condition.value, body.value),
+
+            StmtNode::Continue => write!(f, "continue"),
+            StmtNode::Break => write!(f, "break"),
             StmtNode::Return(expr) => write!(f, "return {}", expr.value),
         }
     }

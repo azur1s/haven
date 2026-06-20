@@ -144,7 +144,7 @@ impl <'a> Display for Terminator<'a> {
 pub struct BasicBlock<'a> {
     pub id: BlockId,
     pub instructions: Vec<Inst<'a>>,
-    pub terminator: Terminator<'a>, // every block must end with one
+    pub terminator: Option<Terminator<'a>>,
 }
 
 #[derive(Clone, Debug)]
@@ -171,13 +171,21 @@ pub struct Module<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct LoopTargets {
+    pub continue_block: BlockId, // where to jump for `continue`
+    pub break_block: BlockId,    // where to jump for `break`
+}
+
+#[derive(Clone, Debug)]
 pub struct LowerCtx<'a> {
     pub reg_counter: usize,
     pub block_counter: usize,
     pub current_block: BlockId,
     pub blocks: Vec<BasicBlock<'a>>,
+    pub loop_stack: Vec<LoopTargets>,
+
     pub env: HashMap<&'a str, (Register, Type<'a>)>,
-    pub node_types: HashMap<usize, Type<'a>>,  // from typecheck
+    pub node_types: HashMap<usize, Type<'a>>, // from typecheck
 }
 
 impl<'a> LowerCtx<'a> {
@@ -193,7 +201,7 @@ impl<'a> LowerCtx<'a> {
         self.blocks.push(BasicBlock {
             id: b,
             instructions: vec![],
-            terminator: Terminator::Return(None), // placeholder, will be overwritten
+            terminator: None,
         });
         b
     }
@@ -205,7 +213,7 @@ impl<'a> LowerCtx<'a> {
 
     pub fn terminate(&mut self, term: Terminator<'a>) {
         let block = self.blocks.iter_mut().find(|b| b.id == self.current_block).unwrap();
-        block.terminator = term;
+        block.terminator = Some(term);
     }
 }
 
@@ -707,19 +715,24 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 
             // then branch
             cx.current_block = then_block;
+            cx.emit(Inst::Comment("if-then".to_string()));
             lower_stmt(cx, then_branch);
-            if !matches!(cx.blocks.iter().find(|b| b.id == then_block).unwrap().terminator, Terminator::Return(_)) {
+            if cx.blocks.iter().find(|b| b.id == then_block).unwrap().terminator.is_none() {
                 cx.terminate(Terminator::Jump(merge_block));
             }
 
             // else branch
             cx.current_block = else_block;
             if let Some(else_branch) = else_branch {
+                cx.emit(Inst::Comment("if-else".to_string()));
                 lower_stmt(cx, else_branch);
             }
-            if !matches!(cx.blocks.iter().find(|b| b.id == else_block).unwrap().terminator, Terminator::Return(_)) {
+            if cx.blocks.iter().find(|b| b.id == else_block).unwrap().terminator.is_none() {
                 cx.terminate(Terminator::Jump(merge_block));
             }
+
+            cx.current_block = merge_block;
+            cx.emit(Inst::Comment("if-merge".to_string()));
         }
 
         StmtNode::While { condition, body } => {
@@ -753,10 +766,30 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 
             cx.current_block = body_block;
             cx.emit(Inst::Comment("while body".to_string()));
+
+            cx.loop_stack.push(LoopTargets {
+                continue_block: cond_block,
+                break_block: merge_block,
+            });
             lower_stmt(cx, body);
-            cx.terminate(Terminator::Jump(cond_block)); // back-edge
+            cx.loop_stack.pop();
+
+            // add a jump to the merge block if the body doesn't already terminate
+            // (e.g. via break/continue/return inside the last statement of the body)
+            if cx.blocks.iter().find(|b| b.id == cx.current_block).unwrap().terminator.is_none() {
+                cx.terminate(Terminator::Jump(cond_block));
+            }
 
             cx.current_block = merge_block;
+        }
+
+        StmtNode::Continue => {
+            cx.emit(Inst::Comment("continue".to_string()));
+            cx.terminate(Terminator::Jump(cx.loop_stack.last().unwrap().continue_block));
+        }
+        StmtNode::Break => {
+            cx.emit(Inst::Comment("break".to_string()));
+            cx.terminate(Terminator::Jump(cx.loop_stack.last().unwrap().break_block));
         }
 
         StmtNode::Return(expr) => {
@@ -793,7 +826,7 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(&'a str, Type<'a>)>) {
 fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 -> Vec<(Register, Type<'a>)> {
     match &func.value {
-        TopLevelNode::Function { attributes, params, body, .. } => {
+        TopLevelNode::Function { name, attributes, params, return_type, body, .. } => {
             let entry = cx.fresh_block();
             cx.current_block = entry;
 
@@ -872,6 +905,16 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                 lower_stmt(cx, stmt);
             }
 
+            if cx.blocks.iter().find(|b| b.id == cx.current_block).unwrap().terminator.is_none() {
+                if *return_type == Type::Void {
+                    cx.terminate(Terminator::Return(None));
+                } else {
+                    // should've been caught by typechecker, so if we reach here
+                    // it's a compiler bug
+                    panic!("non-void function {} missing return statement", name);
+                }
+            }
+
             param_regs
         }
         TopLevelNode::Extern { .. } => vec![],
@@ -884,6 +927,7 @@ pub fn lower<'a>(program: &[TopLevel<'a>], node_types: HashMap<usize, Type<'a>>)
         block_counter: 0,
         current_block: BlockId(0),
         blocks: vec![],
+        loop_stack: vec![],
         env: HashMap::new(),
         node_types,
     };

@@ -218,7 +218,11 @@ fn emit_terminator<'a>(cx: &mut EmitCtx, term: Terminator<'a>) {
 fn emit_block<'a>(cx: &mut EmitCtx, block: BasicBlock<'a>) {
     emitln!(cx, "  {}:", block.id);
     block.instructions.into_iter().for_each(|inst| emit_inst(cx, inst));
-    emit_terminator(cx, block.terminator);
+    if let Some(terminator) = block.terminator {
+        emit_terminator(cx, terminator);
+    } else {
+        panic!("block {} has no terminator", block.id);
+    }
 }
 
 fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {

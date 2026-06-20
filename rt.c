@@ -6,6 +6,7 @@ struct Slice {
     int length;
 };
 
+void print_i32(int i) { printf("%d\n", i); }
 void print_float(float f) { printf("%f\n", f); }
 void print_float_slice(struct Slice* slice) {
     printf("Slice length: %d\n", slice->length);

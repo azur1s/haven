@@ -467,6 +467,11 @@ fn parse_stmt<'tks, 'src: 'tks>()
                 body: Box::new(body),
             });
 
+        let contbreak = choice((
+            just(Token::Continue).to(StmtNode::Continue),
+            just(Token::Break).to(StmtNode::Break),
+        )).then_ignore(just(Token::Semicolon));
+
         let return_ = just(Token::Return)
             .ignore_then(parse_expr())
             .then_ignore(just(Token::Semicolon))
@@ -477,6 +482,7 @@ fn parse_stmt<'tks, 'src: 'tks>()
             .or(if_else)
             .or(if_)
             .or(while_)
+            .or(contbreak)
             .or(return_)
             .map_with(|node, e| {
                 Metadata::new(

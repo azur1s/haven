@@ -614,6 +614,10 @@ fn check_stmt<'a>(
             cx.pop_scope();
         },
 
+        StmtNode::Continue | StmtNode::Break => {
+            // nothing to check
+        },
+
         StmtNode::Return(expr) => {
             check_expr(cx, return_ty, expr)?;
         },
