@@ -335,7 +335,7 @@ fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
 
 // I hope LLVM will optimize these away if it's not used
 const PREPEND: &str = r#"
-; casts (for bitwise_cast())
+; casts (for numeric_cast)
 declare i32 @llvm.fptosi.sat.i32.f32(float)
 declare i32 @llvm.fptoui.sat.i32.f32(float)
 declare i64 @llvm.fptosi.sat.i64.f32(float)
@@ -348,8 +348,11 @@ declare i64 @llvm.fptoui.sat.i64.f64(double)
 "#;
 
 pub fn emit<'a>(module: Module<'a>) -> String {
+    let mut header = format!("; ModuleID = 'compiled_module'\n");
+    header.push_str(PREPEND.trim_start());
+
     let mut cx = EmitCtx {
-        buf: PREPEND.trim_start().to_string(),
+        buf: header,
         current_fast_math_flags: FastMathFlags::None,
     };
     emit_module(&mut cx, module);
