@@ -554,7 +554,60 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             Value::Reg(dst)
         }
 
+        // short-circuiting && and ||
+        ExprNode::Binary { op: op @ (BinaryOp::And | BinaryOp::Or), left, right } => {
+            let lhs = lower_expr(cx, left);
+            // branch needs a Register, but lhs might be a bare Const(Bool) (e.g. `true && foo()`)
+            let lhs_reg = match lhs {
+                Value::Reg(r) => r,
+                v => {
+                    let r = cx.fresh_reg();
+                    cx.emit(Inst::Alloca { dst: r, ty: Type::Bool, align: None });
+                    cx.emit(Inst::Store { ptr: r, val: v, ty: Type::Bool, align: None });
+                    let s = cx.fresh_reg();
+                    cx.emit(Inst::Load { dst: s, ptr: r, ty: Type::Bool, align: None });
+                    s
+                }
+            };
+
+            let result_ptr = cx.fresh_reg();
+            cx.emit(Inst::Alloca { dst: result_ptr, ty: Type::Bool, align: None });
+
+            let rhs_block           = cx.fresh_block();
+            let short_circuit_block = cx.fresh_block();
+            let merge_block         = cx.fresh_block();
+
+            // && : lhs false -> skip rhs, result = false
+            // || : lhs true  -> skip rhs, result = true
+            cx.terminate(match op {
+                BinaryOp::And => Terminator::Branch { cond: lhs_reg, then_block: rhs_block, else_block: short_circuit_block },
+                BinaryOp::Or  => Terminator::Branch { cond: lhs_reg, then_block: short_circuit_block, else_block: rhs_block },
+                _ => unreachable!(),
+            });
+
+            cx.current_block = short_circuit_block;
+            cx.emit(Inst::Comment(format!("{} short-circuit", op)));
+            cx.emit(Inst::Store {
+                ptr: result_ptr,
+                val: Value::Const(Const::Bool(matches!(op, BinaryOp::Or))),
+                ty: Type::Bool, align: None,
+            });
+            cx.terminate(Terminator::Jump(merge_block));
+
+            cx.current_block = rhs_block;
+            let rhs = lower_expr(cx, right);
+            cx.emit(Inst::Store { ptr: result_ptr, val: rhs, ty: Type::Bool, align: None });
+            cx.terminate(Terminator::Jump(merge_block));
+
+            cx.current_block = merge_block;
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Load { dst, ptr: result_ptr, ty: Type::Bool, align: None });
+            Value::Reg(dst)
+        }
+
         ExprNode::Binary { op, left, right } => {
+            // And and Or doesn't reach here but we keep it just in case
+            // (for non short-circuiting versions)
             let lhs = lower_expr(cx, left);
             let rhs = lower_expr(cx, right);
             let ty = cx.node_types[&left.id].clone();

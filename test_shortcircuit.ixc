@@ -1,0 +1,21 @@
+@inline(always) extern print_i32(n: i32) void;
+
+proc foo() i32 {
+    print_i32(42);
+    return 42;
+}
+
+@export
+proc main() {
+    if (true || foo() == 42) {
+        print_i32(1);
+    } else {
+        print_i32(0);
+    }
+
+    if (false && foo() == 42) {
+        print_i32(1);
+    } else {
+        print_i32(0);
+    }
+}
