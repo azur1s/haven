@@ -30,6 +30,18 @@ impl chumsky::span::Span for Span {
 }
 
 #[derive(Clone, Debug)]
+pub struct Error {
+    pub msg: String,
+    pub span: Span,
+}
+
+impl Error {
+    pub fn new(span: Span, msg: String) -> Self {
+        Self { span, msg }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Metadata<T> {
     pub span: Span,
     pub id: usize,
@@ -337,6 +349,20 @@ pub type Stmt<'a> = Metadata<StmtNode<'a>>;
 pub struct AttributeNode<'a> {
     pub name: &'a str,
     pub value: Option<String>,
+}
+
+impl<'a> AttributeNode<'a> {
+    pub fn new(name: &'a str, value: Option<String>) -> Self {
+        Self { name, value }
+    }
+
+    pub fn is_true(&self, name: &'a str) -> bool {
+        self.name == name && self.value.is_some() && self.value.as_deref() == Some("true")
+    }
+
+    pub fn is_false(&self, name: &'a str) -> bool {
+        self.name == name && self.value.is_some() && self.value.as_deref() == Some("false")
+    }
 }
 
 impl<'a> Display for AttributeNode<'a> {

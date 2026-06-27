@@ -6,6 +6,7 @@ mod ast;
 mod parse;
 mod intrinsics;
 mod typecheck;
+mod safecheck;
 mod mil;
 mod llvm;
 
@@ -72,7 +73,7 @@ fn main() {
 
             if !typecheck_errs.is_empty() {
                 typecheck_errs.into_iter()
-                    .for_each(|typecheck::Error { msg, span, .. }| {
+                    .for_each(|ast::Error { msg, span, .. }| {
                         let (start_line, start_col) = offset_to_line_col(&src, span.start);
 
                         eprintln!(
@@ -84,6 +85,22 @@ fn main() {
                         );
                     });
             } else {
+                safecheck::alloc_check_program(&ast).unwrap_or_else(|errs| {
+                    for err in errs {
+                        let (start_line, start_col) = offset_to_line_col(&src, err.span.start);
+
+                        eprintln!(
+                            "Check error in {}:{}:{}: {}",
+                            err.span.file,
+                            start_line,
+                            start_col,
+                            err.msg,
+                        );
+                    }
+
+                    std::process::exit(1);
+                });
+
                 let mil = mil::lower(&ast, node_types);
                 let llvm_ir = llvm::emit(mil);
 

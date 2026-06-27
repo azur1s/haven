@@ -1,0 +1,12 @@
+// extern function not marked with @alloc(false) will be marked as dirty
+@inline(always) extern print_i32(x: i32) void;
+
+proc dirty() { print_i32(0); }
+proc dirty2() { print_i32(0); }
+
+@alloc(false)
+@export
+proc main() {
+    dirty();
+    dirty2();
+}

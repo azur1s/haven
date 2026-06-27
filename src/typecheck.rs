@@ -2,12 +2,6 @@ use std::collections::HashMap;
 use crate::{ast::*, intrinsics::Intrinsic};
 
 #[derive(Clone, Debug)]
-pub struct Error {
-    pub msg: String,
-    pub span: Span,
-}
-
-#[derive(Clone, Debug)]
 pub struct Context<'a> {
     pub scopes: Vec<HashMap<&'a str, Type<'a>>>,
     /// Map from Expr/Stmt/TopLevel IDs to their inferred types, for use in later codegen
@@ -626,6 +620,9 @@ fn check_stmt<'a>(
     Ok(())
 }
 
+/// Check whether a type is allowed in an @export function signature.
+/// Some types are not allowed because they have unknown layout or calling convention,
+/// or I just don't know how to handle it.
 fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
     match ty {
         Type::Slice(inner) =>
