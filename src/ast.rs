@@ -182,6 +182,9 @@ pub enum Type<'a> {
         return_type: Box<Type<'a>>,
     },
     Pointer(Box<Self>),
+    /// Fixed-size array type, e.g., `[T; N]`
+    Array(Box<Self>, usize),
+    /// Slice type, e.g., `[T]`
     Slice(Box<Self>),
     Simd(Box<Self>, usize),
     Defined(&'a str),
@@ -213,6 +216,7 @@ impl<'a> Display for Type<'a> {
             Uint32 => write!(f, "u32"), Uint64 => write!(f, "u64"),
             Int32 => write!(f, "i32"), Int64 => write!(f, "i64"),
             Float32 => write!(f, "f32"), Float64 => write!(f, "f64"),
+            Array(inner, size) => write!(f, "[{}; {}]", inner, size),
             Function { params, return_type } => {
                 let params_str = params.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "fn({}) -> {}", params_str, return_type)

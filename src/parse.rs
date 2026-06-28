@@ -352,40 +352,64 @@ fn parse_type<'tks, 'src: 'tks>()
     recursive(|ty| {
         let var = select_ref! { Token::Var(ident) => ident };
 
-        var.then(ty.clone()
-            .then_ignore(just(Token::Comma))
-            .then(select! { Token::Int32(x) => x })
-            .delimited_by(
-                just(Token::BinaryOp(BinaryOp::Lt)),
-                just(Token::BinaryOp(BinaryOp::Gt)))
-            .or_not())
-        .try_map(|(name, size), span| {
-            if let None = size {
-                Ok(match *name {
-                    "void" => Type::Void,
-                    "bool" => Type::Bool,
-                    "i32"  => Type::Int32,
-                    "i64"  => Type::Int64,
-                    "u32"  => Type::Uint32,
-                    "u64"  => Type::Uint64,
-                    "f32"  => Type::Float32,
-                    "f64"  => Type::Float64,
-                    // "str"  => Type::Str,
-                    other  => Type::Defined(other),
-                })
-            } else {
-                // probably could reuse this when we have generic types
-                // hope we reach that point lmao
-                let (ty, size) = size.unwrap();
-                match *name {
-                    "simd" if size > 0 && size <= 64 => Ok(Type::Simd(Box::new(ty), size as usize)),
-                    "simd" => Err(Rich::custom(span, format!("invalid SIMD size parameter: {size} (must be between 1 and 64)"))),
-                    other => Err(Rich::custom(span, format!("unexpected type '{other}' with size parameter"))),
+        choice((
+            // [T; N]
+            just(Token::LBracket)
+                .ignore_then(ty.clone())
+                .then_ignore(just(Token::Semicolon))
+                .then(select! { Token::Int32(x) => x })
+                .then_ignore(just(Token::RBracket))
+                .try_map(|(inner, size), span| {
+                    if size > 0 {
+                        Ok(Type::Array(Box::new(inner), size as usize))
+                    } else {
+                        Err(Rich::custom(span, format!("invalid array size parameter: {size} (must be greater than 0)")))
+                    }
+                }),
+            // [T]
+            just(Token::LBracket)
+                .ignore_then(ty.clone())
+                .then_ignore(just(Token::RBracket))
+                .map(|inner| Type::Slice(Box::new(inner))),
+            // T or simd<T, N>
+            var.then(ty.clone()
+                .then_ignore(just(Token::Comma))
+                .then(select! { Token::Int32(x) => x })
+                .delimited_by(
+                    just(Token::BinaryOp(BinaryOp::Lt)),
+                    just(Token::BinaryOp(BinaryOp::Gt)))
+                .or_not())
+            .try_map(|(name, size), span| {
+                if let None = size {
+                    Ok(match *name {
+                        "void" => Type::Void,
+                        "bool" => Type::Bool,
+                        "i32"  => Type::Int32,
+                        "i64"  => Type::Int64,
+                        "u32"  => Type::Uint32,
+                        "u64"  => Type::Uint64,
+                        "f32"  => Type::Float32,
+                        "f64"  => Type::Float64,
+                        // "str"  => Type::Str,
+                        other  => Type::Defined(other),
+                    })
+                } else {
+                    // probably could reuse this when we have generic types
+                    // hope we reach that point lmao
+                    let (ty, size) = size.unwrap();
+                    match *name {
+                        "simd" if size > 0 && size <= 64 => Ok(Type::Simd(Box::new(ty), size as usize)),
+                        "simd" => Err(Rich::custom(span, format!("invalid SIMD size parameter: {size} (must be between 1 and 64)"))),
+                        other => Err(Rich::custom(span, format!("unexpected type '{other}' with size parameter"))),
+                    }
                 }
-            }
-        }).boxed()
+            })
+        ))
+        .boxed()
         .pratt((
-            prefix(1, just(Token::LBracket).then(just(Token::RBracket)), |_, t, _| Type::Slice(Box::new(t))),
+            // [T]
+            // prefix(1, just(Token::LBracket).then(just(Token::RBracket)), |_, t, _| Type::Slice(Box::new(t))),
+            // *T
             prefix(1, just(Token::BinaryOp(BinaryOp::Mul)), |_, t, _| Type::Pointer(Box::new(t))),
         ))
         .labelled("type")

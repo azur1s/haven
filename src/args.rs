@@ -41,4 +41,14 @@ pub struct Args {
     /// Will follow the optimization flags passed to the LLVM IR compiler
     #[arg(long, conflicts_with = "emit_ir")]
     pub emit_optimized_ir: bool,
+
+    /// Emit assembly via the LLVM IR compiler (.s)
+    #[arg(
+        long,
+        conflicts_with = "emit_ir",
+        conflicts_with = "emit_optimized_ir",
+        conflicts_with = "shared",
+        conflicts_with = "static_lib"
+    )]
+    pub emit_asm: bool,
 }

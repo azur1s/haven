@@ -137,6 +137,26 @@ fn main() {
                     }
                 }
 
+                if args.emit_asm {
+                    let asm_output_path = args.output.with_extension("s");
+
+                    let status = std::process::Command::new(&args.compiler)
+                        .arg(&llvm_ir_output_path)
+                        .arg("-S")
+                        .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
+                        .arg("-o")
+                        .arg(&asm_output_path)
+                        .status()
+                        .expect("Failed to execute compiler for assembly");
+
+                    if !status.success() {
+                        eprintln!("Compiler exited with non-zero status when generating assembly: {}", status);
+                        std::process::exit(1);
+                    }
+
+                    std::process::exit(0);
+                }
+
                 let status = if args.shared {
                     println!("Compiling as a shared library...");
 

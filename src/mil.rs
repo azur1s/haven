@@ -474,8 +474,9 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             todo!()
         },
         ExprNode::Slice(elements) => {
-            let ty = match cx.node_types[&expr.id].clone() {
-                Type::Slice(inner) => *inner,
+            let (ty, is_fixed) = match cx.node_types[&expr.id].clone() {
+                Type::Slice(inner) => (*inner, false),
+                Type::Array(inner, _) => (*inner, true),
                 _ => unreachable!(),
             };
 
@@ -502,27 +503,32 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 cx.emit(Inst::Store { ptr, val: elem_val, ty: ty.clone(), align: None });
             }
 
-            // construct fat pointer struct { ptr, len }
-            // %fat_ptr0 = insertvalue { ptr, i32 } undef, ptr %arr_reg, 0
-            // %fat_ptr1 = insertvalue { ptr, i32 } %fat_ptr0, i32 N, 1
-            let fat_ptr0 = cx.fresh_reg();
-            cx.emit(Inst::InsertValue {
-                dst: fat_ptr0,
-                elem: Value::Const(Const::Undef),
-                ty: Type::Pointer(Box::new(ty.clone())),
-                val: Value::Reg(arr_reg),
-                index: 0,
-            });
-            let fat_ptr1 = cx.fresh_reg();
-            cx.emit(Inst::InsertValue {
-                dst: fat_ptr1,
-                elem: Value::Reg(fat_ptr0),
-                ty: Type::Int32,
-                val: Value::Const(Const::Int32(elements.len() as i32)),
-                index: 1,
-            });
+            if is_fixed {
+                // the alloca register is the value
+                Value::Reg(arr_reg)
+            } else {
+                // construct fat pointer struct { ptr, len }
+                // %fat_ptr0 = insertvalue { ptr, i32 } undef, ptr %arr_reg, 0
+                // %fat_ptr1 = insertvalue { ptr, i32 } %fat_ptr0, i32 N, 1
+                let fat_ptr0 = cx.fresh_reg();
+                cx.emit(Inst::InsertValue {
+                    dst: fat_ptr0,
+                    elem: Value::Const(Const::Undef),
+                    ty: Type::Pointer(Box::new(ty.clone())),
+                    val: Value::Reg(arr_reg),
+                    index: 0,
+                });
+                let fat_ptr1 = cx.fresh_reg();
+                cx.emit(Inst::InsertValue {
+                    dst: fat_ptr1,
+                    elem: Value::Reg(fat_ptr0),
+                    ty: Type::Int32,
+                    val: Value::Const(Const::Int32(elements.len() as i32)),
+                    index: 1,
+                });
 
-            Value::Reg(fat_ptr1)
+                Value::Reg(fat_ptr1)
+            }
         }
 
         // *ptr (where ptr is *T or T[]) = load from ptr, so dst = load ptr
@@ -740,8 +746,21 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 
         StmtNode::Declare { name, ty, value } => {
             let val = lower_expr(cx, value);
-            let (ptr, _) = cx.env[name]; // already alloca'd
-            cx.emit(Inst::Store { ptr, val, ty: ty.clone(), align: None });
+            match ty {
+                Type::Array(_, _) => {
+                    // for fixed-size arrays, we don't alloca the array, we
+                    // just store the value directly into the variable's register
+                    let arr_reg = match val {
+                        Value::Reg(r) => r,
+                        _ => unreachable!(),
+                    };
+                    cx.env.insert(name, (arr_reg, ty.clone()));
+                }
+                _ => {
+                    let (ptr, _) = cx.env[name]; // already alloca'd
+                    cx.emit(Inst::Store { ptr, val, ty: ty.clone(), align: None });
+                }
+            }
         }
 
         StmtNode::Assign { left, value } => {
@@ -859,7 +878,11 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(&'a str, Type<'a>)>) {
     match &stmt.value {
         StmtNode::Declare { name, ty, .. } => {
-            out.push((name, ty.clone()));
+            // remove fixed array types from locals so they don't get
+            // pre-allocated
+            if !matches!(ty, Type::Array(_, _)) {
+                out.push((name, ty.clone()));
+            }
         }
         StmtNode::Block(stmts) => {
             for s in stmts { collect_locals(s, out); }

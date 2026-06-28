@@ -26,6 +26,7 @@ fn emit_type(ty: &Type) -> String {
         Float64 => "double".to_string(),
         Pointer(_) => "ptr".to_string(),
 
+        Array(t, n) => format!("[{} x {}]", *n, emit_type(t)),
         Slice(_) => "{ ptr, i32 }".to_string(), // struct { ptr, len }
         // <size x element_type>
         Simd(ty, size) => format!("<{} x {}>", size, emit_type(ty)),

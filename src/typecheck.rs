@@ -352,7 +352,13 @@ fn check_expr<'a>(
         _ => infer(cx, expr)?,
     };
 
-    if actual != *expected {
+    let compatible = actual == *expected ||
+        matches!((&actual, expected),
+            (Type::Array(inner_actual, _), Type::Slice(inner_expected))
+                if inner_actual == inner_expected
+        );
+
+    if !compatible {
         let msg = format!("Expected {expected}, got {actual}");
         return Err(Error {
             msg,
@@ -401,13 +407,22 @@ fn infer<'a>(
                 span,
             });
         },
+
+        // Infer [...] as Array first, convert to slice later if needed
         ExprNode::Slice(inner) => {
             let first_ty = infer(cx, &inner[0])?;
             for elem in inner.iter().skip(1) {
                 check_expr(cx, &first_ty, elem)?;
             }
-            Type::Slice(Box::new(first_ty))
+            Type::Array(Box::new(first_ty), inner.len())
         },
+        // ExprNode::Slice(inner) => {
+        //     let first_ty = infer(cx, &inner[0])?;
+        //     for elem in inner.iter().skip(1) {
+        //         check_expr(cx, &first_ty, elem)?;
+        //     }
+        //     Type::Slice(Box::new(first_ty))
+        // },
 
         ExprNode::Index { slice, index } => {
             let slice_ty = infer(cx, slice)?;
@@ -625,6 +640,9 @@ fn check_stmt<'a>(
 /// or I just don't know how to handle it.
 fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
     match ty {
+        // TODO check if this is correct
+        Type::Array(inner, _) =>
+            Err(format!("fixed-size array type '[{}; N]' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", inner, inner)),
         Type::Slice(inner) =>
             Err(format!("slice type '{}' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", ty, inner)),
         Type::Pointer(inner) => check_export_type(inner), // recurse: *[]f32 is also banned
