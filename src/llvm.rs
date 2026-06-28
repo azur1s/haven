@@ -121,6 +121,8 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
             };
 
             let is_float = matches!(inner, Type::Float32 | Type::Float64);
+            let is_signed_int = matches!(inner, Type::Int32 | Type::Int64);
+            let is_unsigned_int = matches!(inner, Type::Uint32 | Type::Uint64);
 
             let flags_str = if *inner == Type::Float32 || *inner == Type::Float64 {
                 format!(" {}", cx.current_fast_math_flags.to_str())
@@ -129,21 +131,28 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
             };
 
             emitln!(cx, "    {dst} = {}{flags_str} {} {}, {}", match op {
-                Add if *inner == Type::Int32   => "add",
+                Add if is_signed_int || is_unsigned_int => "add",
                 Add if is_float => "fadd",
                 Add => unreachable!("{}", ty),
-                Sub if *inner == Type::Int32   => "sub",
+
+                Sub if is_signed_int || is_unsigned_int => "sub",
                 Sub if is_float => "fsub",
                 Sub => unreachable!("{}", ty),
-                Mul if *inner == Type::Int32   => "mul",
+
+                Mul if is_signed_int || is_unsigned_int => "mul",
                 Mul if is_float => "fmul",
                 Mul => unreachable!("{}", ty),
-                Div if *inner == Type::Int32   => "sdiv",
+
+                Div if is_signed_int => "sdiv",
+                Div if is_unsigned_int => "udiv",
                 Div if is_float => "fdiv",
                 Div => unreachable!("{}", ty),
-                Mod if *inner == Type::Int32   => "srem",
+
+                Mod if is_signed_int => "srem",
+                Mod if is_unsigned_int => "urem",
                 Mod if is_float => "frem",
                 Mod => unreachable!("{}", ty),
+
                 Eq if is_float => "fcmp oeq",
                 Ne if is_float => "fcmp one",
                 Lt if is_float => "fcmp olt",
@@ -152,10 +161,19 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                 Ge if is_float => "fcmp oge",
                 Eq => "icmp eq",
                 Ne => "icmp ne",
-                Lt => "icmp slt",
-                Le => "icmp sle",
-                Gt => "icmp sgt",
-                Ge => "icmp sge",
+
+                Lt if is_signed_int => "icmp slt",
+                Le if is_signed_int => "icmp sle",
+                Gt if is_signed_int => "icmp sgt",
+                Ge if is_signed_int => "icmp sge",
+
+                Lt if is_unsigned_int => "icmp ult",
+                Le if is_unsigned_int => "icmp ule",
+                Gt if is_unsigned_int => "icmp ugt",
+                Ge if is_unsigned_int => "icmp uge",
+
+                Lt | Le | Gt | Ge => unreachable!("{}", ty),
+
                 And => "and",
                 Or => "or",
                 Xor => "xor",
