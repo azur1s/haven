@@ -39,8 +39,8 @@ proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
 @export
 proc main() {
     // host usually supply buffer in 2-divisble, but just to test edge case
-    let left:  []f32 = [1.0, 0.9, 0.5, 0.1, 0.0, 0.1, 0.5];
-    let right: []f32 = [0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.1];
+    let left:  [f32] = [1.0, 0.9, 0.5, 0.1, 0.0, 0.1, 0.5];
+    let right: [f32] = [0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.1];
     let num_samples: i32 = 7;
 
     process_stereo(&left[0], &right[0], num_samples);

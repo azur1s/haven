@@ -186,6 +186,7 @@ pub struct LowerCtx<'a> {
 
     pub env: HashMap<&'a str, (Register, Type<'a>)>,
     pub node_types: HashMap<usize, Type<'a>>, // from typecheck
+    pub current_return_type: Type<'a>,        // return type of the function being lowered
 }
 
 impl<'a> LowerCtx<'a> {
@@ -214,6 +215,33 @@ impl<'a> LowerCtx<'a> {
     pub fn terminate(&mut self, term: Terminator<'a>) {
         let block = self.blocks.iter_mut().find(|b| b.id == self.current_block).unwrap();
         block.terminator = Some(term);
+    }
+}
+
+/// Materialize an array->slice coercion: build a { ptr, i32 N } fat pointer from
+/// an array value. Returns the original value unchanged if no coercion applies.
+fn coerce<'a>(cx: &mut LowerCtx<'a>, val: Value, from_ty: &Type<'a>, to_ty: &Type<'a>) -> Value {
+    match (from_ty, to_ty) {
+        (Type::Array(inner, len), Type::Slice(_)) => {
+            let fat0 = cx.fresh_reg();
+            cx.emit(Inst::InsertValue {
+                dst: fat0,
+                elem: Value::Const(Const::Undef),
+                ty: Type::Pointer(Box::new(*inner.clone())),
+                val,
+                index: 0,
+            });
+            let fat1 = cx.fresh_reg();
+            cx.emit(Inst::InsertValue {
+                dst: fat1,
+                elem: Value::Reg(fat0),
+                ty: Type::Int32,
+                val: Value::Const(Const::Int32(*len as i32)),
+                index: 1,
+            });
+            Value::Reg(fat1)
+        }
+        _ => val,
     }
 }
 
@@ -306,7 +334,7 @@ fn lower_intrinsic<'a>(
                     cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
                     extracted
                 }
-                Type::Pointer(_) => {
+                Type::Pointer(_) | Type::Array(_, _) => {
                     // already a raw pointer, use it directly
                     match slice_val {
                         Value::Reg(r) => r,
@@ -352,7 +380,7 @@ fn lower_intrinsic<'a>(
                     cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
                     extracted
                 }
-                Type::Pointer(_) => {
+                Type::Pointer(_) | Type::Array(_, _) => {
                     match slice_val {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
@@ -459,14 +487,15 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
 
         ExprNode::Var(name) => {
             let (reg, ty) = cx.env[name].clone();
-            // match ty {
-            //     Type::Pointer(_) => {
-                    let dst = cx.fresh_reg();
-                    cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
-                    Value::Reg(dst)
-            //     }
-            //     _ => Value::Reg(reg),
-            // }
+            // fixed arrays are stored in env as the alloca register itself, not a pointer
+            // to one, so loading would yield the array value — we want the pointer
+            if matches!(ty, Type::Array(_, _)) {
+                Value::Reg(reg)
+            } else {
+                let dst = cx.fresh_reg();
+                cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
+                Value::Reg(dst)
+            }
         }
 
         // use fat pointer struct for slices
@@ -636,9 +665,18 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 ExprNode::Var(name) => name,
                 _ => todo!("function pointers in calls"),
             };
-            let lowered_args = args.iter().map(|arg| {
-                let ty = cx.node_types[&arg.id].clone();
-                (lower_expr(cx, arg), ty)
+            // grab the callee's parameter types so we can apply array->slice coercion
+            let param_tys: Vec<Type<'a>> = match cx.node_types.get(&func.id).cloned() {
+                Some(Type::Function { params, .. }) => params,
+                _ => vec![],
+            };
+            let lowered_args = args.iter().enumerate().map(|(i, arg)| {
+                let arg_ty = cx.node_types[&arg.id].clone();
+                let val = lower_expr(cx, arg);
+                let param_ty = param_tys.get(i).cloned()
+                    .unwrap_or_else(|| arg_ty.clone());
+                let coerced_val = coerce(cx, val, &arg_ty, &param_ty);
+                (coerced_val, param_ty)
             }).collect();
 
             let return_type = cx.node_types[&expr.id].clone();
@@ -658,6 +696,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             let element_ty = match &cx.node_types[&slice.id] {
                 Type::Slice(inner) => *inner.clone(),
                 Type::Pointer(inner) => *inner.clone(),
+                Type::Array(inner, _) => *inner.clone(),
                 _ => unreachable!(),
             };
 
@@ -667,7 +706,8 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                     cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
                     extracted
                 }
-                Type::Pointer(_) => {
+                Type::Pointer(_) | Type::Array(_, _) => {
+                    // for fixed arrays the Var lowering already gave us the alloca pointer
                     match slice_val {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
@@ -704,6 +744,7 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
             let element_ty = match cx.node_types[&slice.id].clone() {
                 Type::Slice(inner) => *inner,
                 Type::Pointer(inner) => *inner,
+                Type::Array(inner, _) => *inner,
                 _ => unreachable!(),
             };
 
@@ -714,7 +755,7 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
                     cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
                     extracted
                 }
-                Type::Pointer(_) => {
+                Type::Pointer(_) | Type::Array(_, _) => {
                     match slice_val {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
@@ -746,6 +787,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 
         StmtNode::Declare { name, ty, value } => {
             let val = lower_expr(cx, value);
+            let value_ty = cx.node_types[&value.id].clone();
             match ty {
                 Type::Array(_, _) => {
                     // for fixed-size arrays, we don't alloca the array, we
@@ -757,6 +799,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                     cx.env.insert(name, (arr_reg, ty.clone()));
                 }
                 _ => {
+                    let val = coerce(cx, val, &value_ty, ty);
                     let (ptr, _) = cx.env[name]; // already alloca'd
                     cx.emit(Inst::Store { ptr, val, ty: ty.clone(), align: None });
                 }
@@ -766,7 +809,9 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
         StmtNode::Assign { left, value } => {
             let ptr = lower_lvalue(cx, left);  // see below
             let val = lower_expr(cx, value);
+            let value_ty = cx.node_types[&value.id].clone();
             let ty = cx.node_types[&left.id].clone();
+            let val = coerce(cx, val, &value_ty, &ty);
             cx.emit(Inst::Store { ptr, val, ty, align: None });
         }
 
@@ -866,8 +911,10 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 
         StmtNode::Return(expr) => {
             let val = lower_expr(cx, expr);
-            let ty = cx.node_types[&expr.id].clone();
-            cx.terminate(Terminator::Return(Some((val, ty))));
+            let value_ty = cx.node_types[&expr.id].clone();
+            let ret_ty = cx.current_return_type.clone();
+            let val = coerce(cx, val, &value_ty, &ret_ty);
+            cx.terminate(Terminator::Return(Some((val, ret_ty))));
         }
     }
 }
@@ -905,6 +952,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
         TopLevelNode::Function { name, attributes, params, return_type, body, .. } => {
             let entry = cx.fresh_block();
             cx.current_block = entry;
+            cx.current_return_type = return_type.clone();
 
             let mut param_regs = Vec::new();
             for (name, ty) in params {
@@ -1006,6 +1054,7 @@ pub fn lower<'a>(program: &[TopLevel<'a>], node_types: HashMap<usize, Type<'a>>)
         loop_stack: vec![],
         env: HashMap::new(),
         node_types,
+        current_return_type: Type::Void,
     };
 
     let mut functions = Vec::new();

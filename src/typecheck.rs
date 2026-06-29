@@ -75,9 +75,9 @@ fn typecheck_intrinsic<'a>(
                 return Err(Error { msg: "len() takes exactly one argument".into(), span });
             }
             let arg_ty = infer(cx, &args[0])?;
-            if !matches!(arg_ty, Type::Slice(_)) {
+            if !matches!(arg_ty, Type::Slice(_) | Type::Array(_, _) | Type::Pointer(_)) {
                 return Err(Error {
-                    msg: format!("len() expects a slice, got {}", arg_ty),
+                    msg: format!("len() expects a slice, array or pointer, got {}", arg_ty),
                     span,
                 });
             }
@@ -439,6 +439,7 @@ fn infer<'a>(
             }
             match slice_ty {
                 Type::Slice(inner)
+                | Type::Array(inner, _)
                 | Type::Pointer(inner) => *inner,
                 _ => {
                     let msg = format!(

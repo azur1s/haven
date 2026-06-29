@@ -216,13 +216,13 @@ impl<'a> Display for Type<'a> {
             Uint32 => write!(f, "u32"), Uint64 => write!(f, "u64"),
             Int32 => write!(f, "i32"), Int64 => write!(f, "i64"),
             Float32 => write!(f, "f32"), Float64 => write!(f, "f64"),
-            Array(inner, size) => write!(f, "[{}; {}]", inner, size),
             Function { params, return_type } => {
                 let params_str = params.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "fn({}) -> {}", params_str, return_type)
             },
             Pointer(inner) => write!(f, "*{}", inner),
-            Slice(inner) => write!(f, "{}[]", inner),
+            Array(inner, size) => write!(f, "[{}; {}]", inner, size),
+            Slice(inner) => write!(f, "[{}]", inner),
             Simd(inner, size) => write!(f, "simd[{}, {}]", inner, size),
             Defined(name) => write!(f, "{}", name),
         }
