@@ -533,8 +533,13 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
         ExprNode::Access { base, field } => {
             let base_val = lower_expr(cx, base);
             let base_ty = cx.node_types[&base.id].clone();
+            // matches the typechecker's one-level auto-deref for `ptr.field`
             let struct_name = match base_ty {
                 Type::Struct(name) => name,
+                Type::Pointer(inner) => match *inner {
+                    Type::Struct(name) => name,
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
             };
             let field_index = cx.structs[&struct_name]
@@ -793,8 +798,13 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
         ExprNode::Access { base, field } => {
             let base_val = lower_expr(cx, base);
             let base_ty = cx.node_types[&base.id].clone();
+            // matches the typechecker's one-level auto-deref for `ptr.field`
             let struct_name = match base_ty {
                 Type::Struct(name) => name,
+                Type::Pointer(inner) => match *inner {
+                    Type::Struct(name) => name,
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
             };
             let field_index = cx.structs[&struct_name]
@@ -858,6 +868,35 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
     }
 }
 
+// Field-by-field copy from one struct pointer to another. Both `src` and `dst`
+// must be pointers to a struct of the given name.
+// TODO: switch to an `llvm.memcpy` intrinsic for large structs instead of
+// emitting a load/store per field. Also recurse properly on nested struct
+// fields (today they'd fall into the `_` arm and copy the pointer, not the
+// contents).
+fn copy_struct<'a>(cx: &mut LowerCtx<'a>, struct_name: &'a str, src: Register, dst: Register) {
+    let fields = cx.structs[struct_name].clone();
+    for (i, (_fname, fty)) in fields.iter().enumerate() {
+        let src_field = cx.fresh_reg();
+        let dst_field = cx.fresh_reg();
+        cx.emit(Inst::FieldPtr { dst: src_field, struct_name, base: src, field_index: i });
+        cx.emit(Inst::FieldPtr { dst: dst_field, struct_name, base: dst, field_index: i });
+        match fty {
+            Type::Struct(inner_name) => {
+                // TODO: nested-struct copy
+                // for now do a shallow pointer copy
+                let _ = inner_name;
+                panic!("nested struct copy not yet implemented");
+            }
+            _ => {
+                let loaded = cx.fresh_reg();
+                cx.emit(Inst::Load { dst: loaded, ptr: src_field, ty: fty.clone(), align: None });
+                cx.emit(Inst::Store { ptr: dst_field, val: Value::Reg(loaded), ty: fty.clone(), align: None });
+            }
+        }
+    }
+}
+
 fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
     match &stmt.value {
         StmtNode::Expr(expr) => {
@@ -883,13 +922,24 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                     };
                     cx.env.insert(name, (arr_reg, ty.clone()));
                 }
-                Type::Struct(_) => {
-                    // like arrays, copying it here to make it explicit
-                    let struct_reg = match val {
+                Type::Struct(struct_name) => {
+                    let src_reg = match val {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
                     };
-                    cx.env.insert(name, (struct_reg, ty.clone()));
+                    // if the RHS is a struct literal, its own alloca becomes
+                    // this local's slot & no copy needed
+                    // anything else (Var, field access, call return, etc.) is
+                    // a reference to someone else's storage and needs a copy
+                    // for value semantics
+                    if matches!(value.value, ExprNode::Struct { .. }) {
+                        cx.env.insert(name, (src_reg, ty.clone()));
+                    } else {
+                        let dst_reg = cx.fresh_reg();
+                        cx.emit(Inst::AllocaStruct { dst: dst_reg, name: struct_name, align: None });
+                        copy_struct(cx, struct_name, src_reg, dst_reg);
+                        cx.env.insert(name, (dst_reg, ty.clone()));
+                    }
                 }
                 _ => {
                     let val = coerce(cx, val, &value_ty, ty);
@@ -1088,15 +1138,20 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                     // push BOTH as incoming params
                     param_regs.push((ptr_reg, Type::Pointer(Box::new(inner_ty.clone()))));
                     param_regs.push((len_reg, Type::Int32));
-                } else if matches!(ty, Type::Struct(_)) {
-                    // structs are passed by pointer (caller hands us a `ptr`)
-                    // the incoming SSA register IS the struct pointer so we bind
-                    // it directly directly into env, matching the Var-read
-                    // convention that env[name].0 for a struct is the pointer to the struct
+                } else if let Type::Struct(struct_name) = ty {
+                    // pass-by-value: caller still hands us a `ptr` to its
+                    // struct, but we copy into our own local slot on entry so
+                    // mutations don't leak back. For pass-by-reference the
+                    // user writes `*Stereo` explicitly — that falls through
+                    // to the `_` arm and stays a plain pointer.
                     let param_reg = cx.fresh_reg();
-                    cx.emit(Inst::Comment(format!("params {}: {} (by pointer)", name, ty)));
+                    cx.emit(Inst::Comment(format!("params {}: {} (by value, copied on entry)", name, ty)));
                     param_regs.push((param_reg, ty.clone()));
-                    cx.env.insert(name, (param_reg, ty.clone()));
+
+                    let local_reg = cx.fresh_reg();
+                    cx.emit(Inst::AllocaStruct { dst: local_reg, name: struct_name, align: None });
+                    copy_struct(cx, struct_name, param_reg, local_reg);
+                    cx.env.insert(name, (local_reg, ty.clone()));
                 } else {
                     // actual register for the parameter value
                     // e.g. @foo(T %param_regN, ...)
