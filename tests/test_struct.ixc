@@ -1,0 +1,16 @@
+struct Stereo {
+    l: f32,
+    r: f32,
+}
+
+proc bump(s: Stereo) f32 {
+    s.l = s.l + 1.0f32;
+    return s.l + s.r;
+}
+
+@export
+proc main() i32 {
+    let x: Stereo = Stereo { l: 1.0f32, r: 0.25f32 };
+    let y: f32 = bump(x);
+    return numerical_cast(y, i32);
+}

@@ -47,7 +47,8 @@ fn main() {
         let (ast, parse_errs) = parse::parse(file_path.to_string(), src.len(), tokens);
 
         if let Some(ast) = ast.filter(|_| errors.len() + parse_errs.len() == 0) {
-            let (typecheck_errs, node_types) = typecheck::typecheck_program(&ast);
+            let mut cx = typecheck::Context::new();
+            let typecheck_errs = typecheck::typecheck_program(&mut cx, &ast);
 
             // check if there is no main function when compiling an executable
             if !args.shared && !args.static_lib {
@@ -101,7 +102,7 @@ fn main() {
                     std::process::exit(1);
                 });
 
-                let mil = mil::lower(&ast, node_types);
+                let mil = mil::lower(&ast, &cx);
                 let llvm_ir = llvm::emit(mil);
 
                 let llvm_ir_output_path = args.output.with_extension("ll");

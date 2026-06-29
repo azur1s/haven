@@ -6,6 +6,8 @@ pub struct Context<'a> {
     pub scopes: Vec<HashMap<&'a str, Type<'a>>>,
     /// Map from Expr/Stmt/TopLevel IDs to their inferred types, for use in later codegen
     pub node_types: HashMap<usize, Type<'a>>,
+    /// Struct definitions from name to ordered list of (field name, field type)
+    pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
 }
 
 impl<'a> Context<'a> {
@@ -13,6 +15,7 @@ impl<'a> Context<'a> {
         Self {
             scopes: vec![HashMap::new()], // global scope
             node_types: HashMap::new(),
+            structs: HashMap::new(),
         }
     }
 
@@ -530,6 +533,77 @@ fn infer<'a>(
             }
         },
 
+        ExprNode::Struct { name, fields } => {
+            let def = match cx.structs.get(name) {
+                Some(d) => d.clone(),
+                None => return Err(Error {
+                    msg: format!("Unknown struct '{}'", name),
+                    span,
+                }),
+            };
+
+            if fields.len() != def.len() {
+                return Err(Error {
+                    msg: format!(
+                        "Struct '{}' expects {} fields, got {}",
+                        name, def.len(), fields.len()
+                    ),
+                    span,
+                });
+            }
+
+            // field order must match definition
+            for ((def_name, def_ty), (lit_name, lit_value)) in def.iter().zip(fields.iter()) {
+                if def_name != lit_name {
+                    return Err(Error {
+                        msg: format!(
+                            "In struct '{}': expected field '{}', got '{}'",
+                            name, def_name, lit_name
+                        ),
+                        span: lit_value.span.clone(),
+                    });
+                }
+                check_expr(cx, def_ty, lit_value)?;
+            }
+
+            Type::Struct(name)
+        },
+
+        ExprNode::Access { base, field } => {
+            let base_ty = infer(cx, base)?;
+            let struct_name = match &base_ty {
+                Type::Struct(n) => *n,
+                // auto-deref one level of pointer to a struct (like C's `->`)
+                Type::Pointer(inner) => match inner.as_ref() {
+                    Type::Struct(n) => *n,
+                    _ => return Err(Error {
+                        msg: format!("Cannot access field '{}' on type {}", field, base_ty),
+                        span,
+                    }),
+                },
+                _ => return Err(Error {
+                    msg: format!("Cannot access field '{}' on type {}", field, base_ty),
+                    span,
+                }),
+            };
+
+            let def = match cx.structs.get(struct_name) {
+                Some(d) => d,
+                None => return Err(Error {
+                    msg: format!("Unknown struct '{}'", struct_name),
+                    span,
+                }),
+            };
+
+            match def.iter().find(|(n, _)| n == field) {
+                Some((_, ty)) => ty.clone(),
+                None => return Err(Error {
+                    msg: format!("Struct '{}' has no field '{}'", struct_name, field),
+                    span,
+                }),
+            }
+        },
+
         ExprNode::Call { func, args }
             if matches!(&func.value, ExprNode::Var(name)
                 if Intrinsic::lookup(name).is_some()) => {
@@ -651,8 +725,9 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
             Err(format!("SIMD type '{}' is not allowed in @export functions because its calling convention is target-specific and not guaranteed to match the expected caller, or that's what I'm told", ty)),
         Type::Function { .. } =>
             Err("function pointer types are not supported in @export functions".into()),
-        Type::Defined(_) =>
-            Err(format!("user-defined type '{}' has unknown layout and cannot be used in @export functions", ty)),
+        // TODO something like @repr(C)
+        Type::Struct(_) =>
+            Err(format!("struct type '{}' has unknown layout and cannot be used in @export functions", ty)),
         // these are all fine across FFI
         Type::Void | Type::Bool
         | Type::Int32 | Type::Int64
@@ -700,16 +775,73 @@ fn check_toplevel<'a>(
 
         // Extern declarations have no body to check
         TopLevelNode::Extern { .. } => {}
+
+        TopLevelNode::Struct { name, fields, .. } => {
+            // Ensure no duplicate field names and that referenced struct types exist
+            let mut seen = std::collections::HashSet::new();
+            for (field_name, field_ty) in fields {
+                if !seen.insert(*field_name) {
+                    return Err(Error {
+                        msg: format!("Duplicate field '{}' in struct '{}'", field_name, name),
+                        span: node.span.clone(),
+                    });
+                }
+                if let Err(msg) = check_type_resolves(cx, field_ty) {
+                    return Err(Error {
+                        msg: format!("In field '{}' of struct '{}': {}", field_name, name, msg),
+                        span: node.span.clone(),
+                    });
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
-pub fn typecheck_program<'a>(program: &[TopLevel<'a>]) -> (Vec<Error>, HashMap<usize, Type<'a>>) {
-    let mut cx = Context::new();
+/// Recursively verifies that every Type::Struct referenced in each Type exists
+/// in cx.structs.
+fn check_type_resolves<'a>(cx: &Context<'a>, ty: &Type<'a>) -> Result<(), String> {
+    match ty {
+        Type::Struct(name) => {
+            if cx.structs.contains_key(name) {
+                Ok(())
+            } else {
+                Err(format!("unknown type '{}'", name))
+            }
+        }
+        Type::Pointer(inner)
+        | Type::Array(inner, _)
+        | Type::Slice(inner)
+        | Type::Simd(inner, _) => check_type_resolves(cx, inner),
+        Type::Function { params, return_type } => {
+            for p in params { check_type_resolves(cx, p)?; }
+            check_type_resolves(cx, return_type)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> Vec<Error> {
     let mut errors = Vec::new();
 
-    // forward declaration pass
+    // --- forward declaration pass
+
+    // forward declare structs so that they can be referenced in function signatures
+    for node in program {
+        if let TopLevelNode::Struct { name, fields, .. } = &node.value {
+            if cx.structs.contains_key(name) {
+                errors.push(Error {
+                    msg: format!("Duplicate struct definition '{}'", name),
+                    span: node.span.clone(),
+                });
+                continue;
+            }
+            cx.structs.insert(name, fields.clone());
+        }
+    }
+
+    // forward declare functions so that they can be called before their definition
     for node in program {
         match &node.value {
             TopLevelNode::Function { name, params, return_type, .. }
@@ -719,14 +851,16 @@ pub fn typecheck_program<'a>(program: &[TopLevel<'a>]) -> (Vec<Error>, HashMap<u
                     return_type: Box::new(return_type.clone()),
                 });
             }
+            TopLevelNode::Struct { .. } => {}
         }
     }
 
+    // --- typecheck pass
     for node in program {
-        if let Err(err) = check_toplevel(&mut cx, node) {
+        if let Err(err) = check_toplevel(cx, node) {
             errors.push(err);
         }
     }
 
-    (errors, cx.node_types)
+    errors
 }

@@ -77,6 +77,7 @@ fn lexer<'a> (
         "continue" => Token::Continue,
         "proc"     => Token::Proc,
         "extern"   => Token::Extern,
+        "struct"   => Token::Struct,
         _ => Token::Var(ident),
     });
 
@@ -224,32 +225,31 @@ fn parse_expr<'tks, 'src: 'tks>()
             },
 
             // Struct init, with optional type params: S or S<T1, T2>{f1: v1, f2: v2}
-            // var.map(|s| *s)
-            //     .then(
-            //         parse_type()
-            //             .separated_by(just(Token::Comma))
-            //             .allow_trailing()
-            //             .collect::<Vec<_>>()
-            //             .delimited_by(
-            //                 just(Token::BinaryOp(BinaryOp::Lt)),
-            //                 just(Token::BinaryOp(BinaryOp::Gt))
-            //             )
-            //             .or_not()
-            //     )
-            //     .then(
-            //         var.map(|s| *s)
-            //             .then_ignore(just(Token::Colon))
-            //             .then(expr.clone())
-            //             .separated_by(just(Token::Comma))
-            //             .allow_trailing()
-            //             .collect::<Vec<_>>()
-            //             .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            //     )
-            //     .map(|((name, params), fields)| ExprNode::StructInit {
-            //         name,
-            //         params: params.unwrap_or_else(|| vec![]),
-            //         fields,
-            //     }),
+            var.map(|s| *s)
+                // .then(
+                //     parse_type()
+                //         .separated_by(just(Token::Comma))
+                //         .allow_trailing()
+                //         .collect::<Vec<_>>()
+                //         .delimited_by(
+                //             just(Token::BinaryOp(BinaryOp::Lt)),
+                //             just(Token::BinaryOp(BinaryOp::Gt))
+                //         )
+                //         .or_not()
+                // )
+                .then(
+                    var.map(|s| *s)
+                        .then_ignore(just(Token::Colon))
+                        .then(expr.clone())
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                )
+                .map(|(name, fields)| ExprNode::Struct {
+                    name,
+                    fields,
+                }),
 
             var.map(|s| ExprNode::Var(*s)),
             expr.clone()
@@ -271,19 +271,19 @@ fn parse_expr<'tks, 'src: 'tks>()
         .or(expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
 
         .pratt((
-            // postfix(
-            //     200,
-            //     just(Token::Dot).ignore_then(var),
-            //     |base, field: &&str, e| {
-            //         Metadata::new(
-            //             ExprNode::Access {
-            //                 base: Box::new(base),
-            //                 field: *field,
-            //             },
-            //             e.span(),
-            //         )
-            //     }
-            // ),
+            postfix(
+                200,
+                just(Token::Dot).ignore_then(var),
+                |base, field: &&str, e| {
+                    Metadata::new(
+                        ExprNode::Access {
+                            base: Box::new(base),
+                            field: *field,
+                        },
+                        e.span(),
+                    )
+                }
+            ),
 
             // Calls
             postfix(
@@ -391,7 +391,7 @@ fn parse_type<'tks, 'src: 'tks>()
                         "f32"  => Type::Float32,
                         "f64"  => Type::Float64,
                         // "str"  => Type::Str,
-                        other  => Type::Defined(other),
+                        other  => Type::Struct(other),
                     })
                 } else {
                     // probably could reuse this when we have generic types
@@ -608,8 +608,30 @@ fn parse_toplevel<'tks, 'src: 'tks>()
             return_type,
         });
 
-    function
-        .or(extern_)
+    let struct_ = parse_attribute()
+        .repeated().collect::<Vec<_>>()
+        .then_ignore(just(Token::Struct))
+        .then(var)
+        .then(
+            var.map(|s| *s)
+                .then_ignore(just(Token::Colon))
+                .then(parse_type())
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        )
+        .map(|((attributes, name), fields)| TopLevelNode::Struct {
+            name,
+            attributes,
+            fields,
+        });
+
+    choice((
+        function,
+        extern_,
+        struct_,
+    ))
         .map_with(|node, e| {
             Metadata::new(
                 node,

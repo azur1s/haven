@@ -89,6 +89,8 @@ pub enum Inst<'a> {
     InsertValue { dst: Register, elem: Value, ty: Type<'a>, val: Value, index: usize },
     // %dst = extractvalue %val, index (for extracting from fat pointer struct, e.g. data pointer or length)
     ExtractValue { dst: Register, val: Value, index: usize },
+    // %dst = getelementptr %Name, ptr %base, i32 0, i32 <field_index>
+    FieldPtr { dst: Register, struct_name: &'a str, base: Register, field_index: usize },
 
     // %dst = alloca ty (for mutable locals, if needed)
     Alloca { dst: Register, ty: Type<'a>, align: Option<usize> },
@@ -102,6 +104,8 @@ pub enum Inst<'a> {
     AllocaArray { dst: Register, ty: Type<'a>, length: usize },
     // %dst = getelemptr [length X ty] %array, %index
     IndexArray { dst: Register, ty: Type<'a>, length: usize, array: Register, index: usize },
+    // %dst = alloca %struct_ty, align N
+    AllocaStruct { dst: Register, name: &'a str, align: Option<usize> },
 
     // Intrinsic/SIMD related instructions
     Extend { dst: Register, val: Value, from_ty: Type<'a>, to_ty: Type<'a> },
@@ -168,6 +172,8 @@ pub struct Function<'a> {
 pub struct Module<'a> {
     pub functions: Vec<Function<'a>>,
     pub externs: Vec<ExternDecl<'a>>,
+    /// Struct definitions, in declaration order: name -> ordered (field name, field type)
+    pub structs: Vec<(&'a str, Vec<(&'a str, Type<'a>)>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -185,6 +191,7 @@ pub struct LowerCtx<'a> {
     pub loop_stack: Vec<LoopTargets>,
 
     pub env: HashMap<&'a str, (Register, Type<'a>)>,
+    pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>, // from typecheck
     pub node_types: HashMap<usize, Type<'a>>, // from typecheck
     pub current_return_type: Type<'a>,        // return type of the function being lowered
 }
@@ -487,15 +494,68 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
 
         ExprNode::Var(name) => {
             let (reg, ty) = cx.env[name].clone();
-            // fixed arrays are stored in env as the alloca register itself, not a pointer
-            // to one, so loading would yield the array value — we want the pointer
-            if matches!(ty, Type::Array(_, _)) {
-                Value::Reg(reg)
-            } else {
-                let dst = cx.fresh_reg();
-                cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
-                Value::Reg(dst)
+            match ty {
+                // fixed arrays are stored in env as the alloca register itself, not a pointer
+                // to one, so loading would yield the array value — we want the pointer
+                Type::Array(_, _) => Value::Reg(reg),
+                Type::Struct(_) => Value::Reg(reg),
+                _ => {
+                    let dst = cx.fresh_reg();
+                    cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
+                    Value::Reg(dst)
+                }
             }
+        }
+
+        ExprNode::Struct { name, fields } => {
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::AllocaStruct { dst, name, align: None });
+
+            for (i, (_field_name, field_expr)) in fields.iter().enumerate() {
+                let field_val = lower_expr(cx, field_expr);
+                let field_ptr = cx.fresh_reg();
+
+                cx.emit(Inst::FieldPtr {
+                    dst: field_ptr,
+                    struct_name: name,
+                    base: dst,
+                    field_index: i,
+                });
+                cx.emit(Inst::Store {
+                    ptr: field_ptr,
+                    val: field_val,
+                    ty: cx.structs[name][i].1.clone(),
+                    align: None,
+                });
+            }
+            Value::Reg(dst)
+        }
+        ExprNode::Access { base, field } => {
+            let base_val = lower_expr(cx, base);
+            let base_ty = cx.node_types[&base.id].clone();
+            let struct_name = match base_ty {
+                Type::Struct(name) => name,
+                _ => unreachable!(),
+            };
+            let field_index = cx.structs[&struct_name]
+                .iter()
+                .position(|(fname, _)| fname == field)
+                .unwrap();
+            let field_ty = cx.structs[&struct_name][field_index].1.clone();
+
+            let field_ptr = cx.fresh_reg();
+            cx.emit(Inst::FieldPtr {
+                dst: field_ptr,
+                struct_name: &struct_name,
+                base: match base_val {
+                    Value::Reg(r) => r,
+                    _ => unreachable!(),
+                },
+                field_index,
+            });
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Load { dst, ptr: field_ptr, ty: field_ty, align: None });
+            Value::Reg(dst)
         }
 
         // use fat pointer struct for slices
@@ -730,6 +790,31 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
     match &expr.value {
         ExprNode::Var(name) => cx.env[name].0,
 
+        ExprNode::Access { base, field } => {
+            let base_val = lower_expr(cx, base);
+            let base_ty = cx.node_types[&base.id].clone();
+            let struct_name = match base_ty {
+                Type::Struct(name) => name,
+                _ => unreachable!(),
+            };
+            let field_index = cx.structs[&struct_name]
+                .iter()
+                .position(|(fname, _)| fname == field)
+                .unwrap();
+
+            let field_ptr = cx.fresh_reg();
+            cx.emit(Inst::FieldPtr {
+                dst: field_ptr,
+                struct_name: &struct_name,
+                base: match base_val {
+                    Value::Reg(r) => r,
+                    _ => unreachable!(),
+                },
+                field_index,
+            });
+            field_ptr
+        }
+
         // evaluate ptr as a value, register is the address
         ExprNode::Unary { op: UnaryOp::Deref, operand } => {
             match lower_expr(cx, operand) {
@@ -797,6 +882,14 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                         _ => unreachable!(),
                     };
                     cx.env.insert(name, (arr_reg, ty.clone()));
+                }
+                Type::Struct(_) => {
+                    // like arrays, copying it here to make it explicit
+                    let struct_reg = match val {
+                        Value::Reg(r) => r,
+                        _ => unreachable!(),
+                    };
+                    cx.env.insert(name, (struct_reg, ty.clone()));
                 }
                 _ => {
                     let val = coerce(cx, val, &value_ty, ty);
@@ -925,9 +1018,9 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(&'a str, Type<'a>)>) {
     match &stmt.value {
         StmtNode::Declare { name, ty, .. } => {
-            // remove fixed array types from locals so they don't get
-            // pre-allocated
-            if !matches!(ty, Type::Array(_, _)) {
+            // skip fixed arrays and structs: the literal's own alloca becomes
+            // the local's slot (see the Declare arm in lower_stmt)
+            if !matches!(ty, Type::Array(_, _) | Type::Struct(_)) {
                 out.push((name, ty.clone()));
             }
         }
@@ -995,6 +1088,15 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                     // push BOTH as incoming params
                     param_regs.push((ptr_reg, Type::Pointer(Box::new(inner_ty.clone()))));
                     param_regs.push((len_reg, Type::Int32));
+                } else if matches!(ty, Type::Struct(_)) {
+                    // structs are passed by pointer (caller hands us a `ptr`)
+                    // the incoming SSA register IS the struct pointer so we bind
+                    // it directly directly into env, matching the Var-read
+                    // convention that env[name].0 for a struct is the pointer to the struct
+                    let param_reg = cx.fresh_reg();
+                    cx.emit(Inst::Comment(format!("params {}: {} (by pointer)", name, ty)));
+                    param_regs.push((param_reg, ty.clone()));
+                    cx.env.insert(name, (param_reg, ty.clone()));
                 } else {
                     // actual register for the parameter value
                     // e.g. @foo(T %param_regN, ...)
@@ -1042,10 +1144,14 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
             param_regs
         }
         TopLevelNode::Extern { .. } => vec![],
+        TopLevelNode::Struct { .. } => vec![],
     }
 }
 
-pub fn lower<'a>(program: &[TopLevel<'a>], node_types: HashMap<usize, Type<'a>>) -> Module<'a> {
+pub fn lower<'a>(
+    program: &[TopLevel<'a>],
+    typecheck_context: &crate::typecheck::Context<'a>,
+) -> Module<'a> {
     let mut cx = LowerCtx {
         reg_counter: 0,
         block_counter: 0,
@@ -1053,12 +1159,14 @@ pub fn lower<'a>(program: &[TopLevel<'a>], node_types: HashMap<usize, Type<'a>>)
         blocks: vec![],
         loop_stack: vec![],
         env: HashMap::new(),
-        node_types,
+        structs: typecheck_context.structs.clone(),
+        node_types: typecheck_context.node_types.clone(),
         current_return_type: Type::Void,
     };
 
     let mut functions = Vec::new();
     let mut externs = Vec::new();
+    let mut structs = Vec::new();
 
     for toplevel in program {
         match &toplevel.value {
@@ -1084,8 +1192,11 @@ pub fn lower<'a>(program: &[TopLevel<'a>], node_types: HashMap<usize, Type<'a>>)
                     return_type: return_type.clone(),
                 });
             }
+            TopLevelNode::Struct { name, fields, .. } => {
+                structs.push((*name, fields.clone()));
+            }
         }
     }
 
-    Module { functions, externs }
+    Module { functions, externs, structs }
 }

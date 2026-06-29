@@ -31,7 +31,11 @@ fn emit_type(ty: &Type) -> String {
         // <size x element_type>
         Simd(ty, size) => format!("<{} x {}>", size, emit_type(ty)),
         Function { .. } => todo!("function pointer type"),
-        Defined(name) => todo!("defined types ({name})"),
+        // struct values are always referenced via pointer in our codegen
+        // (see lower_function and lower_expr for ExprNode::Struct)
+        // the named LLVM type `%Name` is only used by AllocaStruct and FieldPtr,
+        // which emit it directly without going through emit_type
+        Struct(_) => "ptr".to_string(),
     }
 }
 
@@ -204,6 +208,11 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
         IndexArray { dst, ty, length, array, index } =>
             emitln!(cx, "    {dst} = getelementptr [{length} x {}], ptr {array}, i32 0, i32 {index}", emit_type(&ty)),
 
+        AllocaStruct { dst, name, align } =>
+            emitln!(cx, "    {dst} = alloca %{name}, align {}", align.unwrap_or(1)),
+        FieldPtr { dst, struct_name, base, field_index } =>
+            emitln!(cx, "    {dst} = getelementptr %{struct_name}, ptr {base}, i32 0, i32 {field_index}"),
+
         Extend { dst, val, from_ty, to_ty } => {
             use Type::*;
             let value = emit_value(val);
@@ -348,6 +357,19 @@ fn emit_extern<'a>(cx: &mut EmitCtx, ext: ExternDecl<'a>) {
 }
 
 fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
+    // typecheck rejected unknown field types so there can be no forward reference
+    // to a not yet declared struct
+    for (name, fields) in &module.structs {
+        let body = fields.iter()
+            .map(|(_, ty)| emit_type(ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        emitln!(cx, "%{name} = type {{ {body} }}");
+    }
+    if !module.structs.is_empty() {
+        emitln!(cx, "");
+    }
+
     module.externs.into_iter().for_each(|ext| emit_extern(cx, ext));
     module.functions.into_iter().for_each(|func| emit_function(cx, func));
 }

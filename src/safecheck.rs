@@ -113,6 +113,7 @@ fn alloc_check_toplevel<'a>(ctx: &mut RtSafetyCtx<'a>, node: &TopLevel<'a>) -> R
             }
             Ok(())
         },
+        TopLevelNode::Struct { .. } => Ok(()),
     }
 }
 

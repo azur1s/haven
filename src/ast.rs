@@ -88,7 +88,7 @@ pub enum Token<'a> {
 
     Let, If, Else, Return,
     While, Break, Continue,
-    Proc, Extern
+    Proc, Extern, Struct,
 }
 
 impl Display for Token<'_> {
@@ -125,6 +125,7 @@ impl Display for Token<'_> {
             Token::Continue     => write!(f, "continue"),
             Token::Proc         => write!(f, "proc"),
             Token::Extern       => write!(f, "extern"),
+            Token::Struct       => write!(f, "struct"),
         }
     }
 }
@@ -187,7 +188,7 @@ pub enum Type<'a> {
     /// Slice type, e.g., `[T]`
     Slice(Box<Self>),
     Simd(Box<Self>, usize),
-    Defined(&'a str),
+    Struct(&'a str),
 }
 
 impl<'a> Type<'a> {
@@ -224,7 +225,7 @@ impl<'a> Display for Type<'a> {
             Array(inner, size) => write!(f, "[{}; {}]", inner, size),
             Slice(inner) => write!(f, "[{}]", inner),
             Simd(inner, size) => write!(f, "simd[{}, {}]", inner, size),
-            Defined(name) => write!(f, "{}", name),
+            Struct(name) => write!(f, "{}", name),
         }
     }
 }
@@ -237,6 +238,16 @@ pub enum ExprNode<'a> {
     Float32(f32), Float64(f64),
     Var(&'a str),
     Slice(Vec<Expr<'a>>),
+
+    Struct {
+        name: &'a str,
+        fields: Vec<(&'a str, Expr<'a>)>,
+    },
+    Access {
+        base: Box<Expr<'a>>,
+        field: &'a str,
+    },
+
     Index {
         slice: Box<Expr<'a>>,
         index: Box<Expr<'a>>,
@@ -267,6 +278,7 @@ impl<'a> Display for ExprNode<'a> {
             ExprNode::Float32(val) => write!(f, "{}f32", val),
             ExprNode::Float64(val) => write!(f, "{}f64", val),
             ExprNode::Var(name) => write!(f, "{}", name),
+
             ExprNode::Slice(elements) => {
                 let elements_str = elements.iter()
                     .map(|e| e.value.to_string())
@@ -274,6 +286,16 @@ impl<'a> Display for ExprNode<'a> {
                     .join(", ");
                 write!(f, "[{}]", elements_str)
             },
+            ExprNode::Access { base, field } => write!(f, "{}.{}", base.value, field),
+
+            ExprNode::Struct { name, fields } => {
+                let fields_str = fields.iter()
+                    .map(|(field_name, field_value)| format!("{}: {}", field_name, field_value.value))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{} {{ {} }}", name, fields_str)
+            },
+
             ExprNode::Index { slice, index } => write!(f, "{}[{}]", slice.value, index.value),
             ExprNode::Unary { op, operand } => write!(f, "({}{})", op, operand.value),
             ExprNode::Binary { op, left, right } => write!(f, "({} {} {})", left.value, op, right.value),
@@ -396,6 +418,12 @@ pub enum TopLevelNode<'a> {
         params: Vec<(&'a str, Type<'a>)>,
         return_type: Type<'a>,
     },
+
+    Struct {
+        name: &'a str,
+        attributes: Vec<Attribute<'a>>,
+        fields: Vec<(&'a str, Type<'a>)>,
+    },
 }
 
 impl<'a> Display for TopLevelNode<'a> {
@@ -421,6 +449,16 @@ impl<'a> Display for TopLevelNode<'a> {
                 let params_str = params.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect::<Vec<_>>().join(", ");
 
                 write!(f, "{}extern {}({}) {};", attrs_str, name, params_str, return_type)
+            },
+            TopLevelNode::Struct { name, attributes, fields } => {
+                let attrs_str = if attributes.is_empty() {
+                    String::new()
+                } else {
+                    attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
+                };
+                let fields_str = fields.iter().map(|(name, ty)| format!("    {}: {},\n", name, ty)).collect::<String>();
+
+                write!(f, "{}struct {} {{\n{}}}", attrs_str, name, fields_str)
             },
         }
     }
