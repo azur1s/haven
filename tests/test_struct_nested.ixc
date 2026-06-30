@@ -1,0 +1,58 @@
+@inline(always) extern print_float(n: f32) void;
+
+struct Vec2 {
+    x: f32,
+    y: f32,
+}
+
+struct Box {
+    lo: Vec2,
+    hi: Vec2,
+}
+
+// nested struct return: sret out-pointer + recursive field copy
+proc make_box(a: f32, b: f32) Box {
+    return Box {
+        lo: Vec2 { x: a, y: b },
+        hi: Vec2 { x: a + 1.0f32, y: b + 1.0f32 },
+    };
+}
+
+// take a sub-struct by value
+proc sum2(v: Vec2) f32 {
+    return v.x + v.y;
+}
+
+// mutate the caller's struct through a pointer, reaching a nested field
+proc bump_lo(b: *Box) {
+    b.lo.x = b.lo.x + 100.0f32;
+}
+
+@export
+proc main() i32 {
+    // layout is inlined: %Box = type { %Vec2, %Vec2 }
+    let b: Box = make_box(1.0f32, 2.0f32);
+    print_float(b.lo.x); // expect 1.0
+    print_float(b.lo.y); // expect 2.0
+    print_float(b.hi.x); // expect 2.0
+    print_float(b.hi.y); // expect 3.0
+
+    // deep copy: c must be independent of b through all levels
+    let c: Box = b;
+    c.lo.x = 9.0f32;
+    print_float(b.lo.x); // expect 1.0 (b unchanged)
+    print_float(c.lo.x); // expect 9.0
+
+    // pass a nested sub-struct by value
+    print_float(sum2(b.lo)); // expect 3.0
+
+    // mutate a nested field through a pointer to the whole struct
+    bump_lo(&b);
+    print_float(b.lo.x); // expect 101.0
+
+    // write directly to a nested field
+    b.hi.y = 42.0f32;
+    print_float(b.hi.y); // expect 42.0
+
+    return 0;
+}

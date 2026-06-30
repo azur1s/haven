@@ -39,6 +39,18 @@ fn emit_type(ty: &Type) -> String {
     }
 }
 
+/// Layout type for a field *inside* a struct definition. Differs from
+/// `emit_type` only for structs because a struct value is normally a `ptr`
+/// handle, but as a field it is inlined as the named type `%Name`.
+fn emit_field_type(ty: &Type) -> String {
+    match ty {
+        Type::Struct(name) => format!("%{name}"),
+        Type::Array(t, n) => format!("[{} x {}]", n, emit_field_type(t)),
+        Type::Simd(t, n) => format!("<{} x {}>", n, emit_field_type(t)),
+        _ => emit_type(ty),
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum FastMathFlags {
     None,
@@ -184,14 +196,27 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                 Xor => "xor",
             }, emit_type(&ty), emit_value(lhs), emit_value(rhs));
         }
-        Call { dst, func, args, return_type } => {
+        Call { dst, func, args, return_type, sret } => {
             // %result = call <return_type> @<function_name>(<arg_type> <arg_val>, ...)
-            let dst_prefix = dst.map(|dst| format!("{dst} = ")).unwrap_or_default();
             let args_str = args.into_iter()
                 .map(|(val, ty)| format!("{} {}", emit_type(&ty), emit_value(val)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            emitln!(cx, "    {dst_prefix}call {} @{func}({args_str})", emit_type(&return_type));
+            match sret {
+                // struct return: void call with the result slot as a leading sret arg
+                Some((slot, name)) => {
+                    let all_args = if args_str.is_empty() {
+                        format!("ptr sret(%{name}) {slot}")
+                    } else {
+                        format!("ptr sret(%{name}) {slot}, {args_str}")
+                    };
+                    emitln!(cx, "    call void @{func}({all_args})");
+                }
+                None => {
+                    let dst_prefix = dst.map(|dst| format!("{dst} = ")).unwrap_or_default();
+                    emitln!(cx, "    {dst_prefix}call {} @{func}({args_str})", emit_type(&return_type));
+                }
+            }
         }
         Index { dst, slice, index, element_ty } =>
             // %result = getelementptr <PointeeTy>, ptr <BasePtr> {, <IdxTy> <Idx> }*
@@ -334,7 +359,21 @@ fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {
         .map(|(reg, ty)| format!("{} {reg}", emit_type(&ty)))
         .collect::<Vec<_>>()
         .join(", ");
-    emitln!(cx, "define {linkage} {} @{}({params_str}){attrs_str} {{", emit_type(&func.return_type), func.name);
+
+    // struct-returning functions return void and take a hidden leading sret param
+    let (ret_ty_str, params_str) = match &func.sret {
+        Some((reg, name)) => {
+            let sret_param = format!("ptr sret(%{name}) {reg}");
+            let params = if params_str.is_empty() {
+                sret_param
+            } else {
+                format!("{sret_param}, {params_str}")
+            };
+            ("void".to_string(), params)
+        }
+        None => (emit_type(&func.return_type), params_str),
+    };
+    emitln!(cx, "define {linkage} {ret_ty_str} @{}({params_str}){attrs_str} {{", func.name);
     func.blocks.into_iter().for_each(|block| emit_block(cx, block));
     emitln!(cx, "}}");
 }
@@ -361,7 +400,7 @@ fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
     // to a not yet declared struct
     for (name, fields) in &module.structs {
         let body = fields.iter()
-            .map(|(_, ty)| emit_type(ty))
+            .map(|(_, ty)| emit_field_type(ty))
             .collect::<Vec<_>>()
             .join(", ");
         emitln!(cx, "%{name} = type {{ {body} }}");

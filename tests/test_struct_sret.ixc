@@ -1,0 +1,47 @@
+@inline(always) extern print_float(n: f32) void;
+
+struct Stereo {
+    l: f32,
+    r: f32,
+}
+
+// returns a freshly built struct by value (sret out-pointer is passed by the caller)
+proc make(a: f32, b: f32) Stereo {
+    return Stereo { l: a, r: b };
+}
+
+// returns the result of another struct-returning call (chained sret)
+proc forward(a: f32, b: f32) Stereo {
+    return make(a, b);
+}
+
+// takes a struct by value AND returns a new one
+// the by-value copy on entry must not leak back, and the returned struct must
+// be independent storage
+proc gain(s: Stereo, g: f32) Stereo {
+    return Stereo { l: s.l * g, r: s.r * g };
+}
+
+@export
+proc main() i32 {
+    // basic struct return: storage belongs to main, not to make()
+    let a: Stereo = make(3.0f32, 4.0f32);
+    print_float(a.l); // expect 3.0
+    print_float(a.r); // expect 4.0
+
+    // chained sret: forward() returns make()'s result
+    let b: Stereo = forward(1.0f32, 2.0f32);
+    print_float(b.l); // expect 1.0
+    print_float(b.r); // expect 2.0
+
+    // pass-by-value into a struct-returning function
+    let c: Stereo = gain(b, 3.0f32);
+    print_float(c.l); // expect 3.0
+    print_float(c.r); // expect 6.0
+    print_float(b.l); // expect 1.0 (gain must NOT mutate b)
+
+    // field access directly on a call result (no intermediate binding)
+    print_float(make(7.0f32, 8.0f32).r); // expect 8.0
+
+    return 0;
+}

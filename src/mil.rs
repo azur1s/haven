@@ -80,6 +80,10 @@ pub enum Inst<'a> {
         func: &'a str,
         args: Vec<(Value, Type<'a>)>,
         return_type: Type<'a>,
+        // when the callee returns a struct, the result is passed back through
+        // this caller-allocated slot (sret) instead of a return value, and the
+        // call itself returns void. Some((slot, struct_name))
+        sret: Option<(Register, &'a str)>,
     },
 
     // %dst = getelemptr %slice, %index (for slice indexing)
@@ -166,6 +170,9 @@ pub struct Function<'a> {
     pub params: Vec<(Register, Type<'a>)>,
     pub return_type: Type<'a>,
     pub blocks: Vec<BasicBlock<'a>>, // blocks[0] is always the entry
+    // for struct-returning functions: the hidden sret out-pointer parameter
+    // (its register and the struct name). The function returns void in LLVM
+    pub sret: Option<(Register, &'a str)>,
 }
 
 #[derive(Clone, Debug)]
@@ -194,6 +201,7 @@ pub struct LowerCtx<'a> {
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>, // from typecheck
     pub node_types: HashMap<usize, Type<'a>>, // from typecheck
     pub current_return_type: Type<'a>,        // return type of the function being lowered
+    pub sret_param: Option<Register>,         // out-pointer slot, if the current fn returns a struct
 }
 
 impl<'a> LowerCtx<'a> {
@@ -512,6 +520,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             cx.emit(Inst::AllocaStruct { dst, name, align: None });
 
             for (i, (_field_name, field_expr)) in fields.iter().enumerate() {
+                let field_ty = cx.structs[name][i].1.clone();
                 let field_val = lower_expr(cx, field_expr);
                 let field_ptr = cx.fresh_reg();
 
@@ -521,12 +530,26 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                     base: dst,
                     field_index: i,
                 });
-                cx.emit(Inst::Store {
-                    ptr: field_ptr,
-                    val: field_val,
-                    ty: cx.structs[name][i].1.clone(),
-                    align: None,
-                });
+                match field_ty {
+                    // a nested struct field is inlined storage, so copy the
+                    // source struct's contents into it rather than storing a
+                    // pointer (field_val is the source struct's address)
+                    Type::Struct(inner) => {
+                        let src = match field_val {
+                            Value::Reg(r) => r,
+                            _ => unreachable!(),
+                        };
+                        copy_struct(cx, inner, src, field_ptr);
+                    }
+                    _ => {
+                        cx.emit(Inst::Store {
+                            ptr: field_ptr,
+                            val: field_val,
+                            ty: field_ty,
+                            align: None,
+                        });
+                    }
+                }
             }
             Value::Reg(dst)
         }
@@ -558,9 +581,16 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 },
                 field_index,
             });
-            let dst = cx.fresh_reg();
-            cx.emit(Inst::Load { dst, ptr: field_ptr, ty: field_ty, align: None });
-            Value::Reg(dst)
+            match field_ty {
+                // a struct-typed field is inlined: its value is its address,
+                // so hand back the field pointer instead of loading it
+                Type::Struct(_) => Value::Reg(field_ptr),
+                _ => {
+                    let dst = cx.fresh_reg();
+                    cx.emit(Inst::Load { dst, ptr: field_ptr, ty: field_ty, align: None });
+                    Value::Reg(dst)
+                }
+            }
         }
 
         // use fat pointer struct for slices
@@ -636,6 +666,12 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 Type::Pointer(inner) | Type::Slice(inner) => *inner,
                 _ => unreachable!(),
             };
+            // dereferencing to a struct keeps it in memory
+            // the pointer already points at the struct's storage, so it is the
+            // struct value
+            if matches!(ty, Type::Struct(_)) {
+                return Value::Reg(ptr_reg);
+            }
             let dst = cx.fresh_reg();
             cx.emit(Inst::Load { dst, ptr: ptr_reg, ty, align: None });
             Value::Reg(dst)
@@ -745,12 +781,26 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             }).collect();
 
             let return_type = cx.node_types[&expr.id].clone();
-            if return_type == Type::Void {
-                cx.emit(Inst::Call { dst: None, func: name, args: lowered_args, return_type });
+            let struct_ret = if let Type::Struct(s) = &return_type { Some(*s) } else { None };
+            if let Some(sname) = struct_ret {
+                // if sret, allocate the result slot here and hand the callee a
+                // pointer to it. The call returns void & the slot is the value
+                let slot = cx.fresh_reg();
+                cx.emit(Inst::AllocaStruct { dst: slot, name: sname, align: None });
+                cx.emit(Inst::Call {
+                    dst: None,
+                    func: name,
+                    args: lowered_args,
+                    return_type: Type::Void,
+                    sret: Some((slot, sname)),
+                });
+                Value::Reg(slot)
+            } else if return_type == Type::Void {
+                cx.emit(Inst::Call { dst: None, func: name, args: lowered_args, return_type, sret: None });
                 Value::Const(Const::Bool(false)) // placeholder
             } else {
                 let dst = cx.fresh_reg();
-                cx.emit(Inst::Call { dst: Some(dst), func: name, args: lowered_args, return_type });
+                cx.emit(Inst::Call { dst: Some(dst), func: name, args: lowered_args, return_type, sret: None });
                 Value::Reg(dst)
             }
         }
@@ -869,11 +919,10 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
 }
 
 // Field-by-field copy from one struct pointer to another. Both `src` and `dst`
-// must be pointers to a struct of the given name.
+// must be pointers to a struct of the given name. Recurses on nested struct
+// fields so the whole tree is deep-copied (value semantics).
 // TODO: switch to an `llvm.memcpy` intrinsic for large structs instead of
-// emitting a load/store per field. Also recurse properly on nested struct
-// fields (today they'd fall into the `_` arm and copy the pointer, not the
-// contents).
+// emitting a load/store per scalar field.
 fn copy_struct<'a>(cx: &mut LowerCtx<'a>, struct_name: &'a str, src: Register, dst: Register) {
     let fields = cx.structs[struct_name].clone();
     for (i, (_fname, fty)) in fields.iter().enumerate() {
@@ -882,12 +931,13 @@ fn copy_struct<'a>(cx: &mut LowerCtx<'a>, struct_name: &'a str, src: Register, d
         cx.emit(Inst::FieldPtr { dst: src_field, struct_name, base: src, field_index: i });
         cx.emit(Inst::FieldPtr { dst: dst_field, struct_name, base: dst, field_index: i });
         match fty {
+            // for nested struct, both field pointers point at inlined sub-struct
+            // storage, so recurse to deep-copy it
             Type::Struct(inner_name) => {
-                // TODO: nested-struct copy
-                // for now do a shallow pointer copy
-                let _ = inner_name;
-                panic!("nested struct copy not yet implemented");
+                copy_struct(cx, inner_name, src_field, dst_field);
             }
+            // everything else (scalars, arrays, slices, simd) is a single
+            // value/aggregate that an LLVM load/store copies directly
             _ => {
                 let loaded = cx.fresh_reg();
                 cx.emit(Inst::Load { dst: loaded, ptr: src_field, ty: fty.clone(), align: None });
@@ -927,12 +977,13 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
                     };
-                    // if the RHS is a struct literal, its own alloca becomes
-                    // this local's slot & no copy needed
-                    // anything else (Var, field access, call return, etc.) is
-                    // a reference to someone else's storage and needs a copy
-                    // for value semantics
-                    if matches!(value.value, ExprNode::Struct { .. }) {
+                    // if the RHS already owns a fresh slot, adopt it as this
+                    // local's storage & no copy needed: a struct literal allocs
+                    // its own slot, and a struct-returning call writes into a
+                    // fresh sret slot nobody else aliases.
+                    // anything else (Var, field access, etc.) references someone
+                    // else's storage and needs a copy for value semantics.
+                    if matches!(value.value, ExprNode::Struct { .. } | ExprNode::Call { .. }) {
                         cx.env.insert(name, (src_reg, ty.clone()));
                     } else {
                         let dst_reg = cx.fresh_reg();
@@ -1056,8 +1107,20 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             let val = lower_expr(cx, expr);
             let value_ty = cx.node_types[&expr.id].clone();
             let ret_ty = cx.current_return_type.clone();
-            let val = coerce(cx, val, &value_ty, &ret_ty);
-            cx.terminate(Terminator::Return(Some((val, ret_ty))));
+            let struct_ret = if let Type::Struct(s) = &ret_ty { Some(*s) } else { None };
+            if let Some(name) = struct_ret {
+                // copy the struct into the caller-provided sret slot, ret void
+                let src = match val {
+                    Value::Reg(r) => r,
+                    _ => unreachable!(),
+                };
+                let dst = cx.sret_param.expect("struct-returning function has no sret slot");
+                copy_struct(cx, name, src, dst);
+                cx.terminate(Terminator::Return(None));
+            } else {
+                let val = coerce(cx, val, &value_ty, &ret_ty);
+                cx.terminate(Terminator::Return(Some((val, ret_ty))));
+            }
         }
     }
 }
@@ -1090,12 +1153,23 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(&'a str, Type<'a>)>) {
 }
 
 fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
--> Vec<(Register, Type<'a>)> {
+-> (Vec<(Register, Type<'a>)>, Option<(Register, &'a str)>) {
     match &func.value {
         TopLevelNode::Function { name, attributes, params, return_type, body, .. } => {
             let entry = cx.fresh_block();
             cx.current_block = entry;
             cx.current_return_type = return_type.clone();
+
+            // struct returns are lowered with an sret out-pointer
+            // allocate its register up front so `return` can copy into it
+            let sret = if let Type::Struct(s) = return_type {
+                let r = cx.fresh_reg();
+                cx.sret_param = Some(r);
+                Some((r, *s))
+            } else {
+                cx.sret_param = None;
+                None
+            };
 
             let mut param_regs = Vec::new();
             for (name, ty) in params {
@@ -1196,10 +1270,10 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                 }
             }
 
-            param_regs
+            (param_regs, sret)
         }
-        TopLevelNode::Extern { .. } => vec![],
-        TopLevelNode::Struct { .. } => vec![],
+        TopLevelNode::Extern { .. } => (vec![], None),
+        TopLevelNode::Struct { .. } => (vec![], None),
     }
 }
 
@@ -1217,6 +1291,7 @@ pub fn lower<'a>(
         structs: typecheck_context.structs.clone(),
         node_types: typecheck_context.node_types.clone(),
         current_return_type: Type::Void,
+        sret_param: None,
     };
 
     let mut functions = Vec::new();
@@ -1226,13 +1301,14 @@ pub fn lower<'a>(
     for toplevel in program {
         match &toplevel.value {
             TopLevelNode::Function { name, attributes, return_type, .. } => {
-                let param_regs = lower_function(&mut cx, toplevel);
+                let (param_regs, sret) = lower_function(&mut cx, toplevel);
                 functions.push(Function {
                     name,
                     attributes: attributes.clone(),
                     params: param_regs,
                     return_type: return_type.clone(),
                     blocks: cx.blocks.clone(),
+                    sret,
                 });
                 // reset for next function
                 cx.reg_counter = 0;
