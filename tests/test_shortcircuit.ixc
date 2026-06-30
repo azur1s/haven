@@ -1,5 +1,3 @@
-@inline(always) extern print_i32(n: i32) void;
-
 proc foo() i32 {
     print_i32(42);
     return 42;

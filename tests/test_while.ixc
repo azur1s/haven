@@ -1,5 +1,3 @@
-@inline(always) extern print_i32(n: i32) void;
-
 @export
 proc main() {
     let i: i32 = 0;

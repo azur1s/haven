@@ -1,0 +1,12 @@
+// ixc prelude: declarations implicitly available in every module.
+// Backed by the C runtime in crt/rt.c (always linked).
+//
+// These are *overridable*: if a program declares a top-level item with the
+// same name, the program's definition wins and the prelude one is dropped.
+
+extern print(s: str) void;
+extern println(s: str) void;
+
+extern print_i32(n: i32) void;
+extern print_float(n: f32) void;
+extern print_double(n: f64) void;

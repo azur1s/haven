@@ -1,62 +1,65 @@
-@inline(always) extern print_float(f: f32) void;
-
-// First-order IIR lowpass filters
-// Updates state in-place and returns the filtered sample
-// coeff close to 1.0 = slow response, close to 0.0 = fast response
-proc lowpass(state: *f32, x: f32, coeff: f32) f32 {
-    *state = coeff * *state + (1.0 - coeff) * x;
-    return *state;
-}
-
-// Apply a gain to a buffer of samples using SIMD where possible
-// Processes 4 samples at a time, with a scalar fallback for the remainder
-proc apply_gain_simd(buf: *[f32], gain: f32) {
+proc gain_stereo(samples: *simd<f32, 4>, gain: f32) {
     let v_gain: simd<f32, 4> = simd_splat(f32, 4, gain);
-    let n: i32 = len(*buf);
-    let i: i32 = 0;
-
-    while (i + 4 <= n) {
-        let v: simd<f32, 4> = simd_load(f32, 4, *buf, i);
-        simd_store(f32, 4, *buf, i, v * v_gain);
-        i = i + 4;
-    }
-
-    // Scalar tail for remainder
-    while (i < n) {
-        (*buf)[i] = (*buf)[i] * gain;
-        i = i + 1;
-    }
+    *samples = *samples * v_gain;
 }
 
-// Process a buffer
+// buf_l and buf_r are separate left/right buffers (interleaved 2 samples at a time)
 @alloc(false)
-proc process(buffer: *[f32], state: *f32) {
-    let coeff: f32 = 0.8;
+@export
+proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
     let i: i32 = 0;
-    while (i < len(*buffer)) {
-        (*buffer)[i] = lowpass(state, (*buffer)[i], coeff);
+
+    let gain: f32 = 0.5;
+
+    while (i + 2 <= num_samples) {
+        // load 2 left samples into lanes 0-1, 2 right samples into lanes 2-3
+        let l: simd<f32, 2> = simd_load(f32, 2, buf_l, i);
+        let r: simd<f32, 2> = simd_load(f32, 2, buf_r, i);
+        let x: simd<f32, 4> = simd_concat(f32, 4, l, r);
+
+        gain_stereo(&x, gain);
+
+        // split result back to left/right and store
+        simd_store(f32, 2, buf_l, i, simd_low(f32, 2, x));
+        simd_store(f32, 2, buf_r, i, simd_high(f32, 2, x));
+
+        i = i + 2;
+    }
+
+    // scalar tail
+    while (i < num_samples) {
+        buf_l[i] = buf_l[i] * gain;
+        buf_r[i] = buf_r[i] * gain;
         i = i + 1;
     }
-    apply_gain_simd(buffer, 0.5);
 }
 
 @export
 proc main() {
-    let buffer: [f32] = [1.0, 0.9, 0.5, 0.1, 0.0, 0.1];
-    let state: f32 = 0.0;
-    process(&buffer, &state);
+    // host usually supply buffer in 2-divisble, but just to test edge case
+    let left:  [f32] = [1.0, 0.9, 0.5, 0.1, 0.0, 0.1, 0.5];
+    let right: [f32] = [0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.1];
+    let num_samples: i32 = 7;
 
-    // Expected output (lowpass then * 0.5):
-    // 0.100000
-    // 0.170000
-    // 0.186000
-    // 0.158800
-    // 0.127040
-    // 0.111632
+    process_stereo(&left[0], &right[0], num_samples);
 
     let i: i32 = 0;
-    while (i < len(buffer)) {
-        print_float(buffer[i]);
+    while (i < len(left)) {
+        print("L channel: ");
+        print_float(left[i]);
+        print("R channel: ");
+        print_float(right[i]);
+        print("\n");
         i = i + 1;
     }
+
+    // Expected output:
+    // L channel   R channel
+    // 0.500000    0.250000
+    // 0.450000    0.200000
+    // 0.250000    0.150000
+    // 0.050000    0.100000
+    // 0.000000    0.050000
+    // 0.050000    0.000000
+    // 0.250000    0.050000
 }

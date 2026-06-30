@@ -1,6 +1,3 @@
-@inline(always) extern print_i32(n: i32) void;
-@inline(always) extern println(s: str) void;
-
 // Static strings: `str` is an &'static str, i.e. a { ptr, i32 } fat pointer
 // into a read-only global blob. This test is self-contained: main returns an
 // exit code that is only 0 when every check holds.

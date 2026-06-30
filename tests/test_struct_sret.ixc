@@ -1,5 +1,3 @@
-@inline(always) extern print_float(n: f32) void;
-
 struct Stereo {
     l: f32,
     r: f32,

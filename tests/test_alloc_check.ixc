@@ -1,6 +1,5 @@
-// extern function not marked with @alloc(false) will be marked as dirty
-@inline(always) extern print_i32(x: i32) void;
-
+// print_i32 comes from the prelude; an extern not marked @alloc(false) is
+// treated as dirty (may allocate), so anything calling it becomes dirty too
 proc dirty() { print_i32(0); }
 
 @alloc(false)

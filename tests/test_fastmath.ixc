@@ -1,6 +1,3 @@
-@inline(always) extern print_float(f: f32) void;
-@inline(always) extern print_double(f: f64) void;
-
 // fast, reassoc, nnan, ninf, nsz, arcp, contract
 @fastmath(fast)
 proc f(x: f32) f32 {

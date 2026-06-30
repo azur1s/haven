@@ -35,16 +35,78 @@ fn offset_to_line_col(src: &str, offset: usize) -> (usize, usize) {
 
 const RUNTIME_ARCHIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libruntime.a"));
 
+/// Prelude source, embedded at compile time. Parsed and injected ahead of every
+/// user program (see `main`). Backed by the C runtime in `crt/rt.c`.
+const PRELUDE_SRC: &str = include_str!("../crt/prelude.ixc");
+
+/// The declared name of a top-level item, used to let user definitions
+/// override (shadow) prelude ones.
+fn toplevel_name<'a>(item: &ast::TopLevel<'a>) -> &'a str {
+    match &item.value {
+        ast::TopLevelNode::Function { name, .. }
+        | ast::TopLevelNode::Extern { name, .. }
+        | ast::TopLevelNode::Struct { name, .. } => *name,
+    }
+}
+
 fn main() {
     let args = args::Args::parse();
 
     let file_path = args.input.to_str().expect("Invalid input file path");
     let src = std::fs::read_to_string(&args.input).expect("Failed to read file");
 
+    // lex the prelude up front, its tokens (and thus the AST borrowing them)
+    // must outlive the user AST so the two can be merged. a failure here is a
+    // compiler bug
+    let (prelude_tokens, prelude_lex_errs) = parse::lex("<prelude>", PRELUDE_SRC);
+    let prelude_tokens = prelude_tokens.expect("prelude failed to lex (compiler bug)");
+    assert!(prelude_lex_errs.is_empty(), "prelude lex errors (compiler bug): {:?}", prelude_lex_errs);
+
     let (tokens, errors) = parse::lex(&file_path, &src);
 
     let parse_errors = if let Some(tokens) = &tokens {
         let (ast, parse_errs) = parse::parse(file_path.to_string(), src.len(), tokens);
+
+        // inject the prelude, prepend its declarations to the user program.
+        // a user definition may not collide with a prelude name (no implicit
+        // shadowing), every collision is a hard error. can be skipped under
+        // --no-prelude for freestanding builds
+        // this is temporary, when there's better module support, the prelude
+        // could be a module that can be imported, and there shouldn't be this
+        // problem
+        let ast = if args.no_prelude {
+            ast
+        } else {
+            ast.map(|user_ast| {
+                let (prelude_ast, prelude_errs) =
+                    parse::parse("<prelude>".to_string(), PRELUDE_SRC.len(), &prelude_tokens);
+                let prelude_ast = prelude_ast.expect("prelude failed to parse (compiler bug)");
+                assert!(prelude_errs.is_empty(), "prelude parse errors (compiler bug): {:?}", prelude_errs);
+
+                let prelude_names: std::collections::HashSet<&str> =
+                    prelude_ast.iter().map(toplevel_name).collect();
+
+                let collisions: Vec<(&str, ast::Span)> = user_ast.iter()
+                    .filter(|item| prelude_names.contains(toplevel_name(item)))
+                    .map(|item| (toplevel_name(item), item.span.clone()))
+                    .collect();
+                if !collisions.is_empty() {
+                    for (name, span) in collisions {
+                        let (line, col) = offset_to_line_col(&src, span.start);
+                        eprintln!(
+                            "Error in {}:{}:{}: '{}' collides with a prelude definition; \
+                             rename it, or compile with --no-prelude to drop the prelude",
+                            span.file, line, col, name,
+                        );
+                    }
+                    std::process::exit(1);
+                }
+
+                let mut merged = prelude_ast;
+                merged.extend(user_ast);
+                merged
+            })
+        };
 
         if let Some(ast) = ast.filter(|_| errors.len() + parse_errs.len() == 0) {
             let mut cx = typecheck::Context::new();

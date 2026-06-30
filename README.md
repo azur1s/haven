@@ -5,12 +5,9 @@
 > [!NOTE]
 > This is very alpha and work in progress, codebase can be messay and bugs may arise, please report if you find one.
 
-> [!NOTE]
-> This is work in progress. But I won't give up. At least without trying.
-
-## Requirements
-- (Developer requirements)
-  - rust
+## Dependencies
+- (Developer dependencies)
+  - rust/cargo
 - LLVM IR compiler
   - clang
   - opt + llc (untested)
