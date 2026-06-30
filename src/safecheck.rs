@@ -14,7 +14,7 @@ struct RtSafetyCtx<'a> {
 /// Returns the list of dirty callees found in this expression.
 fn alloc_check_expr<'a>(ctx: &RtSafetyCtx<'a>, e: &Expr<'a>) -> Vec<(&'a str, Span)> {
     match &e.value {
-        ExprNode::Call { func, args } => {
+        ExprNode::Call { func, args, .. } => {
             // collect any dirty calls inside the arguments
             let mut dirty: Vec<(&'a str, Span)> = args.iter()
                 .flat_map(|a| alloc_check_expr(ctx, a))
@@ -119,7 +119,7 @@ fn alloc_check_toplevel<'a>(ctx: &mut RtSafetyCtx<'a>, node: &TopLevel<'a>) -> R
 
 fn collect_calls_expr<'a>(calls: &mut HashSet<&'a str>, e: &Expr<'a>) {
     match &e.value {
-        ExprNode::Call { func, args } => {
+        ExprNode::Call { func, args, .. } => {
             if let ExprNode::Var(name) = func.value {
                 if Intrinsic::lookup(name).is_none() {
                     calls.insert(name);

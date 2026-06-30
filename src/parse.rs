@@ -123,6 +123,7 @@ fn lexer<'a> (
         just('.').to(Token::Dot),
         just(',').to(Token::Comma),
         just(';').to(Token::Semicolon),
+        just(':').then(just(':')).to(Token::ColonColon), // before `:`
         just(':').to(Token::Colon),
         just('=').to(Token::Assign),
         just('@').to(Token::At),
@@ -294,18 +295,38 @@ fn parse_expr<'tks, 'src: 'tks>()
                 }
             ),
 
-            // Calls
+            // Calls, with an optional turbofish `::<T, N>` before the args.
+            // `::` disambiguates from the `<`/`>` comparison operators.
             postfix(
                 300,
-                expr.clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-                |func, args, e|
+                just(Token::ColonColon)
+                    .ignore_then(
+                        choice((
+                            select! { Token::Int32(n) => GenericArg::Const(n as i64) },
+                            parse_type().map(GenericArg::Type),
+                        ))
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .delimited_by(
+                            just(Token::BinaryOp(BinaryOp::Lt)),
+                            just(Token::BinaryOp(BinaryOp::Gt))),
+                    )
+                    .or_not()
+                    .map(|t| t.unwrap_or_default())
+                    .then(
+                        expr.clone()
+                            .separated_by(just(Token::Comma))
+                            .allow_trailing()
+                            .collect::<Vec<_>>()
+                            .delimited_by(just(Token::LParen), just(Token::RParen)),
+                    )
+                    .boxed(),
+                |func, (type_args, args), e|
                 Metadata::new(
                     ExprNode::Call {
                         func: Box::new(func),
+                        type_args,
                         args,
                     },
                     e.span(),

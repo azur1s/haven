@@ -85,7 +85,7 @@ pub enum Token<'a> {
     LBracket, RBracket,
 
     Dot, Comma, Semicolon,
-    Colon, Assign, At,
+    Colon, ColonColon, Assign, At,
 
     Let, If, Else, Return,
     While, Break, Continue,
@@ -116,6 +116,7 @@ impl Display for Token<'_> {
             Token::Comma        => write!(f, ","),
             Token::Semicolon    => write!(f, ";"),
             Token::Colon        => write!(f, ":"),
+            Token::ColonColon   => write!(f, "::"),
             Token::Assign       => write!(f, "="),
             Token::At           => write!(f, "@"),
             Token::Let          => write!(f, "let"),
@@ -279,6 +280,9 @@ pub enum ExprNode<'a> {
     },
     Call {
         func: Box<Expr<'a>>,
+        /// Turbofish type/const arguments, e.g. `::<f32, 4>`. Empty for ordinary
+        /// calls.
+        type_args: Vec<GenericArg<'a>>,
         args: Vec<Expr<'a>>,
     },
 }
@@ -316,12 +320,17 @@ impl<'a> Display for ExprNode<'a> {
             ExprNode::Index { slice, index } => write!(f, "{}[{}]", slice.value, index.value),
             ExprNode::Unary { op, operand } => write!(f, "({}{})", op, operand.value),
             ExprNode::Binary { op, left, right } => write!(f, "({} {} {})", left.value, op, right.value),
-            ExprNode::Call { func, args } => {
+            ExprNode::Call { func, type_args, args } => {
+                let turbofish = if type_args.is_empty() {
+                    String::new()
+                } else {
+                    format!("::<{}>", type_args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "))
+                };
                 let args_str = args.iter()
                     .map(|arg| arg.value.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "{}({})", func.value, args_str)
+                write!(f, "{}{}({})", func.value, turbofish, args_str)
             }
         }
     }
@@ -344,6 +353,25 @@ impl<'a> Display for GenericParam<'a> {
         match self {
             GenericParam::Type(name) => write!(f, "{}", name),
             GenericParam::Const(name, ty) => write!(f, "const {}: {}", name, ty),
+        }
+    }
+}
+
+/// A generic argument supplied at a call site via turbofish, e.g. the `f32` and
+/// `4` in `simd_splat::<f32, 4>(v)`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GenericArg<'a> {
+    /// A type argument, e.g. `f32`, `[i32; 4]`, `*T`.
+    Type(Type<'a>),
+    /// A compile-time constant argument (literal only for now), e.g. `4`.
+    Const(i64),
+}
+
+impl<'a> Display for GenericArg<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GenericArg::Type(ty) => write!(f, "{}", ty),
+            GenericArg::Const(n) => write!(f, "{}", n),
         }
     }
 }

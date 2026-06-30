@@ -220,6 +220,18 @@ fn main() {
                     std::process::exit(0);
                 }
 
+                let mut compiler_args = vec![
+                    llvm_ir_output_path.to_str().unwrap(),
+                    temp_runtime.path().to_str().unwrap(),
+                ];
+                compiler_args.extend(args.compiler_flags.split_whitespace());
+
+                // add -lm on non-Windows platforms because math library is
+                // in the CRT for MSVC and MinGW
+                if !cfg!(target_os = "windows") {
+                    compiler_args.push("-lm");
+                }
+
                 let status = if args.shared {
                     println!("Compiling as a shared library...");
 
@@ -233,10 +245,7 @@ fn main() {
                     };
 
                     std::process::Command::new(&args.compiler)
-                        .arg(&llvm_ir_output_path)
-                        .arg(temp_runtime.path())
-                        .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
-                        .arg("-lm")
+                        .args(&compiler_args)
                         .arg("-shared")
                         .arg("-o")
                         .arg(&shared_output_path)
@@ -254,10 +263,7 @@ fn main() {
                     };
 
                     std::process::Command::new(&args.compiler)
-                        .arg(&llvm_ir_output_path)
-                        .arg(temp_runtime.path())
-                        .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
-                        .arg("-lm")
+                        .args(&compiler_args)
                         .arg("-o")
                         .arg(&output)
                         .status()

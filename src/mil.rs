@@ -314,9 +314,27 @@ fn coerce<'a>(cx: &mut LowerCtx<'a>, val: Value, from_ty: &Type<'a>, to_ty: &Typ
     }
 }
 
+/// Pulls a concrete type from a turbofish type argument. Type params are skipped
+/// in lowering (generic functions aren't monomorphized), so these are concrete.
+fn ta_type<'a>(type_args: &[GenericArg<'a>], i: usize) -> Type<'a> {
+    match &type_args[i] {
+        GenericArg::Type(t) => t.clone(),
+        _ => unreachable!("expected a type argument at position {i}"),
+    }
+}
+
+/// Pulls a const from a turbofish const argument.
+fn ta_const(type_args: &[GenericArg<'_>], i: usize) -> usize {
+    match &type_args[i] {
+        GenericArg::Const(n) => *n as usize,
+        _ => unreachable!("expected a const argument at position {i}"),
+    }
+}
+
 fn lower_intrinsic<'a>(
     cx: &mut LowerCtx<'a>,
     intrinsic: Intrinsic,
+    type_args: &[GenericArg<'a>],
     args: &[Expr<'a>],
 ) -> Value {
     match intrinsic {
@@ -327,57 +345,25 @@ fn lower_intrinsic<'a>(
             Value::Reg(dst)
         }
         Intrinsic::NumericalCast => {
+            // numerical_cast::<T>(value)
             let val = lower_expr(cx, &args[0]);
             let from_ty = cx.node_types[&args[0].id].clone();
-            let to_ty = match &args[1].value {
-                ExprNode::Var("i32") => Type::Int32,
-                ExprNode::Var("i64") => Type::Int64,
-                ExprNode::Var("u32") => Type::Uint32,
-                ExprNode::Var("u64") => Type::Uint64,
-                ExprNode::Var("f32") => Type::Float32,
-                ExprNode::Var("f64") => Type::Float64,
-                _ => unreachable!(),
-            };
+            let to_ty = ta_type(type_args, 0);
             let dst = cx.fresh_reg();
             cx.emit(Inst::Extend { dst, val, from_ty, to_ty });
             Value::Reg(dst)
         }
         Intrinsic::Sizeof => {
-            // typecheck guarantees a single type-name argument; scalars resolve
-            // directly, anything else is a (validated) struct name.
-            let ty = match &args[0].value {
-                ExprNode::Var("bool") => Type::Bool,
-                ExprNode::Var("i32") => Type::Int32,
-                ExprNode::Var("i64") => Type::Int64,
-                ExprNode::Var("u32") => Type::Uint32,
-                ExprNode::Var("u64") => Type::Uint64,
-                ExprNode::Var("f32") => Type::Float32,
-                ExprNode::Var("f64") => Type::Float64,
-                ExprNode::Var(name) => Type::Struct(name),
-                _ => unreachable!(),
-            };
+            // sizeof::<T>(); the type is taken directly from the turbofish.
+            let ty = ta_type(type_args, 0);
             let dst = cx.fresh_reg();
             cx.emit(Inst::Sizeof { dst, ty });
             Value::Reg(dst)
         }
         Intrinsic::SimdSplat => {
-            let ty = match &args[0].value {
-                ExprNode::Var(name) => match *name {
-                    "i32" => Type::Int32,
-                    "i64" => Type::Int64,
-                    "u32" => Type::Uint32,
-                    "u64" => Type::Uint64,
-                    "f32" => Type::Float32,
-                    "f64" => Type::Float64,
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
-            };
-            let size = match &args[1].value {
-                ExprNode::Int32(n) => *n as usize,
-                _ => unreachable!(),
-            };
-            let value_val = lower_expr(cx, &args[2]);
+            let ty = ta_type(type_args, 0);
+            let size = ta_const(type_args, 1);
+            let value_val = lower_expr(cx, &args[0]);
 
             let v0 = cx.fresh_reg();
             cx.emit(Inst::Splat { dst: v0, val: value_val, ty: ty.clone(), size });
@@ -393,29 +379,15 @@ fn lower_intrinsic<'a>(
             Value::Reg(dst)
         }
         Intrinsic::SimdLoad => {
-            // simd_load(T, N, slice, offset) -> T where T = simd[T, N]
-            let ty = match &args[0].value {
-                ExprNode::Var(name) => match *name {
-                    "i32" => Type::Int32,
-                    "i64" => Type::Int64,
-                    "u32" => Type::Uint32,
-                    "u64" => Type::Uint64,
-                    "f32" => Type::Float32,
-                    "f64" => Type::Float64,
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
-            };
-            let size = match &args[1].value {
-                ExprNode::Int32(n) => *n as usize,
-                _ => unreachable!(),
-            };
-            let slice_val = lower_expr(cx, &args[2]);
-            let offset_val = lower_expr(cx, &args[3]);
+            // simd_load::<T, N>(slice, offset) -> simd[T, N]
+            let ty = ta_type(type_args, 0);
+            let size = ta_const(type_args, 1);
+            let slice_val = lower_expr(cx, &args[0]);
+            let offset_val = lower_expr(cx, &args[1]);
 
             cx.emit(Inst::Comment(format!("simd_load")));
             // extract the data pointer from the fat pointer struct, or use directly if it's already a pointer
-            let data_ptr = match cx.node_types[&args[2].id] {
+            let data_ptr = match cx.node_types[&args[0].id] {
                 Type::Slice(_) => {
                     let extracted = cx.fresh_reg();
                     cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
@@ -439,29 +411,15 @@ fn lower_intrinsic<'a>(
             Value::Reg(dst)
         }
         Intrinsic::SimdStore => {
-            // simd_store(T, N, slice, offset, value) -> () where T = simd[T, N]
-            let ty = match &args[0].value {
-                ExprNode::Var(name) => match *name {
-                    "i32" => Type::Int32,
-                    "i64" => Type::Int64,
-                    "u32" => Type::Uint32,
-                    "u64" => Type::Uint64,
-                    "f32" => Type::Float32,
-                    "f64" => Type::Float64,
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
-            };
-            let size = match &args[1].value {
-                ExprNode::Int32(n) => *n as usize,
-                _ => unreachable!(),
-            };
-            let slice_val = lower_expr(cx, &args[2]);
-            let offset_val = lower_expr(cx, &args[3]);
-            let value_val = lower_expr(cx, &args[4]);
+            // simd_store::<T, N>(slice, offset, value) -> ()
+            let ty = ta_type(type_args, 0);
+            let size = ta_const(type_args, 1);
+            let slice_val = lower_expr(cx, &args[0]);
+            let offset_val = lower_expr(cx, &args[1]);
+            let value_val = lower_expr(cx, &args[2]);
 
             // like simd_load
-            let data_ptr = match cx.node_types[&args[2].id] {
+            let data_ptr = match cx.node_types[&args[0].id] {
                 Type::Slice(_) => {
                     let extracted = cx.fresh_reg();
                     cx.emit(Inst::ExtractValue { dst: extracted, val: slice_val.clone(), index: 0 });
@@ -484,29 +442,15 @@ fn lower_intrinsic<'a>(
             Value::Const(Const::Undef) // placeholder since void return
         }
         Intrinsic::SimdConcat => {
-            let ty = match &args[0].value {
-                ExprNode::Var(name) => match *name {
-                    "i32" => Type::Int32,
-                    "i64" => Type::Int64,
-                    "u32" => Type::Uint32,
-                    "u64" => Type::Uint64,
-                    "f32" => Type::Float32,
-                    "f64" => Type::Float64,
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
-            };
-            let size = match &args[1].value {
-                ExprNode::Int32(n) => *n as usize,
-                _ => unreachable!(),
-            };
-            let value1_val = lower_expr(cx, &args[2]);
-            let value2_val = lower_expr(cx, &args[3]);
+            let ty = ta_type(type_args, 0);
+            let size = ta_const(type_args, 1);
+            let value1_val = lower_expr(cx, &args[0]);
+            let value2_val = lower_expr(cx, &args[1]);
             let dst = cx.fresh_reg();
             cx.emit(Inst::Comment(format!("simd_concat({}, {}, ..., ...)", ty, size)));
             cx.emit(Inst::Shuffle {
                 dst,
-                value_size: match cx.node_types[&args[2].id] {
+                value_size: match cx.node_types[&args[0].id] {
                     Type::Simd(_, s) => s,
                     _ => unreachable!(),
                 },
@@ -520,30 +464,16 @@ fn lower_intrinsic<'a>(
         }
         Intrinsic::SimdLow
         | Intrinsic::SimdHigh => {
-            // simd_low(T, N, value) -> T where T = simd[T, N]
-            let ty = match &args[0].value {
-                ExprNode::Var(name) => match *name {
-                    "i32" => Type::Int32,
-                    "i64" => Type::Int64,
-                    "u32" => Type::Uint32,
-                    "u64" => Type::Uint64,
-                    "f32" => Type::Float32,
-                    "f64" => Type::Float64,
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
-            };
-            let size = match &args[1].value {
-                ExprNode::Int32(n) => *n as usize,
-                _ => unreachable!(),
-            };
-            let value_val = lower_expr(cx, &args[2]);
+            // simd_low::<T, N>(value) -> simd[T, N]
+            let ty = ta_type(type_args, 0);
+            let size = ta_const(type_args, 1);
+            let value_val = lower_expr(cx, &args[0]);
 
             let dst = cx.fresh_reg();
             cx.emit(Inst::Comment(format!("{}({}, {}, ...)", intrinsic, ty, size)));
             cx.emit(Inst::Shuffle {
                 dst,
-                value_size: match cx.node_types[&args[2].id] {
+                value_size: match cx.node_types[&args[0].id] {
                     Type::Simd(_, s) => s,
                     _ => unreachable!(),
                 },
@@ -848,15 +778,15 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             Value::Reg(dst)
         }
 
-        ExprNode::Call { func, args }
+        ExprNode::Call { func, type_args, args }
             if matches!(&func.value, ExprNode::Var(name)
                 if Intrinsic::lookup(name).is_some()) => {
             let ExprNode::Var(name) = &func.value else { unreachable!() };
             let intrinsic = Intrinsic::lookup(name).unwrap();
-            lower_intrinsic(cx, intrinsic, args)
+            lower_intrinsic(cx, intrinsic, type_args, args)
         }
 
-        ExprNode::Call { func, args } => {
+        ExprNode::Call { func, args, .. } => {
             cx.emit(Inst::Comment(format!("call {}(...)", func.value)));
             let name = match &func.value {
                 ExprNode::Var(name) => name,

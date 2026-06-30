@@ -6,16 +6,14 @@ struct Slice {
     int length;
 };
 
-// `str` is a { ptr, i32 } fat pointer in the language
-// no null terminator is assumed, so the explicit length is used
-struct Str {
-    const char* ptr;
-    int length;
-};
-
-void print(struct Str s) { fwrite(s.ptr, 1, (size_t)s.length, stdout); }
-void println(struct Str s) {
-    fwrite(s.ptr, 1, (size_t)s.length, stdout);
+// `str` is a { ptr, i32 } fat pointer in the language. The compiler passes it by
+// value as that two-field aggregate, which LLVM lowers to two registers (ptr,
+// len) on both the SysV and Windows x64 ABIs. A C `struct` parameter would NOT
+// match on Windows x64 (a 16-byte struct is passed *by reference* there), so we
+// take the two fields as separate scalar parameters to match the call ABI.
+void print(const char* ptr, int length) { fwrite(ptr, 1, (size_t)length, stdout); }
+void println(const char* ptr, int length) {
+    fwrite(ptr, 1, (size_t)length, stdout);
     putchar('\n');
 }
 

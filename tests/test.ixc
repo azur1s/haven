@@ -1,5 +1,5 @@
 proc gain_stereo(samples: *simd<f32, 8>, gain: f32) {
-    let v_gain: simd<f32, 8> = simd_splat(f32, 8, gain);
+    let v_gain: simd<f32, 8> = simd_splat::<f32, 8>(gain);
     *samples = *samples * v_gain;
 }
 
@@ -13,15 +13,15 @@ proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
 
     while (i + 4 <= num_samples) {
         // load 4 left samples into lanes 0-3, 4 right samples into lanes 4-7
-        let l: simd<f32, 4> = simd_load(f32, 4, buf_l, i);
-        let r: simd<f32, 4> = simd_load(f32, 4, buf_r, i);
-        let x: simd<f32, 8> = simd_concat(f32, 8, l, r);
+        let l: simd<f32, 4> = simd_load::<f32, 4>(buf_l, i);
+        let r: simd<f32, 4> = simd_load::<f32, 4>(buf_r, i);
+        let x: simd<f32, 8> = simd_concat::<f32, 8>(l, r);
 
         gain_stereo(&x, gain);
 
         // split result back to left/right and store
-        simd_store(f32, 4, buf_l, i, simd_low(f32, 4, x));
-        simd_store(f32, 4, buf_r, i, simd_high(f32, 4, x));
+        simd_store::<f32, 4>(buf_l, i, simd_low::<f32, 4>(x));
+        simd_store::<f32, 4>(buf_r, i, simd_high::<f32, 4>(x));
 
         i = i + 4;
     }

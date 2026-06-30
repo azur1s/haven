@@ -102,10 +102,9 @@ pub struct IntrinsicSig {
 }
 
 impl Intrinsic {
-    /// The intrinsic's generic signature header. Type/const parameters are
-    /// written first, then value arguments — except `numerical_cast`, whose type
-    /// argument is trailing, so it is handled specially and its header here is
-    /// empty (the whole call is treated as two value args for arity purposes).
+    /// The intrinsic's generic signature header: type parameters and const
+    /// parameters (supplied via turbofish) followed by `value_arity` ordinary
+    /// value arguments.
     pub fn signature(self) -> IntrinsicSig {
         use TyConstraint::*;
         let (type_params, const_params, value_arity): (
@@ -114,7 +113,7 @@ impl Intrinsic {
             usize,
         ) = match self {
             Self::Len           => (&[],        &[],           1),
-            Self::NumericalCast => (&[],        &[],           2),
+            Self::NumericalCast => (&[Numeric], &[],           1),
             Self::Sizeof        => (&[Any],     &[],           0),
             Self::SimdSplat     => (&[Numeric], &[LANES],      1),
             Self::SimdLoad      => (&[Numeric], &[LANES],      2),
