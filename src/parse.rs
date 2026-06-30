@@ -85,6 +85,7 @@ fn lexer<'a> (
         "continue" => Token::Continue,
         "proc"     => Token::Proc,
         "extern"   => Token::Extern,
+        "const"    => Token::Const,
         "struct"   => Token::Struct,
         _ => Token::Var(ident),
     });
@@ -563,10 +564,33 @@ fn parse_toplevel<'tks, 'src: 'tks>()
 > {
     let var = select_ref! { Token::Var(ident) => ident };
 
+    // a single generic parameter: either `const N: u32` or a bare type param `T`
+    let generic_param = choice((
+        just(Token::Const)
+            .ignore_then(var.map(|s| *s))
+            .then_ignore(just(Token::Colon))
+            .then(parse_type())
+            .map(|(name, ty)| GenericParam::Const(name, ty)),
+        var.map(|s| GenericParam::Type(*s)),
+    ));
+
+    // optional `<T, const N: u32, ...>` list following a function name
+    let generics = generic_param
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(
+            just(Token::BinaryOp(BinaryOp::Lt)),
+            just(Token::BinaryOp(BinaryOp::Gt)))
+        .or_not()
+        .map(|g| g.unwrap_or_default())
+        .boxed();
+
     let function = parse_attribute()
         .repeated().collect::<Vec<_>>()
         .then_ignore(just(Token::Proc))
         .then(var)
+        .then(generics.clone())
         .then(
             var.map(|s| *s)
                 .then_ignore(just(Token::Colon))
@@ -586,9 +610,10 @@ fn parse_toplevel<'tks, 'src: 'tks>()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace))
         )
-        .map(|((((attributes, name), params), return_type), body)| TopLevelNode::Function {
+        .map(|(((((attributes, name), generics), params), return_type), body)| TopLevelNode::Function {
             name,
             attributes,
+            generics,
             params,
             return_type,
             body,
@@ -598,6 +623,7 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         .repeated().collect::<Vec<_>>()
         .then_ignore(just(Token::Extern))
         .then(var)
+        .then(generics.clone())
         .then(
             var.map(|s| *s)
                 .then_ignore(just(Token::Colon))
@@ -609,9 +635,10 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         )
         .then(parse_type().or_not().map(|t| t.unwrap_or(Type::Void)))
         .then_ignore(just(Token::Semicolon))
-        .map(|(((attributes, name), params), return_type)| TopLevelNode::Extern {
+        .map(|((((attributes, name), generics), params), return_type)| TopLevelNode::Extern {
             name,
             attributes,
+            generics,
             params,
             return_type,
         });

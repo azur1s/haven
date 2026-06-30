@@ -1397,7 +1397,12 @@ pub fn lower<'a>(
 
     for toplevel in program {
         match &toplevel.value {
-            TopLevelNode::Function { name, attributes, return_type, .. } => {
+            TopLevelNode::Function { name, attributes, return_type, generics, .. } => {
+                // generic functions are templates; without monomorphization there
+                // is nothing to lower until they're instantiated at a call site
+                if !generics.is_empty() {
+                    continue;
+                }
                 let (param_regs, sret) = lower_function(&mut cx, toplevel);
                 functions.push(Function {
                     name,

@@ -8,6 +8,10 @@ pub struct Context<'a> {
     pub node_types: HashMap<usize, Type<'a>>,
     /// Struct definitions from name to ordered list of (field name, field type)
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
+    /// Type-parameter names in scope for the function currently being checked,
+    /// e.g. `["T"]` while inside `proc id<T>(...)`. Used to resolve a bare
+    /// `Type::Struct(name)` into a `Type::Param(name)`. Empty outside generics.
+    pub generics: Vec<&'a str>,
 }
 
 impl<'a> Context<'a> {
@@ -16,6 +20,7 @@ impl<'a> Context<'a> {
             scopes: vec![HashMap::new()], // global scope
             node_types: HashMap::new(),
             structs: HashMap::new(),
+            generics: Vec::new(),
         }
     }
 
@@ -695,8 +700,9 @@ fn check_stmt<'a>(
         },
 
         StmtNode::Declare { name, ty, value } => {
-            check_expr(cx, ty, value)?;
-            cx.insert(name, ty.clone());
+            let ty = resolve_type(&cx.generics, ty);
+            check_expr(cx, &ty, value)?;
+            cx.insert(name, ty);
         },
 
         StmtNode::Assign { left, value } => {
@@ -758,6 +764,8 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
         // TODO something like @repr(C)
         Type::Struct(_) =>
             Err(format!("struct type '{}' has unknown layout and cannot be used in @export functions", ty)),
+        Type::Param(_) =>
+            Err("generic type parameters are not allowed in @export functions".into()),
         // these are all fine across FFI
         Type::Void | Type::Bool
         | Type::Int32 | Type::Int64
@@ -771,8 +779,16 @@ fn check_toplevel<'a>(
     node: &TopLevel<'a>,
 ) -> Result<(), Error> {
     match &node.value {
-        TopLevelNode::Function { name, attributes, params, return_type, body, .. } => {
+        TopLevelNode::Function { name, attributes, generics, params, return_type, body } => {
             if attributes.iter().any(|a| a.value.name == "export") {
+                // monomorphization isn't implemented yet, so a generic function
+                // has no single concrete ABI to export
+                if !generics.is_empty() {
+                    return Err(Error {
+                        msg: format!("@export function '{}' cannot be generic", name),
+                        span: node.span.clone(),
+                    });
+                }
                 for (param_name, ty) in params {
                     if let Err(msg) = check_export_type(ty) {
                         return Err(Error {
@@ -789,25 +805,44 @@ fn check_toplevel<'a>(
                 }
             }
 
+            // bind type params for the duration of this function so that bare
+            // idents in the signature/body resolve to `Type::Param` rather than
+            // an (undeclared) struct
+            cx.generics = generics.iter().filter_map(|g| match g {
+                GenericParam::Type(n) => Some(*n),
+                GenericParam::Const(_, _) => None,
+            }).collect();
+
+            let return_ty = resolve_type(&cx.generics, return_type);
+
             cx.push_scope();
 
-            // Push params into scope
-            for (name, ty) in params {
-                cx.insert(name, ty.clone());
+            // const generics are ordinary compile-time values, visible in the body
+            for g in generics {
+                if let GenericParam::Const(cname, cty) = g {
+                    cx.insert(cname, cty.clone());
+                }
+            }
+
+            // push params into scope, resolving type-param references
+            for (pname, ty) in params {
+                let resolved = resolve_type(&cx.generics, ty);
+                cx.insert(pname, resolved);
             }
 
             for stmt in body {
-                check_stmt(cx, return_type, stmt)?;
+                check_stmt(cx, &return_ty, stmt)?;
             }
 
             cx.pop_scope();
+            cx.generics = Vec::new();
         }
 
-        // Extern declarations have no body to check
+        // extern declarations have no body to check
         TopLevelNode::Extern { .. } => {}
 
         TopLevelNode::Struct { name, fields, .. } => {
-            // Ensure no duplicate field names and that referenced struct types exist
+            // ensure no duplicate field names and that referenced struct types exist
             let mut seen = std::collections::HashSet::new();
             for (field_name, field_ty) in fields {
                 if !seen.insert(*field_name) {
@@ -827,6 +862,25 @@ fn check_toplevel<'a>(
     }
 
     Ok(())
+}
+
+/// Rewrites every `Type::Struct(name)` whose name is a generic type parameter
+/// in scope into a `Type::Param(name)`, recursing through compound types. The
+/// parser can't tell a struct name from a type param (both are bare idents), so
+/// this resolution happens once the function's generic list is known.
+fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
+    match ty {
+        Type::Struct(name) if generics.contains(name) => Type::Param(name),
+        Type::Pointer(inner)  => Type::Pointer(Box::new(resolve_type(generics, inner))),
+        Type::Array(inner, n) => Type::Array(Box::new(resolve_type(generics, inner)), *n),
+        Type::Slice(inner)    => Type::Slice(Box::new(resolve_type(generics, inner))),
+        Type::Simd(inner, n)  => Type::Simd(Box::new(resolve_type(generics, inner)), *n),
+        Type::Function { params, return_type } => Type::Function {
+            params: params.iter().map(|p| resolve_type(generics, p)).collect(),
+            return_type: Box::new(resolve_type(generics, return_type)),
+        },
+        other => other.clone(),
+    }
 }
 
 /// Recursively verifies that every Type::Struct referenced in each Type exists

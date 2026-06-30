@@ -89,7 +89,7 @@ pub enum Token<'a> {
 
     Let, If, Else, Return,
     While, Break, Continue,
-    Proc, Extern, Struct,
+    Proc, Extern, Const, Struct,
 }
 
 impl Display for Token<'_> {
@@ -127,6 +127,7 @@ impl Display for Token<'_> {
             Token::Continue     => write!(f, "continue"),
             Token::Proc         => write!(f, "proc"),
             Token::Extern       => write!(f, "extern"),
+            Token::Const        => write!(f, "const"),
             Token::Struct       => write!(f, "struct"),
         }
     }
@@ -193,6 +194,11 @@ pub enum Type<'a> {
     /// Static string slice (like `&'static str` in Rust)
     Str,
     Struct(&'a str),
+    /// A generic type parameter, e.g. `T`.
+    /// Produced during typechecking by resolving a `Struct(name)` where the name
+    /// matches a type param in scope. It is abstract and must never survive to
+    /// codegen stage.
+    Param(&'a str),
 }
 
 impl<'a> Type<'a> {
@@ -231,6 +237,7 @@ impl<'a> Display for Type<'a> {
             Simd(inner, size) => write!(f, "simd[{}, {}]", inner, size),
             Str => write!(f, "str"),
             Struct(name) => write!(f, "{}", name),
+            Param(name) => write!(f, "{}", name),
         }
     }
 }
@@ -321,6 +328,35 @@ impl<'a> Display for ExprNode<'a> {
 }
 
 pub type Expr<'a> = Metadata<ExprNode<'a>>;
+
+/// A generic parameter declared in a function's generic list, e.g. the `T` and
+/// `const N: u32` in `proc foo<T, const N: u32>(...)`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GenericParam<'a> {
+    /// A type parameter, e.g. `T`.
+    Type(&'a str),
+    /// A compile-time constant parameter, e.g. `const N: u32`.
+    Const(&'a str, Type<'a>),
+}
+
+impl<'a> Display for GenericParam<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GenericParam::Type(name) => write!(f, "{}", name),
+            GenericParam::Const(name, ty) => write!(f, "const {}: {}", name, ty),
+        }
+    }
+}
+
+/// Renders a generic list as `<T, const N: u32>`, or the empty string when there
+/// are no params.
+fn fmt_generics(generics: &[GenericParam<'_>]) -> String {
+    if generics.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", generics.iter().map(|g| g.to_string()).collect::<Vec<_>>().join(", "))
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum StmtNode<'a> {
@@ -418,6 +454,7 @@ pub enum TopLevelNode<'a> {
     Function {
         name: &'a str,
         attributes: Vec<Attribute<'a>>,
+        generics: Vec<GenericParam<'a>>,
         params: Vec<(&'a str, Type<'a>)>,
         return_type: Type<'a>,
         body: Vec<Stmt<'a>>,
@@ -425,6 +462,7 @@ pub enum TopLevelNode<'a> {
     Extern {
         name: &'a str,
         attributes: Vec<Attribute<'a>>,
+        generics: Vec<GenericParam<'a>>,
         params: Vec<(&'a str, Type<'a>)>,
         return_type: Type<'a>,
     },
@@ -439,26 +477,28 @@ pub enum TopLevelNode<'a> {
 impl<'a> Display for TopLevelNode<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TopLevelNode::Function { name, attributes, params, return_type, body } => {
+            TopLevelNode::Function { name, attributes, generics, params, return_type, body } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
+                let generics_str = fmt_generics(generics);
                 let params_str = params.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect::<Vec<_>>().join(", ");
                 let body_str = body.iter().map(|stmt| format!("    {}\n", stmt.value)).collect::<String>();
 
-                write!(f, "{}proc {}({}) {} {{\n{}}}", attrs_str, name, params_str, return_type, body_str)
+                write!(f, "{}proc {}{}({}) {} {{\n{}}}", attrs_str, name, generics_str, params_str, return_type, body_str)
             },
-            TopLevelNode::Extern { name, attributes, params, return_type } => {
+            TopLevelNode::Extern { name, attributes, generics, params, return_type } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
+                let generics_str = fmt_generics(generics);
                 let params_str = params.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect::<Vec<_>>().join(", ");
 
-                write!(f, "{}extern {}({}) {};", attrs_str, name, params_str, return_type)
+                write!(f, "{}extern {}{}({}) {};", attrs_str, name, generics_str, params_str, return_type)
             },
             TopLevelNode::Struct { name, attributes, fields } => {
                 let attrs_str = if attributes.is_empty() {

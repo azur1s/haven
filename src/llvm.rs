@@ -38,6 +38,9 @@ fn emit_type(ty: &Type) -> String {
         // the named LLVM type `%Name` is only used by AllocaStruct and FieldPtr,
         // which emit it directly without going through emit_type
         Struct(_) => "ptr".to_string(),
+        // generic functions are skipped during MIL lowering, so a type param
+        // should never reach codegen.
+        Param(name) => unreachable!("generic type parameter `{name}` survived to LLVM codegen"),
     }
 }
 
