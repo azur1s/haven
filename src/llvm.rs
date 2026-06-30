@@ -28,6 +28,8 @@ fn emit_type(ty: &Type) -> String {
 
         Array(t, n) => format!("[{} x {}]", *n, emit_type(t)),
         Slice(_) => "{ ptr, i32 }".to_string(), // struct { ptr, len }
+        // `str` is a { ptr, len } fat pointer as a slice
+        Str => "{ ptr, i32 }".to_string(),
         // <size x element_type>
         Simd(ty, size) => format!("<{} x {}>", size, emit_type(ty)),
         Function { .. } => todo!("function pointer type"),
@@ -395,7 +397,30 @@ fn emit_extern<'a>(cx: &mut EmitCtx, ext: ExternDecl<'a>) {
     emitln!(cx, "declare {} @{}({params_str}){attrs_str}", emit_type(&ext.return_type), ext.name);
 }
 
+/// Emit a byte blob as the body of an LLVM `c"..."` string constant.
+/// Printable ASCII passes through and everything else is emitted as a `\XX` hex escape.
+fn emit_string_blob(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for &b in bytes {
+        if b == b'"' || b == b'\\' || b < 0x20 || b > 0x7e {
+            out.push_str(&format!("\\{:02X}", b));
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
 fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
+    // read-only global blobs backing string literals (@.str.N)
+    for (i, bytes) in module.strings.iter().enumerate() {
+        emitln!(cx, "@.str.{i} = private unnamed_addr constant [{} x i8] c\"{}\"",
+            bytes.len(), emit_string_blob(bytes));
+    }
+    if !module.strings.is_empty() {
+        emitln!(cx, "");
+    }
+
     // typecheck rejected unknown field types so there can be no forward reference
     // to a not yet declared struct
     for (name, fields) in &module.structs {

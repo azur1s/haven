@@ -60,10 +60,18 @@ fn lexer<'a> (
             }
         });
 
-    // let str_ = just('"')
-    //     .ignore_then(none_of('"').repeated().to_slice())
-    //     .then_ignore(just('"'))
-    //     .map(Token::Str);
+    // String literal: keep the raw inner text (escapes are resolved later in
+    // MIL lowering). A backslash escapes the next char so that `\"` and `\\`
+    // don't prematurely terminate the literal.
+    let str_char = choice((
+        just('\\').then(any()).ignored(), // escape pair, e.g. \n \" \\
+        none_of("\\\"").ignored(),        // any ordinary char
+    ));
+    let str_ = str_char
+        .repeated()
+        .to_slice()
+        .delimited_by(just('"'), just('"'))
+        .map(Token::Str);
 
     let ident = text::ascii::ident().map(|ident: &str| match ident {
         "true"     => Token::Bool(true),
@@ -121,7 +129,7 @@ fn lexer<'a> (
 
     let token = float
         .or(int)
-        // .or(str_)
+        .or(str_)
         .or(ident)
         .or(math)
         .or(delim);
@@ -221,7 +229,7 @@ fn parse_expr<'tks, 'src: 'tks>()
                 Token::Uint64(u)  => ExprNode::Uint64(*u),
                 Token::Float32(f) => ExprNode::Float32(*f),
                 Token::Float64(f) => ExprNode::Float64(*f),
-                // Token::Str(s)     => ExprNode::Str(*s),
+                Token::Str(s)     => ExprNode::Str(*s),
             },
 
             // Struct init, with optional type params: S or S<T1, T2>{f1: v1, f2: v2}
@@ -390,7 +398,7 @@ fn parse_type<'tks, 'src: 'tks>()
                         "u64"  => Type::Uint64,
                         "f32"  => Type::Float32,
                         "f64"  => Type::Float64,
-                        // "str"  => Type::Str,
+                        "str"  => Type::Str,
                         other  => Type::Struct(other),
                     })
                 } else {

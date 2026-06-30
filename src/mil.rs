@@ -39,6 +39,9 @@ pub enum Const {
     Uint64(u64),
     Float32(f32),
     Float64(f64),
+    /// Address of a module-level string blob, emitted as `@.str.{0}`.
+    /// The index refers into `Module::strings`.
+    GlobalStr(usize),
 }
 
 impl Display for Const {
@@ -52,6 +55,7 @@ impl Display for Const {
             Const::Uint64(n) => write!(f, "{}", n),
             Const::Float32(n)=> write!(f, "{:?}", n),
             Const::Float64(n)=> write!(f, "{:?}", n),
+            Const::GlobalStr(n) => write!(f, "@.str.{}", n),
         }
     }
 }
@@ -181,6 +185,9 @@ pub struct Module<'a> {
     pub externs: Vec<ExternDecl<'a>>,
     /// Struct definitions, in declaration order: name -> ordered (field name, field type)
     pub structs: Vec<(&'a str, Vec<(&'a str, Type<'a>)>)>,
+    /// Interned, escape-resolved string-literal blobs. Index `i` is emitted as
+    /// the global `@.str.{i}` and referenced by `Const::GlobalStr(i)`.
+    pub strings: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Debug)]
@@ -202,6 +209,7 @@ pub struct LowerCtx<'a> {
     pub node_types: HashMap<usize, Type<'a>>, // from typecheck
     pub current_return_type: Type<'a>,        // return type of the function being lowered
     pub sret_param: Option<Register>,         // out-pointer slot, if the current fn returns a struct
+    pub strings: Vec<Vec<u8>>,                // interned string-literal blobs (-> @.str.N)
 }
 
 impl<'a> LowerCtx<'a> {
@@ -222,6 +230,20 @@ impl<'a> LowerCtx<'a> {
         b
     }
 
+    /// Intern a string literal's raw source text, resolving escape sequences,
+    /// and return `(index_into_strings, byte_length)`. Identical blobs are
+    /// deduplicated so repeated literals share one global.
+    pub fn intern_string(&mut self, raw: &str) -> (usize, usize) {
+        let bytes = resolve_escapes(raw);
+        let len = bytes.len();
+        if let Some(i) = self.strings.iter().position(|b| *b == bytes) {
+            return (i, len);
+        }
+        let idx = self.strings.len();
+        self.strings.push(bytes);
+        (idx, len)
+    }
+
     pub fn emit(&mut self, inst: Inst<'a>) {
         let block = self.blocks.iter_mut().find(|b| b.id == self.current_block).unwrap();
         block.instructions.push(inst);
@@ -231,6 +253,36 @@ impl<'a> LowerCtx<'a> {
         let block = self.blocks.iter_mut().find(|b| b.id == self.current_block).unwrap();
         block.terminator = Some(term);
     }
+}
+
+/// Resolve the escape sequences in a string literal's raw source text into the
+/// actual bytes. Recognizes `\n \t \r \0 \\ \"`; an unknown escape `\x` keeps
+/// the char `x` verbatim. The lexer guarantees a backslash is always followed
+/// by at least one char, so a trailing lone backslash cannot occur.
+fn resolve_escapes(raw: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push(b'\n'),
+            Some('t') => out.push(b'\t'),
+            Some('r') => out.push(b'\r'),
+            Some('0') => out.push(0),
+            Some('\\') => out.push(b'\\'),
+            Some('"') => out.push(b'"'),
+            Some(other) => {
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+            }
+            None => {} // should be unreachable per lexer invariant
+        }
+    }
+    out
 }
 
 /// Materialize an array->slice coercion: build a { ptr, i32 N } fat pointer from
@@ -499,6 +551,30 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
         ExprNode::Uint64(n)  => Value::Const(Const::Uint64(*n)),
         ExprNode::Float32(n) => Value::Const(Const::Float32(*n)),
         ExprNode::Float64(n) => Value::Const(Const::Float64(*n)),
+
+        // a string literal is a { ptr, i32 } fat pointer where data field is
+        // the address of a read-only global blob and where length is the byte
+        // count like how slices are, so len()/extractvalue (should) work uniformly
+        ExprNode::Str(s) => {
+            let (idx, len) = cx.intern_string(s);
+            let fat0 = cx.fresh_reg();
+            cx.emit(Inst::InsertValue {
+                dst: fat0,
+                elem: Value::Const(Const::Undef),
+                ty: Type::Pointer(Box::new(Type::Int32)), // emits as `ptr`
+                val: Value::Const(Const::GlobalStr(idx)),
+                index: 0,
+            });
+            let fat1 = cx.fresh_reg();
+            cx.emit(Inst::InsertValue {
+                dst: fat1,
+                elem: Value::Reg(fat0),
+                ty: Type::Int32,
+                val: Value::Const(Const::Int32(len as i32)),
+                index: 1,
+            });
+            Value::Reg(fat1)
+        }
 
         ExprNode::Var(name) => {
             let (reg, ty) = cx.env[name].clone();
@@ -1292,6 +1368,7 @@ pub fn lower<'a>(
         node_types: typecheck_context.node_types.clone(),
         current_return_type: Type::Void,
         sret_param: None,
+        strings: Vec::new(),
     };
 
     let mut functions = Vec::new();
@@ -1329,5 +1406,5 @@ pub fn lower<'a>(
         }
     }
 
-    Module { functions, externs, structs }
+    Module { functions, externs, structs, strings: cx.strings }
 }

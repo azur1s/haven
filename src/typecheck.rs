@@ -78,9 +78,9 @@ fn typecheck_intrinsic<'a>(
                 return Err(Error { msg: "len() takes exactly one argument".into(), span });
             }
             let arg_ty = infer(cx, &args[0])?;
-            if !matches!(arg_ty, Type::Slice(_) | Type::Array(_, _) | Type::Pointer(_)) {
+            if !matches!(arg_ty, Type::Slice(_) | Type::Array(_, _) | Type::Pointer(_) | Type::Str) {
                 return Err(Error {
-                    msg: format!("len() expects a slice, array or pointer, got {}", arg_ty),
+                    msg: format!("len() expects a slice, array, pointer or str, got {}", arg_ty),
                     span,
                 });
             }
@@ -335,7 +335,7 @@ fn check_expr<'a>(
         ExprNode::Uint64(_)  => Type::Uint64,
         ExprNode::Float32(_) => Type::Float32,
         ExprNode::Float64(_) => Type::Float64,
-        // ExprNode::Str(_)     => Type::Str,
+        ExprNode::Str(_)     => Type::Str,
 
         // let xs: []i32 = []; so the type of [] is i32
         // else, if [...] is populated, infer it
@@ -389,7 +389,7 @@ fn infer<'a>(
         ExprNode::Uint64(_)  => Type::Uint64,
         ExprNode::Float32(_) => Type::Float32,
         ExprNode::Float64(_) => Type::Float64,
-        // ExprNode::Str(_)     => Type::Str,
+        ExprNode::Str(_)     => Type::Str,
 
         ExprNode::Var(name) => {
             match cx.lookup(name) {
@@ -720,6 +720,8 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
             Err(format!("fixed-size array type '[{}; N]' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", inner, inner)),
         Type::Slice(inner) =>
             Err(format!("slice type '{}' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", ty, inner)),
+        Type::Str =>
+            Err("str type is not allowed in @export functions (its fat-pointer layout is not stable across FFI), pass a raw '*u8' pointer and an explicit length parameter instead".into()),
         Type::Pointer(inner) => check_export_type(inner), // recurse: *[]f32 is also banned
         Type::Simd(_, _) =>
             Err(format!("SIMD type '{}' is not allowed in @export functions because its calling convention is target-specific and not guaranteed to match the expected caller, or that's what I'm told", ty)),

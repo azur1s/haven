@@ -75,6 +75,7 @@ pub enum Token<'a> {
     Int32(i32), Int64(i64),
     Uint32(u32), Uint64(u64),
     Float32(f32), Float64(f64),
+    Str(&'a str),
     Var(&'a str),
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
@@ -101,6 +102,7 @@ impl Display for Token<'_> {
             Token::Uint64(n)    => write!(f, "{}u64", n),
             Token::Float32(n)   => write!(f, "{}f32", n),
             Token::Float64(n)   => write!(f, "{}f64", n),
+            Token::Str(s)       => write!(f, "\"{:?}\"", s),
             Token::Var(s)       => write!(f, "{}", s),
             Token::BinaryOp(op) => write!(f, "{}", op),
             Token::UnaryOp(op)  => write!(f, "{}", op),
@@ -188,6 +190,8 @@ pub enum Type<'a> {
     /// Slice type, e.g., `[T]`
     Slice(Box<Self>),
     Simd(Box<Self>, usize),
+    /// Static string slice (like `&'static str` in Rust)
+    Str,
     Struct(&'a str),
 }
 
@@ -225,6 +229,7 @@ impl<'a> Display for Type<'a> {
             Array(inner, size) => write!(f, "[{}; {}]", inner, size),
             Slice(inner) => write!(f, "[{}]", inner),
             Simd(inner, size) => write!(f, "simd[{}, {}]", inner, size),
+            Str => write!(f, "str"),
             Struct(name) => write!(f, "{}", name),
         }
     }
@@ -236,6 +241,10 @@ pub enum ExprNode<'a> {
     Int32(i32), Int64(i64),
     Uint32(u32), Uint64(u64),
     Float32(f32), Float64(f64),
+    /// String literal `"..."`. Holds the raw source text between the quotes.
+    /// escape sequences are resolved later, during MIL lowering, e.g.
+    /// `\n` ([\, n]) becomes a single byte 0x0A
+    Str(&'a str),
     Var(&'a str),
     Slice(Vec<Expr<'a>>),
 
@@ -277,6 +286,7 @@ impl<'a> Display for ExprNode<'a> {
             ExprNode::Uint64(val) => write!(f, "{}u64", val),
             ExprNode::Float32(val) => write!(f, "{}f32", val),
             ExprNode::Float64(val) => write!(f, "{}f64", val),
+            ExprNode::Str(s) => write!(f, "{:?}", s),
             ExprNode::Var(name) => write!(f, "{}", name),
 
             ExprNode::Slice(elements) => {
