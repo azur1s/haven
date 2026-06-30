@@ -116,6 +116,8 @@ pub enum Inst<'a> {
     AllocaStruct { dst: Register, name: &'a str, align: Option<usize> },
 
     // Intrinsic/SIMD related instructions
+    // %dst = ptrtoint of `getelementptr ty, ptr null, i32 1` -> size of `ty` in bytes (u64)
+    Sizeof { dst: Register, ty: Type<'a> },
     Extend { dst: Register, val: Value, from_ty: Type<'a>, to_ty: Type<'a> },
     // %v0 = insertelement ty(simd) undef, %value, 0
     Splat { dst: Register, val: Value, ty: Type<'a>, size: usize },
@@ -338,6 +340,24 @@ fn lower_intrinsic<'a>(
             };
             let dst = cx.fresh_reg();
             cx.emit(Inst::Extend { dst, val, from_ty, to_ty });
+            Value::Reg(dst)
+        }
+        Intrinsic::Sizeof => {
+            // typecheck guarantees a single type-name argument; scalars resolve
+            // directly, anything else is a (validated) struct name.
+            let ty = match &args[0].value {
+                ExprNode::Var("bool") => Type::Bool,
+                ExprNode::Var("i32") => Type::Int32,
+                ExprNode::Var("i64") => Type::Int64,
+                ExprNode::Var("u32") => Type::Uint32,
+                ExprNode::Var("u64") => Type::Uint64,
+                ExprNode::Var("f32") => Type::Float32,
+                ExprNode::Var("f64") => Type::Float64,
+                ExprNode::Var(name) => Type::Struct(name),
+                _ => unreachable!(),
+            };
+            let dst = cx.fresh_reg();
+            cx.emit(Inst::Sizeof { dst, ty });
             Value::Reg(dst)
         }
         Intrinsic::SimdSplat => {

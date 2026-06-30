@@ -1,9 +1,9 @@
-proc gain_stereo(samples: *simd<f32, 4>, gain: f32) {
-    let v_gain: simd<f32, 4> = simd_splat(f32, 4, gain);
+proc gain_stereo(samples: *simd<f32, 8>, gain: f32) {
+    let v_gain: simd<f32, 8> = simd_splat(f32, 8, gain);
     *samples = *samples * v_gain;
 }
 
-// buf_l and buf_r are separate left/right buffers (interleaved 2 samples at a time)
+// buf_l and buf_r are separate left/right buffers (interleaved 4 samples at a time)
 @alloc(false)
 @export
 proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
@@ -11,19 +11,19 @@ proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
 
     let gain: f32 = 0.5;
 
-    while (i + 2 <= num_samples) {
-        // load 2 left samples into lanes 0-1, 2 right samples into lanes 2-3
-        let l: simd<f32, 2> = simd_load(f32, 2, buf_l, i);
-        let r: simd<f32, 2> = simd_load(f32, 2, buf_r, i);
-        let x: simd<f32, 4> = simd_concat(f32, 4, l, r);
+    while (i + 4 <= num_samples) {
+        // load 4 left samples into lanes 0-3, 4 right samples into lanes 4-7
+        let l: simd<f32, 4> = simd_load(f32, 4, buf_l, i);
+        let r: simd<f32, 4> = simd_load(f32, 4, buf_r, i);
+        let x: simd<f32, 8> = simd_concat(f32, 8, l, r);
 
         gain_stereo(&x, gain);
 
         // split result back to left/right and store
-        simd_store(f32, 2, buf_l, i, simd_low(f32, 2, x));
-        simd_store(f32, 2, buf_r, i, simd_high(f32, 2, x));
+        simd_store(f32, 4, buf_l, i, simd_low(f32, 4, x));
+        simd_store(f32, 4, buf_r, i, simd_high(f32, 4, x));
 
-        i = i + 2;
+        i = i + 4;
     }
 
     // scalar tail
@@ -37,9 +37,9 @@ proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
 @export
 proc main() {
     // host usually supply buffer in 2-divisble, but just to test edge case
-    let left:  [f32] = [1.0, 0.9, 0.5, 0.1, 0.0, 0.1, 0.5];
-    let right: [f32] = [0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.1];
-    let num_samples: i32 = 7;
+    let left:  [f32] = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0];
+    let right: [f32] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+    let num_samples: i32 = len(left);
 
     process_stereo(&left[0], &right[0], num_samples);
 
@@ -52,14 +52,4 @@ proc main() {
         print("\n");
         i = i + 1;
     }
-
-    // Expected output:
-    // L channel   R channel
-    // 0.500000    0.250000
-    // 0.450000    0.200000
-    // 0.250000    0.150000
-    // 0.050000    0.100000
-    // 0.000000    0.050000
-    // 0.050000    0.000000
-    // 0.250000    0.050000
 }

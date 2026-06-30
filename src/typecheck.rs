@@ -126,6 +126,34 @@ fn typecheck_intrinsic<'a>(
             cx.node_types.insert(expr_id, target_ty.clone());
             Ok(target_ty)
         }
+        Intrinsic::Sizeof => {
+            if args.len() != 1 {
+                return Err(Error { msg: "sizeof() takes exactly one argument".into(), span });
+            }
+            // the argument is a type name written as a bare identifier:
+            // a scalar (`i32`, `f32`, `bool`, ...) or a declared struct name.
+            match &args[0].value {
+                ExprNode::Var(name) => {
+                    let known = matches!(*name,
+                        "bool" | "i32" | "i64" | "u32" | "u64" | "f32" | "f64")
+                        || cx.structs.contains_key(name);
+                    if !known {
+                        return Err(Error {
+                            msg: format!("sizeof() expects a scalar type or a struct name, got `{}`", name),
+                            span,
+                        });
+                    }
+                }
+                _ => {
+                    return Err(Error {
+                        msg: "sizeof()'s argument must be a type name (e.g. `sizeof(f32)`)".into(),
+                        span,
+                    });
+                }
+            }
+            cx.node_types.insert(expr_id, Type::Uint64);
+            Ok(Type::Uint64)
+        }
         Intrinsic::SimdSplat => {
             if args.len() != 3 {
                 return Err(Error { msg: "simd_splat() takes exactly three arguments".into(), span });

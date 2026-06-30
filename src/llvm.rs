@@ -240,6 +240,14 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
         FieldPtr { dst, struct_name, base, field_index } =>
             emitln!(cx, "    {dst} = getelementptr %{struct_name}, ptr {base}, i32 0, i32 {field_index}"),
 
+        Sizeof { dst, ty } => {
+            // classic LLVM sizeof: index one element past a null base, then
+            // reinterpret the resulting address as an integer. The target data
+            // layout decides the stride, so struct padding/alignment is exact.
+            let elem = emit_field_type(&ty);
+            emitln!(cx, "    {dst}.szp = getelementptr {elem}, ptr null, i32 1");
+            emitln!(cx, "    {dst} = ptrtoint ptr {dst}.szp to i64");
+        }
         Extend { dst, val, from_ty, to_ty } => {
             use Type::*;
             let value = emit_value(val);

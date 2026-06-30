@@ -5,6 +5,9 @@ pub enum Intrinsic {
     /// Numerical type cast
     /// `numerical_cast(0, iN, uN, fN) -> iN/uN/fN`
     NumericalCast,
+    /// Size in bytes of a type, respecting the target ABI layout.
+    /// `sizeof(T) -> u64`
+    Sizeof,
 
     /// `simd_splat(T, N, value) -> T where T = simd[T, N]`
     /// e.g. `value = simd_splat(f32, 4, 1.0) -> simd[f32, 4] (1.0, 1.0, 1.0, 1.0)`
@@ -29,6 +32,7 @@ impl Intrinsic {
         match name {
             "len" => Some(Self::Len),
             "numerical_cast" => Some(Self::NumericalCast),
+            "sizeof" => Some(Self::Sizeof),
             "simd_splat" => Some(Self::SimdSplat),
             "simd_load" => Some(Self::SimdLoad),
             "simd_store" => Some(Self::SimdStore),
@@ -45,6 +49,7 @@ impl std::fmt::Display for Intrinsic {
         let name = match self {
             Self::Len => "len",
             Self::NumericalCast => "numerical_cast",
+            Self::Sizeof => "sizeof",
             Self::SimdSplat => "simd_splat",
             Self::SimdLoad => "simd_load",
             Self::SimdStore => "simd_store",
