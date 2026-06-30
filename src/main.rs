@@ -161,14 +161,14 @@ fn main() {
                 let status = if args.shared {
                     println!("Compiling as a shared library...");
 
-                    #[cfg(target_os = "windows")]
-                    let shared_output_path = args.output.with_extension("dll");
-                    #[cfg(target_os = "macos")]
-                    let shared_output_path = args.output.with_extension("dylib");
-                    #[cfg(target_os = "linux")]
-                    let shared_output_path = args.output.with_extension("so");
-                    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-                    let shared_output_path = args.output.with_extension("so"); // Default to .so for other platforms
+                    let shared_output_path = if cfg!(target_os = "windows") {
+                        args.output.with_extension("dll")
+                    } else if cfg!(target_os = "macos") {
+                        args.output.with_extension("dylib")
+                    } else {
+                        // Default to .so for linux & other platforms
+                        args.output.with_extension("so")
+                    };
 
                     std::process::Command::new(&args.compiler)
                         .arg(&llvm_ir_output_path)
@@ -183,12 +183,19 @@ fn main() {
                     todo!("Implement static library compilation");
                 } else {
                     println!("Compiling as an executable...");
+
+                    let output = if cfg!(target_os = "windows") {
+                        args.output.with_extension("exe")
+                    } else {
+                        args.output
+                    };
+
                     std::process::Command::new(&args.compiler)
                         .arg(&llvm_ir_output_path)
                         .arg(temp_runtime.path())
                         .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
                         .arg("-o")
-                        .arg(&args.output)
+                        .arg(&output)
                         .status()
                         .expect("Failed to execute compiler for executable")
                 };

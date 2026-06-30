@@ -9,7 +9,7 @@ pub struct Args {
 
     /// The output file path for the compiled binary
     /// Defaults to `a.out` if not specified.
-    #[arg(short, long, value_name = "OUTPUT", default_value = "output.exe")]
+    #[arg(short, long, value_name = "OUTPUT", default_value = "output")]
     pub output: PathBuf,
 
     /// The LLVM IR compiler to use (e.g., `clang`, `llc`, etc.)

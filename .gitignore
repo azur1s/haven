@@ -4,3 +4,6 @@
 *.dll
 *.lib
 *.s
+
+# default compiler output
+output
