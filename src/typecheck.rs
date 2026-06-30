@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::{ast::*, intrinsics::Intrinsic};
+use crate::{ast::*, intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound}};
 
 #[derive(Clone, Debug)]
 pub struct Context<'a> {
@@ -42,6 +42,114 @@ impl<'a> Context<'a> {
     }
 }
 
+/// Resolves a type-argument expression (a bare type name) into a `Type`, then
+/// checks it against the parameter's kind constraint. Accepts scalars, declared
+/// structs, and in-scope generic type params (`Type::Param`). Type params are
+/// passed through optimistically — their kind is only known once a generic
+/// function is monomorphized (not yet implemented), and such bodies never reach
+/// codegen.
+fn parse_type_arg<'a>(
+    cx: &Context<'a>,
+    intrinsic: Intrinsic,
+    kind: TyConstraint,
+    arg: &Expr<'a>,
+    span: &Span,
+) -> Result<Type<'a>, Error> {
+    let name = match &arg.value {
+        ExprNode::Var(n) => *n,
+        _ => return Err(Error {
+            msg: format!("{}() expects a type name as a type argument", intrinsic),
+            span: span.clone(),
+        }),
+    };
+    let ty = match name {
+        "bool" => Type::Bool,
+        "i32" => Type::Int32,
+        "i64" => Type::Int64,
+        "u32" => Type::Uint32,
+        "u64" => Type::Uint64,
+        "f32" => Type::Float32,
+        "f64" => Type::Float64,
+        _ if cx.generics.contains(&name) => Type::Param(name),
+        _ if cx.structs.contains_key(&name) => Type::Struct(name),
+        _ => return Err(Error {
+            msg: format!("{}() got unknown type `{}`", intrinsic, name),
+            span: span.clone(),
+        }),
+    };
+    match kind {
+        TyConstraint::Any => {}
+        TyConstraint::Numeric => {
+            if !ty.is_numeric() && !matches!(ty, Type::Param(_)) {
+                return Err(Error {
+                    msg: format!("{}() expects a numeric type, got `{}`", intrinsic, ty),
+                    span: span.clone(),
+                });
+            }
+        }
+    }
+    Ok(ty)
+}
+
+/// Reads a const-argument expression as a compile-time integer and checks it
+/// against the parameter's bound. Stage 1 const generics are literal-only.
+fn parse_const_arg(
+    intrinsic: Intrinsic,
+    bound: ConstBound,
+    arg: &Expr<'_>,
+    span: &Span,
+) -> Result<usize, Error> {
+    let valid = |x: i64| {
+        x >= bound.min && x <= bound.max && x % bound.multiple_of as i64 == 0
+    };
+    match &arg.value {
+        ExprNode::Int32(x) if valid(*x as i64) => Ok(*x as usize),
+        _ => {
+            let mut msg = format!(
+                "{}() const argument must be an integer literal in {}..={}",
+                intrinsic, bound.min, bound.max,
+            );
+            if bound.multiple_of != 1 {
+                msg += &format!(" and a multiple of {}", bound.multiple_of);
+            }
+            Err(Error { msg, span: span.clone() })
+        }
+    }
+}
+
+/// Validates the call's total arity against the intrinsic's signature and binds
+/// its leading type and const arguments. Returns the bound types and consts; the
+/// trailing value arguments stay in `args` and are checked by the caller.
+fn bind_leading_generics<'a>(
+    cx: &Context<'a>,
+    intrinsic: Intrinsic,
+    sig: &IntrinsicSig,
+    args: &[Expr<'a>],
+    span: &Span,
+) -> Result<(Vec<Type<'a>>, Vec<usize>), Error> {
+    let header = sig.type_params.len() + sig.const_params.len();
+    let expected = header + sig.value_arity;
+    if args.len() != expected {
+        return Err(Error {
+            msg: format!(
+                "{}() takes exactly {} argument{}, got {}",
+                intrinsic, expected, if expected == 1 { "" } else { "s" }, args.len(),
+            ),
+            span: span.clone(),
+        });
+    }
+
+    let mut tys = Vec::with_capacity(sig.type_params.len());
+    for (i, kind) in sig.type_params.iter().enumerate() {
+        tys.push(parse_type_arg(cx, intrinsic, *kind, &args[i], span)?);
+    }
+    let mut consts = Vec::with_capacity(sig.const_params.len());
+    for (j, bound) in sig.const_params.iter().enumerate() {
+        consts.push(parse_const_arg(intrinsic, *bound, &args[sig.type_params.len() + j], span)?);
+    }
+    Ok((tys, consts))
+}
+
 fn typecheck_intrinsic<'a>(
     cx: &mut Context<'a>,
     intrinsic: Intrinsic,
@@ -49,39 +157,11 @@ fn typecheck_intrinsic<'a>(
     span: Span,
     expr_id: usize,
 ) -> Result<Type<'a>, Error> {
-    // let is_simd_compatible = |expr: &Expr<'a>| -> Result<Type<'a>, Error> {
-    macro_rules! is_simd_compatible {
-        ($expr:expr) => {
-            match &($expr).value {
-                ExprNode::Var(name) => match *name {
-                    "i32" => Ok(Type::Int32),
-                    "i64" => Ok(Type::Int64),
-                    "u32" => Ok(Type::Uint32),
-                    "u64" => Ok(Type::Uint64),
-                    "f32" => Ok(Type::Float32),
-                    "f64" => Ok(Type::Float64),
-                    _ => {
-                        Err(Error {
-                            msg: format!("{}() first argument must be a SIMD compatible type`", intrinsic),
-                            span: span.clone(),
-                        })
-                    }
-                }
-                _ => {
-                    Err(Error {
-                        msg: format!("{}() first argument must be a SIMD compatible type`", intrinsic),
-                        span: span.clone(),
-                    })
-                }
-            }
-        }
-    }
+    let sig = intrinsic.signature();
 
     match intrinsic {
         Intrinsic::Len => {
-            if args.len() != 1 {
-                return Err(Error { msg: "len() takes exactly one argument".into(), span });
-            }
+            bind_leading_generics(cx, intrinsic, &sig, args, &span)?;
             let arg_ty = infer(cx, &args[0])?;
             if !matches!(arg_ty, Type::Slice(_) | Type::Array(_, _) | Type::Pointer(_) | Type::Str) {
                 return Err(Error {
@@ -93,35 +173,16 @@ fn typecheck_intrinsic<'a>(
             Ok(Type::Int32)
         }
         Intrinsic::NumericalCast => {
-            if args.len() != 2 {
+            // Irregular: the type argument is trailing (`numerical_cast(value, T)`),
+            // so it doesn't fit the leading-generics driver. Arity comes from the
+            // signature's value_arity; the target type is parsed directly.
+            if args.len() != sig.value_arity {
                 return Err(Error { msg: "numerical_cast() takes exactly two arguments".into(), span });
             }
             let value_ty = infer(cx, &args[0])?;
-            let target_ty = match &args[1].value {
-                ExprNode::Var(name) => match *name {
-                    "i32" => Type::Int32,
-                    "i64" => Type::Int64,
-                    "u32" => Type::Uint32,
-                    "u64" => Type::Uint64,
-                    "f32" => Type::Float32,
-                    "f64" => Type::Float64,
-                    _ => {
-                        return Err(Error {
-                            msg: "numerical_cast() second argument must be `iN`, `uN` or `fN`".into(),
-                            span,
-                        });
-                    }
-                }
-                _ => {
-                    return Err(Error {
-                        msg: "numerical_cast() second argument must be `iN`, `uN` or `fN`".into(),
-                        span,
-                    });
-                }
-            };
+            let target_ty = parse_type_arg(cx, intrinsic, TyConstraint::Numeric, &args[1], &span)?;
 
             if !value_ty.is_numeric() {
-                println!("{value_ty:?}");
                 return Err(Error {
                     msg: format!("numerical_cast() first argument must be a numeric type, got {}", value_ty),
                     span,
@@ -132,76 +193,32 @@ fn typecheck_intrinsic<'a>(
             Ok(target_ty)
         }
         Intrinsic::Sizeof => {
-            if args.len() != 1 {
-                return Err(Error { msg: "sizeof() takes exactly one argument".into(), span });
-            }
-            // the argument is a type name written as a bare identifier:
-            // a scalar (`i32`, `f32`, `bool`, ...) or a declared struct name.
-            match &args[0].value {
-                ExprNode::Var(name) => {
-                    let known = matches!(*name,
-                        "bool" | "i32" | "i64" | "u32" | "u64" | "f32" | "f64")
-                        || cx.structs.contains_key(name);
-                    if !known {
-                        return Err(Error {
-                            msg: format!("sizeof() expects a scalar type or a struct name, got `{}`", name),
-                            span,
-                        });
-                    }
-                }
-                _ => {
-                    return Err(Error {
-                        msg: "sizeof()'s argument must be a type name (e.g. `sizeof(f32)`)".into(),
-                        span,
-                    });
-                }
-            }
+            // A single type argument (scalar, struct, or in-scope type param).
+            bind_leading_generics(cx, intrinsic, &sig, args, &span)?;
             cx.node_types.insert(expr_id, Type::Uint64);
             Ok(Type::Uint64)
         }
         Intrinsic::SimdSplat => {
-            if args.len() != 3 {
-                return Err(Error { msg: "simd_splat() takes exactly three arguments".into(), span });
+            let (tys, consts) = bind_leading_generics(cx, intrinsic, &sig, args, &span)?;
+            let ty = tys[0].clone();
+            let size = consts[0];
+
+            let value_ty = infer(cx, &args[2])?;
+            if value_ty != ty {
+                return Err(Error {
+                    msg: format!("simd_splat() third argument must be of the element type, got {}", value_ty),
+                    span,
+                });
             }
 
-            let ty = is_simd_compatible!(&args[0])?;
-            let size = match &args[1].value {
-                ExprNode::Int32(x) if *x > 0 && *x <= 64 => *x as usize,
-                _ => {
-                    return Err(Error {
-                        msg: "simd_splat() second argument must be a positive integer literal between 1 and 64".into(),
-                        span,
-                    });
-                }
-             };
-
-             let value_ty = infer(cx, &args[2])?;
-             if value_ty != ty {
-                 return Err(Error {
-                     msg: format!("simd_splat() third argument must be of the element type, got {}", value_ty),
-                     span,
-                 });
-             }
-
-             let simd_ty = Type::Simd(Box::new(ty), size);
-             cx.node_types.insert(expr_id, simd_ty.clone());
-             Ok(simd_ty)
+            let simd_ty = Type::Simd(Box::new(ty), size);
+            cx.node_types.insert(expr_id, simd_ty.clone());
+            Ok(simd_ty)
         }
         Intrinsic::SimdLoad => {
-            if args.len() != 4 {
-                return Err(Error { msg: "simd_load() takes exactly four arguments".into(), span });
-            }
-
-            let ty = is_simd_compatible!(&args[0])?;
-            let size = match &args[1].value {
-                ExprNode::Int32(x) if *x > 0 && *x <= 64 => *x as usize,
-                _ => {
-                    return Err(Error {
-                        msg: "simd_load() second argument must be a positive integer literal between 1 and 64".into(),
-                        span,
-                    });
-                }
-            };
+            let (tys, consts) = bind_leading_generics(cx, intrinsic, &sig, args, &span)?;
+            let ty = tys[0].clone();
+            let size = consts[0];
 
             let slice_ty = infer(cx, &args[2])?;
             let offset_ty = infer(cx, &args[3])?;
@@ -228,20 +245,9 @@ fn typecheck_intrinsic<'a>(
             }
         }
         Intrinsic::SimdStore => {
-            if args.len() != 5 {
-                return Err(Error { msg: "simd_store() takes exactly five arguments".into(), span });
-            }
-
-            let ty = is_simd_compatible!(&args[0])?;
-            let size = match &args[1].value {
-                ExprNode::Int32(x) if *x > 0 && *x <= 64 => *x as usize,
-                _ => {
-                    return Err(Error {
-                        msg: "simd_store() second argument must be a positive integer literal between 1 and 64".into(),
-                        span,
-                    });
-                }
-            };
+            let (tys, consts) = bind_leading_generics(cx, intrinsic, &sig, args, &span)?;
+            let ty = tys[0].clone();
+            let size = consts[0];
 
             let slice_ty = infer(cx, &args[2])?;
             let offset_ty = infer(cx, &args[3])?;
@@ -273,20 +279,9 @@ fn typecheck_intrinsic<'a>(
             }
         }
         Intrinsic::SimdConcat => {
-            if args.len() != 4 {
-                return Err(Error { msg: "simd_concat() takes exactly four arguments".into(), span });
-            }
-
-            let ty = is_simd_compatible!(&args[0])?;
-            let size = match &args[1].value {
-                ExprNode::Int32(x) if *x > 0 && *x <= 64 && *x % 2 == 0 => *x as usize,
-                _ => {
-                    return Err(Error {
-                        msg: "simd_concat() second argument must be an even positive integer literal between 1 and 64".into(),
-                        span,
-                    });
-                }
-            };
+            let (tys, consts) = bind_leading_generics(cx, intrinsic, &sig, args, &span)?;
+            let ty = tys[0].clone();
+            let size = consts[0];
 
             let value1_ty = infer(cx, &args[2])?;
             let value2_ty = infer(cx, &args[3])?;
@@ -311,26 +306,9 @@ fn typecheck_intrinsic<'a>(
         }
         Intrinsic::SimdLow | Intrinsic::SimdHigh => {
             // simd_low/high(f32, N, value: simd[f32, M]) -> simd[f32, N] where N < M
-            let fn_str = match intrinsic {
-                Intrinsic::SimdLow => "simd_low",
-                Intrinsic::SimdHigh => "simd_high",
-                _ => unreachable!(),
-            };
-            if args.len() != 3 {
-                return Err(Error { msg: format!("{}() takes exactly three arguments", fn_str), span });
-            }
-
-            let ty = is_simd_compatible!(&args[0])?;
-
-            let size = match &args[1].value {
-                ExprNode::Int32(x) if *x > 0 && *x <= 64 && *x % 2 == 0 => *x as usize,
-                _ => {
-                    return Err(Error {
-                        msg: format!("{}() second argument must be an even positive integer literal between 1 and 64", fn_str),
-                        span,
-                    });
-                }
-            };
+            let (tys, consts) = bind_leading_generics(cx, intrinsic, &sig, args, &span)?;
+            let ty = tys[0].clone();
+            let size = consts[0];
 
             let value_ty = infer(cx, &args[2])?;
             // Only check if inner type is the same, because size can be different
@@ -342,7 +320,7 @@ fn typecheck_intrinsic<'a>(
                 }
                 _ => {
                     return Err(Error {
-                        msg: format!("{}() third argument must be a SIMD vector of the element type and larger size, got {}", fn_str, value_ty),
+                        msg: format!("{}() third argument must be a SIMD vector of the element type and larger size, got {}", intrinsic, value_ty),
                         span,
                     });
                 }
