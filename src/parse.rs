@@ -6,6 +6,14 @@ use chumsky::{
 };
 use crate::ast::*;
 
+/// Leaks a string to obtain a `&'static str` (which coerces to the source
+/// lifetime). Used for the handful of synthetic identifiers the parser needs to
+/// mint, e.g. the joined `qualifier::symbol` name of a qualified reference. The
+/// compiler is single-shot, so leaking a bounded number of names is fine.
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
 fn lexer<'a> (
     // Rc should be cheaper to clone per token
     file_path: Rc<str>,
@@ -87,6 +95,7 @@ fn lexer<'a> (
         "extern"   => Token::Extern,
         "const"    => Token::Const,
         "struct"   => Token::Struct,
+        "import"   => Token::Import,
         _ => Token::Var(ident),
     });
 
@@ -261,7 +270,17 @@ fn parse_expr<'tks, 'src: 'tks>()
                     fields,
                 }),
 
-            var.map(|s| ExprNode::Var(*s)),
+            // A variable, or a module-qualified reference `qualifier::symbol`
+            // (e.g. `math::sinf`). The qualified form is stored as a single
+            // `Var` holding the joined `"qualifier::symbol"` string; the module
+            // resolver splits and rewrites it before any later stage runs. The
+            // `::symbol` is optional and only taken when followed by an
+            // identifier, so a turbofish `::<...>` is left for the call postfix.
+            var.then(just(Token::ColonColon).ignore_then(var).or_not())
+                .map(|(a, b)| match b {
+                    Some(sym) => ExprNode::Var(leak(format!("{}::{}", a, sym))),
+                    None => ExprNode::Var(*a),
+                }),
             expr.clone()
                 .separated_by(just(Token::Comma))
                 .allow_leading()
@@ -697,11 +716,51 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         .boxed()
 }
 
+fn parse_import<'tks, 'src: 'tks>()
+-> impl Parser<
+    'tks,
+    MappedInput<'tks, Token<'src>, Span, &'tks [Metadata<Token<'src>>]>,
+    Import<'src>,
+    extra::Err<Rich<'tks, Token<'src>, Span>>,
+> {
+    let var = select_ref! { Token::Var(ident) => *ident };
+
+    // `import seg/seg/...` optionally followed by `{ sym, sym, ... }`. The path
+    // separator reuses the `/` (division) token; it is unambiguous here because
+    // an import statement never contains an expression.
+    just(Token::Import)
+        .ignore_then(
+            var.separated_by(just(Token::BinaryOp(BinaryOp::Div)))
+                .at_least(1)
+                .collect::<Vec<_>>()
+        )
+        .then(
+            var.separated_by(just(Token::Comma))
+                .allow_trailing()
+                .at_least(1)
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .or_not()
+        )
+        .map_with(|(path, symbols), e| Import { span: e.span(), path, symbols })
+        .boxed()
+}
+
+/// One item at file scope: either an `import` or a real top-level definition.
+/// They are parsed from the same stream and partitioned by `parse`.
+enum FileItem<'a> {
+    Import(Import<'a>),
+    Item(TopLevel<'a>),
+}
+
 pub fn parse<'a>(file_path: String, len: usize, tokens: &'a Vec<Metadata<Token<'a>>>) -> (
-    Option<Vec<TopLevel<'a>>>,
+    Option<(Vec<Import<'a>>, Vec<TopLevel<'a>>)>,
     Vec<chumsky::error::Rich<'a, Token<'a>, Span>>,
 ) {
-    parse_toplevel()
+    let (out, errs) = choice((
+            parse_import().map(FileItem::Import),
+            parse_toplevel().map(FileItem::Item),
+        ))
         .repeated()
         .collect::<Vec<_>>()
         .parse(
@@ -710,5 +769,19 @@ pub fn parse<'a>(file_path: String, len: usize, tokens: &'a Vec<Metadata<Token<'
             .map(Span::new(file_path, len, len),
                 |Metadata { value: t, span: s, .. }| (t, s),
             ))
-        .into_output_errors()
+        .into_output_errors();
+
+    let split = out.map(|items| {
+        let mut imports = Vec::new();
+        let mut tops = Vec::new();
+        for item in items {
+            match item {
+                FileItem::Import(i) => imports.push(i),
+                FileItem::Item(t) => tops.push(t),
+            }
+        }
+        (imports, tops)
+    });
+
+    (split, errs)
 }

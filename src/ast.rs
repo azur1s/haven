@@ -90,6 +90,7 @@ pub enum Token<'a> {
     Let, If, Else, Return,
     While, Break, Continue,
     Proc, Extern, Const, Struct,
+    Import,
 }
 
 impl Display for Token<'_> {
@@ -130,6 +131,7 @@ impl Display for Token<'_> {
             Token::Extern       => write!(f, "extern"),
             Token::Const        => write!(f, "const"),
             Token::Struct       => write!(f, "struct"),
+            Token::Import       => write!(f, "import"),
         }
     }
 }
@@ -543,3 +545,22 @@ impl<'a> Display for TopLevelNode<'a> {
 }
 
 pub type TopLevel<'a> = Metadata<TopLevelNode<'a>>;
+
+/// A module import, e.g. `import std/math` or `import std/math { sinf, cosf }`.
+///
+/// Imports are parsed alongside top-level items but kept out of `TopLevelNode`
+/// so the later compiler stages (typecheck, mono, mil, ...) never have to know
+/// about them: the module resolver (`crate::module`) consumes every import,
+/// mangles + merges the referenced modules, and hands those stages a single
+/// flat program of concrete items with no imports left.
+#[derive(Clone, Debug)]
+pub struct Import<'a> {
+    pub span: Span,
+    /// Path segments as written, e.g. `["std", "math"]` or `["utils", "foo"]`.
+    pub path: Vec<&'a str>,
+    /// `None` for a whole-module import (`import std/math`): every public symbol
+    /// becomes visible unqualified. `Some(list)` for a selective import
+    /// (`import std/math { sinf }`): only the listed symbols are visible, and
+    /// only qualified under the final path segment (`math::sinf`).
+    pub symbols: Option<Vec<&'a str>>,
+}

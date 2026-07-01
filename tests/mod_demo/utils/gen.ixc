@@ -1,0 +1,4 @@
+// A local module with a generic function. Instantiated from another module, to
+// exercise module-mangling composing with monomorphization.
+
+proc pick<T>(a: T, b: T) T { return a; }

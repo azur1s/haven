@@ -1,0 +1,37 @@
+// End-to-end module-system demo / regression test.
+//
+// Build & run from the repo root:
+//     ixc tests/mod_demo/main.ixc -o /tmp/mod_demo && /tmp/mod_demo
+// Expected output:
+//     9
+//     7
+//     3
+//     5
+
+// whole-module import of an embedded std module: symbols visible unqualified
+import std/math
+// whole-module import of a local module (relative to THIS file's directory):
+// its `Point` struct and `manhattan` fn are visible unqualified
+import utils/geo
+// selective import of a local module: `pick` is visible ONLY as `gen::pick`
+import utils/gen { pick }
+
+@export
+proc main() i32 {
+    // std/math, unqualified
+    let sq: f64 = square(3.0f64);
+    print_i32(numerical_cast::<i32>(sq));       // 9
+
+    // local whole-module: struct type, struct literal, and fn, all unqualified
+    let p: Point = Point { x: 3, y: -4 };
+    print_i32(manhattan(p));                     // 7
+
+    let clamped: f64 = clampf(9.0f64, 0.0f64, 3.0f64);
+    print_i32(numerical_cast::<i32>(clamped));   // 3
+
+    // selective import: reachable only through the `gen::` qualifier, and the
+    // generic is monomorphized at `i32` across the module boundary
+    print_i32(gen::pick::<i32>(5, 6));           // 5
+
+    return 0;
+}
