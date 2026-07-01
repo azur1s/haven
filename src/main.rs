@@ -7,6 +7,7 @@ mod parse;
 mod intrinsics;
 mod typecheck;
 mod safecheck;
+mod mono;
 mod mil;
 mod llvm;
 
@@ -148,7 +149,29 @@ fn main() {
                         );
                     });
             } else {
-                safecheck::alloc_check_program(&ast).unwrap_or_else(|errs| {
+                // expand generic functions into concrete instances, then
+                // re-typecheck the now fully-concrete program so that node types
+                // are populated for the freshly materialized instantiations.
+                let mono_ast = mono::monomorphize(&ast).unwrap_or_else(|ast::Error { msg, span, .. }| {
+                    let (line, col) = offset_to_line_col(&src, span.start);
+                    eprintln!("Monomorphization error in {}:{}:{}: {}", span.file, line, col, msg);
+                    std::process::exit(1);
+                });
+                let mut cx = typecheck::Context::new();
+                let mono_errs = typecheck::typecheck_program(&mut cx, &mono_ast);
+                if !mono_errs.is_empty() {
+                    mono_errs.into_iter()
+                        .for_each(|ast::Error { msg, span, .. }| {
+                            let (start_line, start_col) = offset_to_line_col(&src, span.start);
+                            eprintln!(
+                                "Typecheck error in {}:{}:{}: {}",
+                                span.file, start_line, start_col, msg,
+                            );
+                        });
+                    std::process::exit(1);
+                }
+
+                safecheck::alloc_check_program(&mono_ast).unwrap_or_else(|errs| {
                     for err in errs {
                         let (start_line, start_col) = offset_to_line_col(&src, err.span.start);
 
@@ -164,7 +187,7 @@ fn main() {
                     std::process::exit(1);
                 });
 
-                let mil = mil::lower(&ast, &cx);
+                let mil = mil::lower(&mono_ast, &cx);
                 let llvm_ir = llvm::emit(mil);
 
                 let llvm_ir_output_path = args.output.with_extension("ll");
