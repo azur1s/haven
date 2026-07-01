@@ -1,6 +1,16 @@
 use std::collections::HashMap;
 use crate::{ast::*, intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound}};
 
+/// The signature of a generic function, in terms of its own type parameters.
+/// Param/return types contain `Type::Param`. Used to typecheck calls to the
+/// function before monomorphization materializes concrete instantiations.
+#[derive(Clone, Debug)]
+pub struct GenericFnSig<'a> {
+    pub type_params: Vec<&'a str>,
+    pub params: Vec<Type<'a>>,
+    pub return_type: Type<'a>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Context<'a> {
     pub scopes: Vec<HashMap<&'a str, Type<'a>>>,
@@ -12,6 +22,9 @@ pub struct Context<'a> {
     /// e.g. `["T"]` while inside `proc id<T>(...)`. Used to resolve a bare
     /// `Type::Struct(name)` into a `Type::Param(name)`. Empty outside generics.
     pub generics: Vec<&'a str>,
+    /// Signatures of generic functions, keyed by name. These are not callable via
+    /// the ordinary `Type::Function` path; calls go through `check_generic_call`.
+    pub generic_fns: HashMap<&'a str, GenericFnSig<'a>>,
 }
 
 impl<'a> Context<'a> {
@@ -21,6 +34,7 @@ impl<'a> Context<'a> {
             node_types: HashMap::new(),
             structs: HashMap::new(),
             generics: Vec::new(),
+            generic_fns: HashMap::new(),
         }
     }
 
@@ -614,12 +628,19 @@ fn infer<'a>(
             typecheck_intrinsic(cx, intrinsic, type_args, args, span, metadata.id)?
         },
         ExprNode::Call { func, type_args, args } => {
-            // Calling user-defined generic functions needs monomorphization,
-            // which isn't implemented yet (Stage 5), so turbofish is rejected
-            // on ordinary calls for now.
+            // User-defined generic call (`foo::<T>(...)`)? Validate against the
+            // generic signature; monomorphization later emits the instantiation.
+            if let ExprNode::Var(name) = &func.value {
+                if let Some(sig) = cx.generic_fns.get(*name).cloned() {
+                    let name = *name;
+                    let ty = check_generic_call(cx, name, &sig, type_args, args, &span)?;
+                    cx.node_types.insert(expr.id, ty.clone());
+                    return Ok(ty);
+                }
+            }
             if !type_args.is_empty() {
                 return Err(Error {
-                    msg: "type arguments (`::<...>`) are only supported on intrinsic calls for now".into(),
+                    msg: "type arguments (`::<...>`) are only valid on generic or intrinsic calls".into(),
                     span,
                 });
             }
@@ -861,6 +882,83 @@ fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
     }
 }
 
+/// Substitutes `Type::Param(name)` with its concrete binding, recursing through
+/// compound types. The inverse direction of `resolve_type`: used when a generic
+/// function's signature (which holds `Param`s) is specialized at a call site.
+fn subst_param_type<'a>(bindings: &HashMap<&'a str, Type<'a>>, ty: &Type<'a>) -> Type<'a> {
+    match ty {
+        Type::Param(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Pointer(inner)  => Type::Pointer(Box::new(subst_param_type(bindings, inner))),
+        Type::Array(inner, n) => Type::Array(Box::new(subst_param_type(bindings, inner)), *n),
+        Type::Slice(inner)    => Type::Slice(Box::new(subst_param_type(bindings, inner))),
+        Type::Simd(inner, n)  => Type::Simd(Box::new(subst_param_type(bindings, inner)), *n),
+        Type::Function { params, return_type } => Type::Function {
+            params: params.iter().map(|p| subst_param_type(bindings, p)).collect(),
+            return_type: Box::new(subst_param_type(bindings, return_type)),
+        },
+        other => other.clone(),
+    }
+}
+
+/// Typechecks a call to a user-defined generic function: binds the turbofish
+/// type arguments to the callee's type parameters, substitutes them into the
+/// signature, checks the value arguments, and returns the substituted result
+/// type. Monomorphization later materializes the concrete instantiation.
+fn check_generic_call<'a>(
+    cx: &mut Context<'a>,
+    name: &'a str,
+    sig: &GenericFnSig<'a>,
+    type_args: &[GenericArg<'a>],
+    args: &[Expr<'a>],
+    span: &Span,
+) -> Result<Type<'a>, Error> {
+    if type_args.len() != sig.type_params.len() {
+        return Err(Error {
+            msg: format!(
+                "{}() expects {} type argument{} in `::<...>`, got {}",
+                name, sig.type_params.len(),
+                if sig.type_params.len() == 1 { "" } else { "s" }, type_args.len(),
+            ),
+            span: span.clone(),
+        });
+    }
+
+    let mut bindings: HashMap<&'a str, Type<'a>> = HashMap::new();
+    for (pname, ta) in sig.type_params.iter().zip(type_args) {
+        match ta {
+            GenericArg::Type(ty) => {
+                // resolve against the caller's own type params (a generic body
+                // may forward its `T`), then check any structs exist.
+                let ty = resolve_type(&cx.generics, ty);
+                if let Err(msg) = check_type_resolves(cx, &ty) {
+                    return Err(Error { msg: format!("{}(): {}", name, msg), span: span.clone() });
+                }
+                bindings.insert(pname, ty);
+            }
+            GenericArg::Const(_) => return Err(Error {
+                msg: format!("{}() expects a type argument, got a const (const generics on user functions are not supported yet)", name),
+                span: span.clone(),
+            }),
+        }
+    }
+
+    let params: Vec<Type<'a>> = sig.params.iter().map(|p| subst_param_type(&bindings, p)).collect();
+    let return_type = subst_param_type(&bindings, &sig.return_type);
+
+    if args.len() != params.len() {
+        return Err(Error {
+            msg: format!("{}() expects {} argument{}, got {}",
+                name, params.len(), if params.len() == 1 { "" } else { "s" }, args.len()),
+            span: span.clone(),
+        });
+    }
+    for (param_ty, arg) in params.iter().zip(args) {
+        check_expr(cx, param_ty, arg)?;
+    }
+
+    Ok(return_type)
+}
+
 /// Recursively verifies that every Type::Struct referenced in each Type exists
 /// in cx.structs.
 fn check_type_resolves<'a>(cx: &Context<'a>, ty: &Type<'a>) -> Result<(), String> {
@@ -906,6 +1004,24 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
     // forward declare functions so that they can be called before their definition
     for node in program {
         match &node.value {
+            // generic functions go into a separate table; they are not callable
+            // via the ordinary function-type path, only through turbofish.
+            TopLevelNode::Function { name, generics, params, return_type, .. }
+                if !generics.is_empty() => {
+                let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
+                    GenericParam::Type(n) => Some(*n),
+                    GenericParam::Const(_, _) => None,
+                }).collect();
+                let resolved_params = params.iter()
+                    .map(|(_, ty)| resolve_type(&type_params, ty))
+                    .collect();
+                let resolved_return = resolve_type(&type_params, return_type);
+                cx.generic_fns.insert(name, GenericFnSig {
+                    type_params,
+                    params: resolved_params,
+                    return_type: resolved_return,
+                });
+            }
             TopLevelNode::Function { name, params, return_type, .. }
             | TopLevelNode::Extern { name, params, return_type, .. } => {
                 cx.insert(name, Type::Function {
