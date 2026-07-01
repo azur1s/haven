@@ -15,14 +15,9 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::ast::*;
+use bumpalo::Bump;
 
-/// Leaks a generated mangled name to obtain a `&'static str`, which coerces to
-/// the source lifetime `'a`. The compiler is single-shot, so leaking a bounded
-/// number of instantiation names is fine.
-fn leak(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
-}
+use crate::ast::*;
 
 /// A single requested instantiation: the generic function `base` specialized to
 /// the concrete `args`, materialized under the name `mangled`. `span` is the
@@ -62,12 +57,16 @@ fn type_depth(ty: &Type) -> usize {
 }
 
 struct Mono<'p, 'a> {
+    /// Arena the mangled instantiation names are allocated into; it outlives the
+    /// produced AST, so the `&'a str` names it hands out are valid for `'a`.
+    arena: &'a Bump,
     /// Generic function templates, keyed by name.
     templates: HashMap<&'a str, &'p TopLevel<'a>>,
     /// Instantiations still to materialize.
     queue: VecDeque<Instantiation<'a>>,
     /// Mangled name for each instantiation we've already requested, keyed by the
-    /// mangled string, so a repeated call site reuses one instance (and one leak).
+    /// mangled string, so a repeated call site reuses one instance (and one
+    /// arena allocation).
     seen: HashMap<String, &'a str>,
 }
 
@@ -129,7 +128,7 @@ impl<'p, 'a> Mono<'p, 'a> {
         if let Some(&m) = self.seen.get(&key) {
             return m;
         }
-        let mangled: &'a str = leak(key.clone());
+        let mangled: &'a str = self.arena.alloc_str(&key);
         self.seen.insert(key, mangled);
         self.queue.push_back(Instantiation { base, args, mangled, span });
         mangled
@@ -271,7 +270,7 @@ impl<'p, 'a> Mono<'p, 'a> {
 /// Expands all generic functions reachable from concrete call sites into
 /// concrete instances, dropping the templates. Non-generic functions, externs
 /// and structs are preserved (with call sites rewritten).
-pub fn monomorphize<'a>(program: &[TopLevel<'a>]) -> Result<Vec<TopLevel<'a>>, Error> {
+pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec<TopLevel<'a>>, Error> {
     let templates: HashMap<&'a str, &TopLevel<'a>> = program.iter()
         .filter_map(|tl| match &tl.value {
             TopLevelNode::Function { name, generics, .. } if !generics.is_empty() =>
@@ -280,7 +279,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>]) -> Result<Vec<TopLevel<'a>>, E
         })
         .collect();
 
-    let mut m = Mono { templates, queue: VecDeque::new(), seen: HashMap::new() };
+    let mut m = Mono { arena, templates, queue: VecDeque::new(), seen: HashMap::new() };
     let empty: HashMap<&'a str, Type<'a>> = HashMap::new();
 
     // rebuild concrete functions (seeds the queue via their call sites), keyed

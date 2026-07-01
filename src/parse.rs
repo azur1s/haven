@@ -391,6 +391,7 @@ fn parse_expr<'tks, 'src: 'tks>()
     })
 }
 
+// TODO(fn-as-value): no fn-type production (see module.rs)
 fn parse_type<'tks, 'src: 'tks>()
 -> impl Parser<
     'tks,
@@ -753,7 +754,7 @@ enum FileItem<'a> {
     Item(TopLevel<'a>),
 }
 
-pub fn parse<'a>(file_path: String, len: usize, tokens: &'a Vec<Metadata<Token<'a>>>) -> (
+pub fn parse<'a>(file_path: String, len: usize, tokens: &'a [Metadata<Token<'a>>]) -> (
     Option<(Vec<Import<'a>>, Vec<TopLevel<'a>>)>,
     Vec<chumsky::error::Rich<'a, Token<'a>, Span>>,
 ) {
@@ -765,7 +766,6 @@ pub fn parse<'a>(file_path: String, len: usize, tokens: &'a Vec<Metadata<Token<'
         .collect::<Vec<_>>()
         .parse(
             tokens
-            .as_slice()
             .map(Span::new(file_path, len, len),
                 |Metadata { value: t, span: s, .. }| (t, s),
             ))

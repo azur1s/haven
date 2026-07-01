@@ -47,11 +47,16 @@ fn main() {
     // Entry source, kept only so diagnostics can map byte offsets to line/col.
     let src = std::fs::read_to_string(&args.input).expect("Failed to read file");
 
+    // Arena backing every `&'a str` in the AST (module sources, token streams and
+    // the synthetic mangled/prefixed names minted during module resolution and
+    // monomorphization). Owned here so it outlives the whole compilation.
+    let arena = bumpalo::Bump::new();
+
     // Load the entry file and every module it (transitively) imports, inject the
     // prelude unless disabled, and merge them into one flat, name-mangled program
     // with all imports resolved away. See `crate::module`.
     let prelude = if args.no_prelude { None } else { Some(PRELUDE_SRC) };
-    let ast = match module::load_and_merge(&args.input, prelude) {
+    let ast = match module::load_and_merge(&args.input, prelude, &arena) {
         Ok(ast) => ast,
         Err(()) => std::process::exit(1),
     };
@@ -99,7 +104,7 @@ fn main() {
                 // expand generic functions into concrete instances, then
                 // re-typecheck the now fully-concrete program so that node types
                 // are populated for the freshly materialized instantiations.
-                let mono_ast = mono::monomorphize(&ast).unwrap_or_else(|ast::Error { msg, span, .. }| {
+                let mono_ast = mono::monomorphize(&ast, &arena).unwrap_or_else(|ast::Error { msg, span, .. }| {
                     let (line, col) = offset_to_line_col(&src, span.start);
                     eprintln!("Monomorphization error in {}:{}:{}: {}", span.file, line, col, msg);
                     std::process::exit(1);

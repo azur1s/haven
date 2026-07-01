@@ -14,8 +14,9 @@
 //!
 //! Everything downstream (typecheck, mono, mil, ...) then sees a single flat
 //! namespace exactly as it did before modules existed. The lifetime story is
-//! kept trivial by leaking every module's source (and token stream) to
-//! `'static`; the compiler is single-shot so the bounded leak is fine.
+//! kept trivial by allocating every module's source, token stream and freshly
+//! minted (mangled/prefixed) names into a single `bumpalo` arena owned by the
+//! caller; the returned AST borrows from that arena for `'a`.
 //!
 //! ## Import forms
 //!
@@ -36,13 +37,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
+use bumpalo::Bump;
+
 use crate::ast::*;
 use crate::parse;
-
-/// Leaks a string to a `&'static str`. See the module-level note on leaking.
-fn leak(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
-}
 
 /// Source of an embedded standard-library module, keyed by its `std/...` path.
 fn std_source(key: &str) -> Option<&'static str> {
@@ -65,30 +63,30 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
 
 /// A fully loaded module: its parsed contents plus the bookkeeping the resolver
 /// needs to mangle and rewrite it.
-struct Module {
+struct Module<'a> {
     /// Canonical key (an absolute path, or `std/...`, or `<prelude>`), used to
     /// de-duplicate modules reached by more than one import.
     key: String,
     /// Human-facing name used in diagnostics.
-    src: &'static str,
+    src: &'a str,
     /// Mangling prefix, unique per module, e.g. `m2_math`.
     prefix: String,
     is_entry: bool,
-    imports: Vec<Import<'static>>,
+    imports: Vec<Import<'a>>,
     /// Canonical key of each import (parallel to `imports`), or `None` if that
     /// import failed to resolve (an error was already recorded).
     import_keys: Vec<Option<String>>,
-    items: Vec<TopLevel<'static>>,
+    items: Vec<TopLevel<'a>>,
 }
 
 /// The final (post-mangling) name a module exposes for one of its symbols, split
 /// by namespace so call sites and type positions look in the right place.
 #[derive(Default)]
-struct SymTab {
+struct SymTab<'a> {
     /// Callable names: functions and externs. `sym -> final name`.
-    fns: HashMap<&'static str, &'static str>,
+    fns: HashMap<&'a str, &'a str>,
     /// Struct type names. `sym -> final name`.
-    structs: HashMap<&'static str, &'static str>,
+    structs: HashMap<&'a str, &'a str>,
 }
 
 fn is_export(attrs: &[Attribute]) -> bool {
@@ -98,22 +96,22 @@ fn is_export(attrs: &[Attribute]) -> bool {
 /// The name a top-level function/struct is emitted under: mangled with the
 /// module prefix, unless it must keep a stable spelling (`extern` link names and
 /// `@export`ed items keep theirs; the entry `main` stays `main`).
-fn final_fn_name(m: &Module, name: &str, attrs: &[Attribute], is_extern: bool) -> &'static str {
+fn final_fn_name<'a>(m: &Module<'_>, name: &str, attrs: &[Attribute], is_extern: bool, arena: &'a Bump) -> &'a str {
     // The entry module is unique, so its names can never clash with the
     // prefixed imported modules; leaving it unmangled keeps diagnostics for
     // ordinary single-file programs exactly as they were before modules.
     if is_extern || is_export(attrs) || m.is_entry {
-        leak(name.to_string())
+        arena.alloc_str(name)
     } else {
-        leak(format!("{}${}", m.prefix, name))
+        arena.alloc_str(&format!("{}${}", m.prefix, name))
     }
 }
 
-fn final_struct_name(m: &Module, name: &str, attrs: &[Attribute]) -> &'static str {
+fn final_struct_name<'a>(m: &Module<'_>, name: &str, attrs: &[Attribute], arena: &'a Bump) -> &'a str {
     if is_export(attrs) || m.is_entry {
-        leak(name.to_string())
+        arena.alloc_str(name)
     } else {
-        leak(format!("{}${}", m.prefix, name))
+        arena.alloc_str(&format!("{}${}", m.prefix, name))
     }
 }
 
@@ -141,7 +139,7 @@ fn resolve_key(imp: &Import, dir: Option<&Path>) -> Result<String, String> {
 
 /// Load an import's source and the directory its own relative imports resolve
 /// against. Assumes `resolve_key` already succeeded for the same import.
-fn load_import(imp: &Import, key: &str, dir: Option<&Path>) -> Result<(&'static str, Option<PathBuf>), String> {
+fn load_import<'a>(imp: &Import, key: &str, dir: Option<&Path>, arena: &'a Bump) -> Result<(&'a str, Option<PathBuf>), String> {
     if imp.path.first() == Some(&"std") {
         Ok((std_source(key).expect("std source vanished after resolve_key"), None))
     } else {
@@ -149,14 +147,15 @@ fn load_import(imp: &Import, key: &str, dir: Option<&Path>) -> Result<(&'static 
         let canon = PathBuf::from(key);
         let src = std::fs::read_to_string(&canon)
             .map_err(|e| format!("cannot read module file '{}': {}", canon.display(), e))?;
-        Ok((leak(src), canon.parent().map(|d| d.to_path_buf())))
+        Ok((arena.alloc_str(&src), canon.parent().map(|d| d.to_path_buf())))
     }
 }
 
 /// Lex + parse one module's source into `(imports, items)`, printing any
-/// lex/parse diagnostics. Everything is leaked to `'static`.
-fn parse_module(key: &'static str, src: &'static str)
-    -> Result<(Vec<Import<'static>>, Vec<TopLevel<'static>>), ()>
+/// lex/parse diagnostics. The token stream is moved into `arena` so the parsed
+/// AST can borrow from it for `'a`.
+fn parse_module<'a>(key: &'a str, src: &'a str, arena: &'a Bump)
+    -> Result<(Vec<Import<'a>>, Vec<TopLevel<'a>>), ()>
 {
     let (tokens, lex_errs) = parse::lex(key, src);
     for e in &lex_errs {
@@ -167,7 +166,7 @@ fn parse_module(key: &'static str, src: &'static str)
         Some(t) if lex_errs.is_empty() => t,
         _ => return Err(()),
     };
-    let tokens: &'static Vec<Metadata<Token<'static>>> = Box::leak(Box::new(tokens));
+    let tokens: &'a [Metadata<Token<'a>>] = arena.alloc_slice_fill_iter(tokens);
 
     let (parsed, parse_errs) = parse::parse(key.to_string(), src.len(), tokens);
     for e in &parse_errs {
@@ -182,25 +181,25 @@ fn parse_module(key: &'static str, src: &'static str)
 
 /// Name-resolution scopes for a single module.
 #[derive(Default)]
-struct Scopes {
+struct Scopes<'a> {
     /// Unqualified callable names in scope -> final emitted name.
-    calls: HashMap<&'static str, &'static str>,
+    calls: HashMap<&'a str, &'a str>,
     /// Unqualified struct type names in scope -> final emitted name.
-    types: HashMap<&'static str, &'static str>,
+    types: HashMap<&'a str, &'a str>,
     /// `qualifier -> (symbol -> final name)` for selective imports.
-    quals: HashMap<&'static str, HashMap<&'static str, &'static str>>,
+    quals: HashMap<&'a str, HashMap<&'a str, &'a str>>,
 }
 
 /// Carries the per-module scopes and error sink while rewriting one module's
 /// AST in place.
-struct Rewriter<'x> {
-    scopes: &'x Scopes,
+struct Rewriter<'x, 'a> {
+    scopes: &'x Scopes<'a>,
     key: &'x str,
     src: &'x str,
     errs: &'x mut Vec<String>,
 }
 
-impl<'x> Rewriter<'x> {
+impl<'x, 'a> Rewriter<'x, 'a> {
     fn error(&mut self, span: &Span, msg: String) {
         let (l, c) = line_col(self.src, span.start);
         self.errs.push(format!("Import error in {}:{}:{}: {}", self.key, l, c, msg));
@@ -208,7 +207,7 @@ impl<'x> Rewriter<'x> {
 
     /// Rewrite struct type names inside `ty`, skipping names bound as generic
     /// parameters of the enclosing function (those are type params, not structs).
-    fn ty(&mut self, ty: &mut Type<'static>, gparams: &HashSet<&str>) {
+    fn ty(&mut self, ty: &mut Type<'a>, gparams: &HashSet<&str>) {
         match ty {
             Type::Struct(n) => {
                 let nm: &str = *n;
@@ -233,7 +232,7 @@ impl<'x> Rewriter<'x> {
     /// Resolve a name appearing in call position, mutating it to its final
     /// emitted name. Bare names not in scope are left untouched (they are locals,
     /// params, externs resolved globally, intrinsics, or errors caught later).
-    fn call_name(&mut self, name: &mut &'static str, span: &Span) {
+    fn call_name(&mut self, name: &mut &'a str, span: &Span) {
         let full: &str = *name;
         if let Some((qual, sym)) = full.split_once("::") {
             match self.scopes.quals.get(qual) {
@@ -250,7 +249,7 @@ impl<'x> Rewriter<'x> {
         }
     }
 
-    fn expr(&mut self, e: &mut Expr<'static>, gparams: &HashSet<&str>) {
+    fn expr(&mut self, e: &mut Expr<'a>, gparams: &HashSet<&str>) {
         match &mut e.value {
             ExprNode::Call { func, type_args, args } => {
                 if let ExprNode::Var(name) = &mut func.value {
@@ -283,7 +282,7 @@ impl<'x> Rewriter<'x> {
         }
     }
 
-    fn stmt(&mut self, s: &mut Stmt<'static>, gparams: &HashSet<&str>) {
+    fn stmt(&mut self, s: &mut Stmt<'a>, gparams: &HashSet<&str>) {
         match &mut s.value {
             StmtNode::Expr(e) => self.expr(e, gparams),
             StmtNode::Block(ss) => for s in ss { self.stmt(s, gparams); },
@@ -309,7 +308,7 @@ impl<'x> Rewriter<'x> {
         }
     }
 
-    fn toplevel(&mut self, tl: &mut TopLevel<'static>) {
+    fn toplevel(&mut self, tl: &mut TopLevel<'a>) {
         match &mut tl.value {
             TopLevelNode::Function { name, generics, params, return_type, body, .. } => {
                 let gparams: HashSet<&str> = generics.iter().filter_map(|g| match g {
@@ -340,36 +339,36 @@ impl<'x> Rewriter<'x> {
 }
 
 /// Build the symbol table a module exposes (its final emitted names).
-fn build_symtab(m: &Module) -> SymTab {
+fn build_symtab<'a>(m: &Module<'a>, arena: &'a Bump) -> SymTab<'a> {
     let mut st = SymTab::default();
     for tl in &m.items {
         match &tl.value {
             TopLevelNode::Function { name, attributes, .. } => {
-                st.fns.insert(name, final_fn_name(m, name, attributes, false));
+                st.fns.insert(name, final_fn_name(m, name, attributes, false, arena));
             }
             TopLevelNode::Extern { name, attributes, .. } => {
-                st.fns.insert(name, final_fn_name(m, name, attributes, true));
+                st.fns.insert(name, final_fn_name(m, name, attributes, true, arena));
             }
             TopLevelNode::Struct { name, attributes, .. } => {
-                st.structs.insert(name, final_struct_name(m, name, attributes));
+                st.structs.insert(name, final_struct_name(m, name, attributes, arena));
             }
         }
     }
     st
 }
 
-pub fn load_and_merge(entry: &Path, prelude_src: Option<&'static str>)
-    -> Result<Vec<TopLevel<'static>>, ()>
+pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a Bump)
+    -> Result<Vec<TopLevel<'a>>, ()>
 {
     // A module we've decided to load but not parsed yet.
-    struct Pending {
+    struct Pending<'a> {
         key: String,
-        src: &'static str,
+        src: &'a str,
         dir: Option<PathBuf>,
         is_entry: bool,
     }
 
-    let mut worklist: VecDeque<Pending> = VecDeque::new();
+    let mut worklist: VecDeque<Pending<'a>> = VecDeque::new();
 
     // Prelude first (id 0, if present), so it reads nicely in dumped output and
     // becomes the implicit whole-module import of every user module.
@@ -380,7 +379,7 @@ pub fn load_and_merge(entry: &Path, prelude_src: Option<&'static str>)
 
     // Entry module.
     let entry_src = match std::fs::read_to_string(entry) {
-        Ok(s) => leak(s),
+        Ok(s) => arena.alloc_str(&s),
         Err(e) => {
             eprintln!("Error: cannot read entry file '{}': {}", entry.display(), e);
             return Err(());
@@ -396,7 +395,7 @@ pub fn load_and_merge(entry: &Path, prelude_src: Option<&'static str>)
         is_entry: true,
     });
 
-    let mut modules: Vec<Module> = Vec::new();
+    let mut modules: Vec<Module<'a>> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut had_error = false;
 
@@ -405,8 +404,8 @@ pub fn load_and_merge(entry: &Path, prelude_src: Option<&'static str>)
         let id = modules.len();
         seen.insert(p.key.clone(), id);
 
-        let key_static = leak(p.key.clone());
-        let (imports, items) = match parse_module(key_static, p.src) {
+        let key_static = arena.alloc_str(&p.key);
+        let (imports, items) = match parse_module(key_static, p.src, arena) {
             Ok(pi) => pi,
             Err(()) => { had_error = true; continue; }
         };
@@ -422,7 +421,7 @@ pub fn load_and_merge(entry: &Path, prelude_src: Option<&'static str>)
             match resolve_key(imp, p.dir.as_deref()) {
                 Ok(key) => {
                     if !seen.contains_key(&key) {
-                        match load_import(imp, &key, p.dir.as_deref()) {
+                        match load_import(imp, &key, p.dir.as_deref(), arena) {
                             Ok((src, dir)) => worklist.push_back(Pending {
                                 key: key.clone(), src, dir, is_entry: false,
                             }),
@@ -462,13 +461,13 @@ pub fn load_and_merge(entry: &Path, prelude_src: Option<&'static str>)
     }
 
     // Symbol table for every module (indexed by module id).
-    let symtabs: Vec<SymTab> = modules.iter().map(build_symtab).collect();
+    let symtabs: Vec<SymTab> = modules.iter().map(|m| build_symtab(m, arena)).collect();
     let prelude_id = if has_prelude { Some(0usize) } else { None };
 
     let mut errs: Vec<String> = Vec::new();
 
     // Pass 1: build every module's name-resolution scopes (owned; the values are
-    // all `&'static`, so `all_scopes` borrows nothing from `modules`/`symtabs`).
+    // all `&'a`, so `all_scopes` borrows nothing from `modules`/`symtabs`).
     let mut all_scopes: Vec<Scopes> = Vec::with_capacity(modules.len());
     for (id, m) in modules.iter().enumerate() {
         let mut scopes = Scopes::default();
@@ -567,7 +566,7 @@ pub fn load_and_merge(entry: &Path, prelude_src: Option<&'static str>)
     }
 
     // Merge: concatenate all modules, de-duplicating global `extern` names.
-    let mut out: Vec<TopLevel<'static>> = Vec::new();
+    let mut out: Vec<TopLevel<'a>> = Vec::new();
     let mut seen_externs: HashSet<&str> = HashSet::new();
     for m in &modules {
         for tl in &m.items {

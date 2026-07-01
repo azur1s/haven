@@ -7,6 +7,7 @@ edition = "2024"
 cc = "1.2.65"
 
 [dependencies]
+bumpalo = "3.20.3"
 chumsky = { git = "https://codeberg.org/zesterer/chumsky", rev = "dd46ce3def", features = ["pratt"] }
 clap = { version = "4.6.1", features = ["derive"] }
 tempfile = "3.27.0"
