@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 
 use crate::ast::*;
+use crate::diag::{self, Sources};
 use crate::parse;
 
 /// Source of an embedded stdlib module, by its `std/...` path.
@@ -52,21 +53,6 @@ fn std_source(key: &str) -> Option<&'static str> {
         "std/math" => Some(include_str!("../crt/std/math.ixc")),
         _ => None,
     }
-}
-
-// Byte offset -> (line, col), 1-based.
-// NOTE: same logic as main.rs::offset_to_line_col, but this one is per-module and
-// correct; main.rs maps every span against the entry file. should be one shared helper
-// see the FIXME over there.
-fn line_col(src: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1;
-    let mut col = 1;
-    let clamped = offset.min(src.len());
-    for (i, ch) in src.char_indices() {
-        if i >= clamped { break; }
-        if ch == '\n' { line += 1; col = 1; } else { col += 1; }
-    }
-    (line, col)
 }
 
 /// A loaded module: parsed contents plus the bookkeeping the resolver needs to
@@ -164,10 +150,13 @@ fn load_import<'a>(imp: &Import, key: &str, dir: Option<&Path>, arena: &'a Bump)
 fn parse_module<'a>(key: &'a str, src: &'a str, arena: &'a Bump)
     -> Result<(Vec<Import<'a>>, Vec<TopLevel<'a>>), ()>
 {
+    // errors here can only point into this one module, so a single-source cache
+    // is enough to quote them.
+    let local: Sources = vec![(key.to_string(), src)];
+
     let (tokens, lex_errs) = parse::lex(key, src);
     for e in &lex_errs {
-        let (l, c) = line_col(src, e.span().start);
-        eprintln!("Lex error in {}:{}:{}: {}", key, l, c, e.reason());
+        diag::report("Lex error", &e.reason().to_string(), e.span(), &local);
     }
     let tokens = match tokens {
         Some(t) if lex_errs.is_empty() => t,
@@ -177,8 +166,7 @@ fn parse_module<'a>(key: &'a str, src: &'a str, arena: &'a Bump)
 
     let (parsed, parse_errs) = parse::parse(key.to_string(), src.len(), tokens);
     for e in &parse_errs {
-        let (l, c) = line_col(src, e.span().start);
-        eprintln!("Parse error in {}:{}:{}: {}", key, l, c, e.reason());
+        diag::report("Parse error", &e.reason().to_string(), e.span(), &local);
     }
     match parsed {
         Some(pi) if parse_errs.is_empty() => Ok(pi),
@@ -201,15 +189,12 @@ struct Scopes<'a> {
 /// place.
 struct Rewriter<'x, 'a> {
     scopes: &'x Scopes<'a>,
-    key: &'x str,
-    src: &'x str,
-    errs: &'x mut Vec<String>,
+    errs: &'x mut Vec<Error>,
 }
 
 impl<'x, 'a> Rewriter<'x, 'a> {
     fn error(&mut self, span: &Span, msg: String) {
-        let (l, c) = line_col(self.src, span.start);
-        self.errs.push(format!("Import error in {}:{}:{}: {}", self.key, l, c, msg));
+        self.errs.push(Error::new(span.clone(), msg));
     }
 
     /// Rewrite struct type names in `ty`, skipping names bound as generic params
@@ -369,7 +354,7 @@ fn build_symtab<'a>(m: &Module<'a>, arena: &'a Bump) -> SymTab<'a> {
 }
 
 pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a Bump)
-    -> Result<Vec<TopLevel<'a>>, ()>
+    -> Result<(Vec<TopLevel<'a>>, Sources<'a>), ()>
 {
     // a module we've decided to load but haven't parsed yet.
     struct Pending<'a> {
@@ -434,7 +419,9 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
             .trim_end_matches(".ixc")
             .replace(|c: char| !c.is_alphanumeric(), "_"));
 
-        // resolve + enqueue each import.
+        // resolve + enqueue each import. errors point at the import statement in
+        // this module, so a single-source cache quotes them.
+        let local: Sources = vec![(p.key.clone(), p.src)];
         let mut import_keys = Vec::with_capacity(imports.len());
         for imp in &imports {
             match resolve_key(imp, p.dir.as_deref()) {
@@ -445,8 +432,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                                 key: key.clone(), src, dir, is_entry: false,
                             }),
                             Err(msg) => {
-                                let (l, c) = line_col(p.src, imp.span.start);
-                                eprintln!("Import error in {}:{}:{}: {}", p.key, l, c, msg);
+                                diag::report("Import error", &msg, &imp.span, &local);
                                 had_error = true;
                                 import_keys.push(None);
                                 continue;
@@ -456,8 +442,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                     import_keys.push(Some(key));
                 }
                 Err(msg) => {
-                    let (l, c) = line_col(p.src, imp.span.start);
-                    eprintln!("Import error in {}:{}:{}: {}", p.key, l, c, msg);
+                    diag::report("Import error", &msg, &imp.span, &local);
                     had_error = true;
                     import_keys.push(None);
                 }
@@ -479,11 +464,16 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
         return Err(());
     }
 
+    // (file-key, source) for every loaded module. keys match `Span::file`, so any
+    // downstream stage can quote the span's *owning* module. also the value
+    // returned to the caller for its own diagnostics.
+    let sources: Sources = modules.iter().map(|m| (m.key.clone(), m.src)).collect();
+
     // symbol table for every module (indexed by module id).
     let symtabs: Vec<SymTab> = modules.iter().map(|m| build_symtab(m, arena)).collect();
     let prelude_id = if has_prelude { Some(0usize) } else { None };
 
-    let mut errs: Vec<String> = Vec::new();
+    let mut errs: Vec<Error> = Vec::new();
 
     // pass 1: build every module's name-resolution scopes (owned; values are all
     // `&'a`, so `all_scopes` borrows nothing from `modules`/`symtabs`).
@@ -519,21 +509,17 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                     // "imported from more than one module" error.
                     for (&k, &v) in &target.fns {
                         if from_import_calls.contains(k) && scopes.calls.get(k).copied() != Some(v) {
-                            let (l, c) = line_col(m.src, imp.span.start);
-                            errs.push(format!(
-                                "Import error in {}:{}:{}: '{}' is imported from more than one \
-                                 module; use a selective `{{ {} }}` import to disambiguate",
-                                m.key, l, c, k, k));
+                            errs.push(Error::new(imp.span.clone(), format!(
+                                "'{}' is imported from more than one module; use a selective \
+                                 `{{ {} }}` import to disambiguate", k, k)));
                         }
                         scopes.calls.insert(k, v);
                         from_import_calls.insert(k);
                     }
                     for (&k, &v) in &target.structs {
                         if from_import_types.contains(k) && scopes.types.get(k).copied() != Some(v) {
-                            let (l, c) = line_col(m.src, imp.span.start);
-                            errs.push(format!(
-                                "Import error in {}:{}:{}: struct '{}' is imported from more than one module",
-                                m.key, l, c, k));
+                            errs.push(Error::new(imp.span.clone(), format!(
+                                "struct '{}' is imported from more than one module", k)));
                         }
                         scopes.types.insert(k, v);
                         from_import_types.insert(k);
@@ -544,10 +530,8 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                     let qualifier = *imp.path.last().unwrap();
                     if let Some(&prev) = qual_owner.get(qualifier) {
                         if prev != target_id {
-                            let (l, c) = line_col(m.src, imp.span.start);
-                            errs.push(format!(
-                                "Import error in {}:{}:{}: qualifier '{}' already refers to a different module",
-                                m.key, l, c, qualifier));
+                            errs.push(Error::new(imp.span.clone(), format!(
+                                "qualifier '{}' already refers to a different module", qualifier)));
                         }
                     }
                     qual_owner.insert(qualifier, target_id);
@@ -556,10 +540,8 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                         if let Some(&f) = target.fns.get(sym).or_else(|| target.structs.get(sym)) {
                             map.insert(sym, f);
                         } else {
-                            let (l, c) = line_col(m.src, imp.span.start);
-                            errs.push(format!(
-                                "Import error in {}:{}:{}: module '{}' has no exported symbol '{}'",
-                                m.key, l, c, imp.path.join("/"), sym));
+                            errs.push(Error::new(imp.span.clone(), format!(
+                                "module '{}' has no exported symbol '{}'", imp.path.join("/"), sym)));
                         }
                     }
                 }
@@ -575,17 +557,15 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
 
     // pass 2: rewrite each module's items in place using its scopes.
     for (id, m) in modules.iter_mut().enumerate() {
-        let key = m.key.clone();
-        let src = m.src;
         let scopes = &all_scopes[id];
-        let mut rw = Rewriter { scopes, key: &key, src, errs: &mut errs };
+        let mut rw = Rewriter { scopes, errs: &mut errs };
         for tl in &mut m.items {
             rw.toplevel(tl);
         }
     }
 
     if !errs.is_empty() {
-        for e in &errs { eprintln!("{}", e); }
+        for e in &errs { diag::report_error("Import error", e, &sources); }
         return Err(());
     }
 
@@ -612,5 +592,5 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
         }
     }
 
-    Ok(out)
+    Ok((out, sources))
 }

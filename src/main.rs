@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod args;
 mod ast;
+mod diag;
 mod parse;
 mod module;
 mod intrinsics;
@@ -12,29 +13,6 @@ mod mono;
 mod mil;
 mod llvm;
 
-fn offset_to_line_col(src: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1;
-    let mut col = 1;
-
-    // Clamp to end of source so out-of-range offsets are still printable.
-    let clamped = offset.min(src.len());
-
-    for (i, ch) in src.char_indices() {
-        if i >= clamped {
-            break;
-        }
-
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-
-    (line, col)
-}
-
 const RUNTIME_ARCHIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libruntime.a"));
 
 /// Prelude source, embedded at compile time. Parsed and injected ahead of every
@@ -43,14 +21,6 @@ const PRELUDE_SRC: &str = include_str!("../crt/prelude.ixc");
 
 fn main() {
     let args = args::Args::parse();
-
-    // entry source, kept only so diagnostics can map byte offsets to line/col
-    // FIXME: this is the *entry* file only, but `ast` below is the merged
-    // multi-module program. every offset_to_line_col(&src, ...) call in this fn
-    // maps spans from imported modules / the prelude against the wrong source,
-    // so those errors print a bogus line:col (module.rs::line_col does it right,
-    // per-module). thread the owning module's src through instead
-    let src = std::fs::read_to_string(&args.input).expect("Failed to read file");
 
     // arena backing every `&'a str` in the AST (module sources, token streams,
     // and the synthetic mangled/prefixed names minted during module resolution
@@ -62,8 +32,10 @@ fn main() {
     // prelude unless disabled, merge into one flat name-mangled program with all
     // imports resolved away. see `crate::module`
     let prelude = if args.no_prelude { None } else { Some(PRELUDE_SRC) };
-    let ast = match module::load_and_merge(&args.input, prelude, &arena) {
-        Ok(ast) => ast,
+    // `sources` is (file-key, src) for every loaded module, so diagnostics below
+    // quote the span's owning module — not just the entry file.
+    let (ast, sources) = match module::load_and_merge(&args.input, prelude, &arena) {
+        Ok(pair) => pair,
         Err(()) => std::process::exit(1),
     };
 
@@ -94,18 +66,9 @@ fn main() {
             }
 
             if !typecheck_errs.is_empty() {
-                typecheck_errs.into_iter()
-                    .for_each(|ast::Error { msg, span, .. }| {
-                        let (start_line, start_col) = offset_to_line_col(&src, span.start);
-
-                        eprintln!(
-                            "Typecheck error in {}:{}:{}: {}",
-                            span.file,
-                            start_line,
-                            start_col,
-                            msg,
-                        );
-                    });
+                typecheck_errs.iter()
+                    .for_each(|e| diag::report_error("Typecheck error", e, &sources));
+                std::process::exit(1);
             } else {
                 // expand generics into concrete instances, then re-typecheck the
                 // now fully-concrete program so node_types is populated for the
@@ -113,38 +76,22 @@ fn main() {
                 // TODO: this re-checks the *whole* program (prelude, std, every
                 // concrete fn) from scratch and throws away the first `cx`, when
                 // only the new instances actually need checking
-                let mono_ast = mono::monomorphize(&ast, &arena).unwrap_or_else(|ast::Error { msg, span, .. }| {
-                    let (line, col) = offset_to_line_col(&src, span.start);
-                    eprintln!("Monomorphization error in {}:{}:{}: {}", span.file, line, col, msg);
+                let mono_ast = mono::monomorphize(&ast, &arena).unwrap_or_else(|e| {
+                    diag::report_error("Monomorphization error", &e, &sources);
                     std::process::exit(1);
                 });
                 let mut cx = typecheck::Context::new();
                 let mono_errs = typecheck::typecheck_program(&mut cx, &mono_ast);
                 if !mono_errs.is_empty() {
-                    mono_errs.into_iter()
-                        .for_each(|ast::Error { msg, span, .. }| {
-                            let (start_line, start_col) = offset_to_line_col(&src, span.start);
-                            eprintln!(
-                                "Typecheck error in {}:{}:{}: {}",
-                                span.file, start_line, start_col, msg,
-                            );
-                        });
+                    mono_errs.iter()
+                        .for_each(|e| diag::report_error("Typecheck error", e, &sources));
                     std::process::exit(1);
                 }
 
                 safecheck::alloc_check_program(&mono_ast).unwrap_or_else(|errs| {
-                    for err in errs {
-                        let (start_line, start_col) = offset_to_line_col(&src, err.span.start);
-
-                        eprintln!(
-                            "Check error in {}:{}:{}: {}",
-                            err.span.file,
-                            start_line,
-                            start_col,
-                            err.msg,
-                        );
+                    for err in &errs {
+                        diag::report_error("Check error", err, &sources);
                     }
-
                     std::process::exit(1);
                 });
 
