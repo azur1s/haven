@@ -1,0 +1,34 @@
+import std/alloc
+
+struct Vec2 {
+    x: f32,
+    y: f32,
+}
+
+@alloc(false)
+proc new_vec2_heap(x: f32, y: f32) *Vec2 {
+    let ptr: *Vec2 = alloc::<Vec2>(1u64);
+    ptr.x = x;
+    ptr.y = y;
+    return ptr;
+}
+
+proc vec2_add(a: *Vec2, b: *Vec2) *Vec2 {
+    let ptr: *Vec2 = alloc::<Vec2>(1u64);
+    ptr.x = a.x + b.x;
+    ptr.y = a.y + b.y;
+    return ptr;
+}
+
+@export
+proc main() i32 {
+    let v: *Vec2 = new_vec2_heap(1.0, 2.0);
+    let u: *Vec2 = new_vec2_heap(3.0, 4.0);
+
+    let w: *Vec2 = vec2_add(v, u);
+
+    print_float(w.x);
+    print_float(w.y);
+
+    return 0;
+}

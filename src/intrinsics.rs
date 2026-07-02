@@ -8,6 +8,11 @@ pub enum Intrinsic {
     /// Size in bytes of a type, respecting the target ABI layout.
     /// `sizeof(T) -> u64`
     Sizeof,
+    /// Reinterpret a pointer as a pointer of another type.
+    /// `ptr_cast::<*T>(p: *U) -> *T`. A no-op at the machine level (LLVM
+    /// pointers are opaque); it only changes the static pointee type. Used to
+    /// turn the untyped `*void` from the allocator into a typed `*T`.
+    PtrCast,
 
     /// `simd_splat(T, N, value) -> T where T = simd[T, N]`
     /// e.g. `value = simd_splat(f32, 4, 1.0) -> simd[f32, 4] (1.0, 1.0, 1.0, 1.0)`
@@ -33,6 +38,7 @@ impl Intrinsic {
             "len" => Some(Self::Len),
             "numerical_cast" => Some(Self::NumericalCast),
             "sizeof" => Some(Self::Sizeof),
+            "ptr_cast" => Some(Self::PtrCast),
             "simd_splat" => Some(Self::SimdSplat),
             "simd_load" => Some(Self::SimdLoad),
             "simd_store" => Some(Self::SimdStore),
@@ -50,6 +56,7 @@ impl std::fmt::Display for Intrinsic {
             Self::Len => "len",
             Self::NumericalCast => "numerical_cast",
             Self::Sizeof => "sizeof",
+            Self::PtrCast => "ptr_cast",
             Self::SimdSplat => "simd_splat",
             Self::SimdLoad => "simd_load",
             Self::SimdStore => "simd_store",
@@ -69,6 +76,8 @@ pub enum TyConstraint {
     /// A numeric scalar (`iN`/`uN`/`fN`) — also exactly the set of valid SIMD
     /// element types.
     Numeric,
+    /// Any pointer type (`*T`). Used by `ptr_cast`.
+    Pointer,
 }
 
 /// Bound on an intrinsic's const (compile-time integer) parameter: an inclusive
@@ -115,6 +124,7 @@ impl Intrinsic {
             Self::Len           => (&[],        &[],           1),
             Self::NumericalCast => (&[Numeric], &[],           1),
             Self::Sizeof        => (&[Any],     &[],           0),
+            Self::PtrCast       => (&[Pointer], &[],           1),
             Self::SimdSplat     => (&[Numeric], &[LANES],      1),
             Self::SimdLoad      => (&[Numeric], &[LANES],      2),
             Self::SimdStore     => (&[Numeric], &[LANES],      3),

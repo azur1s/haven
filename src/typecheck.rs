@@ -82,6 +82,14 @@ fn check_type_arg<'a>(
                 });
             }
         }
+        TyConstraint::Pointer => {
+            if !matches!(ty, Type::Pointer(_) | Type::Param(_)) {
+                return Err(Error {
+                    msg: format!("{}() expects a pointer type, got `{}`", intrinsic, ty),
+                    span: span.clone(),
+                });
+            }
+        }
     }
     Ok(ty)
 }
@@ -207,6 +215,20 @@ fn typecheck_intrinsic<'a>(
             // sizeof::<T>() -> u64. The type argument is validated by bind_generics.
             cx.node_types.insert(expr_id, Type::Uint64);
             Ok(Type::Uint64)
+        }
+        Intrinsic::PtrCast => {
+            // ptr_cast::<*T>(p: *U) -> *T. The turbofish (validated as a pointer
+            // by bind_generics) is the result type; the argument must be a pointer.
+            let target_ty = tys[0].clone();
+            let value_ty = infer(cx, &args[0])?;
+            if !matches!(value_ty, Type::Pointer(_)) {
+                return Err(Error {
+                    msg: format!("ptr_cast() argument must be a pointer, got {}", value_ty),
+                    span,
+                });
+            }
+            cx.node_types.insert(expr_id, target_ty.clone());
+            Ok(target_ty)
         }
         Intrinsic::SimdSplat => {
             let ty = tys[0].clone();

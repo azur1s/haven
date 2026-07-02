@@ -360,6 +360,12 @@ fn lower_intrinsic<'a>(
             cx.emit(Inst::Sizeof { dst, ty });
             Value::Reg(dst)
         }
+        Intrinsic::PtrCast => {
+            // ptr_cast::<*T>(p) is a no-op under opaque pointers: the value is
+            // already a `ptr`, only its static pointee type changes. Pass it
+            // through; the result's type is tracked in node_types by typecheck.
+            lower_expr(cx, &args[0])
+        }
         Intrinsic::SimdSplat => {
             let ty = ta_type(type_args, 0);
             let size = ta_const(type_args, 1);

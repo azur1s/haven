@@ -4,8 +4,8 @@ proc gain_stereo(samples: *simd<f32, 8>, gain: f32) {
 }
 
 // buf_l and buf_r are separate left/right buffers (interleaved 4 samples at a time)
-@alloc(false)
-@export
+@alloc(false) // ensure there is no allocation in this (DSP) function for performance reasons
+@export // export so this function can be called from host (see 1_showcase.c)
 proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
     let i: i32 = 0;
 
@@ -35,7 +35,7 @@ proc process_stereo(buf_l: *f32, buf_r: *f32, num_samples: i32) {
 }
 
 @export
-proc main() {
+proc main() i32 {
     // host usually supply buffer in 2-divisble, but just to test edge case
     let left:  [f32] = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0];
     let right: [f32] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
@@ -52,4 +52,6 @@ proc main() {
         print("\n");
         i = i + 1;
     }
+
+    return 0;
 }

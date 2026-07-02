@@ -78,7 +78,14 @@ fn alloc_check_stmt<'a>(ctx: &RtSafetyCtx<'a>, s: &Stmt<'a>) -> Vec<(&'a str, Sp
 }
 
 
-fn alloc_check_toplevel<'a>(ctx: &mut RtSafetyCtx<'a>, node: &TopLevel<'a>) -> Result<(), Vec<Error>> {
+fn alloc_check_toplevel<'a>(
+    ctx: &mut RtSafetyCtx<'a>,
+    node: &TopLevel<'a>,
+    display: &HashMap<&'a str, String>,
+) -> Result<(), Vec<Error>> {
+    // mono rewrites generic calls to their mangled instance name; prefer the
+    // friendly spelling it recorded (`alloc::<Vec2>`) over `m2_alloc$alloc$Vec2`.
+    let show = |n: &'a str| display.get(n).map(String::as_str).unwrap_or(n);
     match &node.value {
         // if function are marked with @alloc(false), then that function must
         // not have any allocation or call any function that allocates.
@@ -95,8 +102,8 @@ fn alloc_check_toplevel<'a>(ctx: &mut RtSafetyCtx<'a>, node: &TopLevel<'a>) -> R
                     .map(|(callee, span)| {
                         let msg = format!(
                             "Function '{}' is marked as @alloc(false) but calls '{}', which may allocate.",
-                            name,
-                            callee,
+                            show(name),
+                            show(callee),
                         );
                         Error::new(span, msg)
                     })
@@ -174,7 +181,10 @@ fn populate_call_graph<'a>(ctx: &mut RtSafetyCtx<'a>, program: &[TopLevel<'a>]) 
     }
 }
 
-pub fn alloc_check_program<'a>(program: &[TopLevel<'a>]) -> Result<(), Vec<Error>> {
+pub fn alloc_check_program<'a>(
+    program: &[TopLevel<'a>],
+    display: &HashMap<&'a str, String>,
+) -> Result<(), Vec<Error>> {
     let mut ctx = RtSafetyCtx {
         clean: HashMap::new(),
         calls: HashMap::new(),
@@ -183,7 +193,7 @@ pub fn alloc_check_program<'a>(program: &[TopLevel<'a>]) -> Result<(), Vec<Error
     populate_call_graph(&mut ctx, program);
 
     for node in program {
-        alloc_check_toplevel(&mut ctx, node)?;
+        alloc_check_toplevel(&mut ctx, node, display)?;
     }
 
     Ok(())

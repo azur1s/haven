@@ -51,6 +51,7 @@ use crate::parse;
 fn std_source(key: &str) -> Option<&'static str> {
     match key {
         "std/math" => Some(include_str!("../crt/std/math.ixc")),
+        "std/alloc" => Some(include_str!("../crt/std/alloc.ixc")),
         _ => None,
     }
 }

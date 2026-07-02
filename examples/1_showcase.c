@@ -1,7 +1,12 @@
 // Tested with:
-// ixc tests/test_stereo_simd.ixc --shared
-// clang tests/lib_test.c output.lib -o lib_test.exe
-// ./lib_test.exe
+// (Linux)
+// $ ixc examples/1_showcase.ixc --shared -o 1_showcase
+// $ clang examples/1_showcase.c ./1_showcase.so -o showcase
+// $ ./showcase
+// (Windows)
+// $ ixc examples/1_showcase.ixc --shared -o 1_showcase
+// $ clang examples/1_showcase.c ./1_showcase.lib -o showcase.exe
+// $ ./showcase.exe
 
 #include <stdio.h>
 #include <stdlib.h>

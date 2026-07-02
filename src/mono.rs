@@ -61,6 +61,10 @@ struct Mono<'p, 'a> {
     /// mangled name per instantiation we've already asked for, keyed by the
     /// mangled string, so repeated call sites reuse one instance (one alloc).
     seen: HashMap<String, &'a str>,
+    /// mangled instance name -> its human-readable spelling (`m2_alloc$alloc$Vec2`
+    /// -> `alloc::<Vec2>`). handed back to the caller so post-mono passes can
+    /// report friendly names instead of mangled ones.
+    display: HashMap<&'a str, String>,
 }
 
 /// Substitute bound type params in `ty` with their concrete bindings. in the raw
@@ -123,6 +127,17 @@ fn mangle_name(base: &str, args: &[Type]) -> String {
     format!("{}${}", base, parts)
 }
 
+/// Human-readable spelling of an instance, for diagnostics only. Strips the
+/// internal module prefix off `base` (`m2_alloc$alloc` -> `alloc`, since the
+/// prefix is an enqueue-order artifact, not something the user wrote) and
+/// re-attaches the turbofish: `alloc`, `[Vec2]` -> `alloc::<Vec2>`. Best-effort;
+/// never fed back into the compiler.
+fn display_name(base: &str, args: &[Type]) -> String {
+    let leaf = base.rsplit('$').next().unwrap_or(base);
+    let targs = args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+    format!("{}::<{}>", leaf, targs)
+}
+
 impl<'p, 'a> Mono<'p, 'a> {
     /// Record an instantiation request, return its (stable) mangled name.
     /// de-dupes so each distinct instance is built exactly once.
@@ -133,6 +148,7 @@ impl<'p, 'a> Mono<'p, 'a> {
         }
         let mangled: &'a str = self.arena.alloc_str(&key);
         self.seen.insert(key, mangled);
+        self.display.insert(mangled, display_name(base, &args));
         self.queue.push_back(Instantiation { base, args, mangled, span });
         mangled
     }
@@ -273,7 +289,13 @@ impl<'p, 'a> Mono<'p, 'a> {
 /// Expand every generic function reachable from a concrete call site into
 /// concrete instances, drop the templates. non-generic functions, externs and
 /// structs stay (with call sites rewritten).
-pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec<TopLevel<'a>>, Error> {
+///
+/// Also returns a `mangled instance name -> friendly spelling` map so post-mono
+/// passes (e.g. the alloc check) can report `alloc::<Vec2>` instead of the raw
+/// `m2_alloc$alloc$Vec2`.
+pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
+    -> Result<(Vec<TopLevel<'a>>, HashMap<&'a str, String>), Error>
+{
     let templates: HashMap<&'a str, &TopLevel<'a>> = program.iter()
         .filter_map(|tl| match &tl.value {
             TopLevelNode::Function { name, generics, .. } if !generics.is_empty() =>
@@ -282,7 +304,10 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec
         })
         .collect();
 
-    let mut m = Mono { arena, templates, queue: VecDeque::new(), seen: HashMap::new() };
+    let mut m = Mono {
+        arena, templates,
+        queue: VecDeque::new(), seen: HashMap::new(), display: HashMap::new(),
+    };
     let empty: HashMap<&'a str, Type<'a>> = HashMap::new();
 
     // rebuild concrete functions (their call sites seed the queue), keyed by
@@ -354,5 +379,5 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec
         }
     }
 
-    Ok(output)
+    Ok((output, m.display))
 }

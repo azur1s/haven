@@ -76,7 +76,7 @@ fn main() {
                 // TODO: this re-checks the *whole* program (prelude, std, every
                 // concrete fn) from scratch and throws away the first `cx`, when
                 // only the new instances actually need checking
-                let mono_ast = mono::monomorphize(&ast, &arena).unwrap_or_else(|e| {
+                let (mono_ast, mono_display) = mono::monomorphize(&ast, &arena).unwrap_or_else(|e| {
                     diag::report_error("Monomorphization error", &e, &sources);
                     std::process::exit(1);
                 });
@@ -88,7 +88,7 @@ fn main() {
                     std::process::exit(1);
                 }
 
-                safecheck::alloc_check_program(&mono_ast).unwrap_or_else(|errs| {
+                safecheck::alloc_check_program(&mono_ast, &mono_display).unwrap_or_else(|errs| {
                     for err in &errs {
                         diag::report_error("Check error", err, &sources);
                     }
