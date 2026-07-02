@@ -1,38 +1,39 @@
-//! Module loading, name mangling and merging.
+//! module loading, name mangling and merging.
 //!
-//! This stage sits between parsing and typechecking. Given an entry file it:
+//! sits between parsing and typechecking. given an entry file it:
 //!
-//!   1. transitively loads every imported module (an `import std/...` resolves
-//!      to an embedded standard-library source; any other path resolves to an
-//!      `.ixc` file relative to the *importing* file's directory);
-//!   2. gives each module a unique mangling prefix and renames its top-level
-//!      definitions (`foo` in module `m1` becomes `m1_...$foo`), leaving `extern`
-//!      link names, `@export`ed items and the entry `main` untouched;
+//!   1. transitively loads every imported module (`import std/...` -> an embedded
+//!      stdlib source; any other path -> an `.ixc` file relative to the
+//!      *importing* file's dir);
+//!   2. gives each module a unique mangling prefix and renames its top-level defs
+//!      (`foo` in module `m1` -> `m1_...$foo`), leaving `extern` link names,
+//!      `@export`ed items and the entry `main` alone;
 //!   3. rewrites every reference (call targets, struct literals, struct types)
-//!      according to that module's imports;
-//!   4. concatenates all modules into one flat program with no imports left.
+//!      per that module's imports;
+//!   4. concatenates all modules into one flat program, no imports left.
 //!
-//! Everything downstream (typecheck, mono, mil, ...) then sees a single flat
-//! namespace exactly as it did before modules existed. The lifetime story is
-//! kept trivial by allocating every module's source, token stream and freshly
-//! minted (mangled/prefixed) names into a single `bumpalo` arena owned by the
-//! caller; the returned AST borrows from that arena for `'a`.
+//! everything downstream (typecheck, mono, mil, ...) then sees one flat namespace
+//! exactly like before modules existed. lifetimes stay trivial: every module's
+//! source, tokens and freshly-minted (mangled) names go into one bumpalo arena
+//! owned by the caller, and the returned AST borrows it for `'a`.
 //!
-//! ## Import forms
+//! ## import forms
 //!
-//! * `import std/math`            — whole module, symbols visible *unqualified*.
+//! * `import std/math`            — whole module, symbols visible unqualified.
 //! * `import std/math { sinf }`   — selective, visible only as `math::sinf`.
 //!
-//! The prelude is loaded as an implicit whole-module import of every user module.
+//! the prelude is an implicit whole-module import into every user module.
 //!
-//! ## Known v1 limitations
+//! ## known v1 limitations
 //!
-//! * Only call targets, struct literals and struct *types* are rewritten. A
-//!   top-level function used as a first-class value (not directly called) is not
-//!   rewritten across modules, matching the monomorphizer's own limitation.
-//! * There is no `pub`; every top-level item is public.
-//! * Types have no qualified spelling, so a *selectively* imported struct can't
-//!   be named (import the whole module to use its structs).
+//! * only call targets, struct literals and struct *types* get rewritten. a
+//!   top-level function used as a first-class value (not called directly) isn't
+//!   rewritten across modules — same limitation the monomorphizer has.
+//! * no `pub`; every top-level item is public.
+//! * types have no qualified spelling, so a *selectively* imported struct can't
+//!   be named in a type position (import the whole module to use its structs).
+//!   see `Rewriter::ty`: `geo::Point` in type position just falls through
+//!   unrewritten and later reads as an unknown struct.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -42,7 +43,10 @@ use bumpalo::Bump;
 use crate::ast::*;
 use crate::parse;
 
-/// Source of an embedded standard-library module, keyed by its `std/...` path.
+/// Source of an embedded stdlib module, by its `std/...` path.
+// TODO: hardcoded registry. every new std module means editing this match AND
+// keeping resolve_key/load_import in sync (load_import .expect()s this agreeing).
+// would rather this were a data table.
 fn std_source(key: &str) -> Option<&'static str> {
     match key {
         "std/math" => Some(include_str!("../crt/std/math.ixc")),
@@ -50,6 +54,10 @@ fn std_source(key: &str) -> Option<&'static str> {
     }
 }
 
+// Byte offset -> (line, col), 1-based.
+// NOTE: same logic as main.rs::offset_to_line_col, but this one is per-module and
+// correct; main.rs maps every span against the entry file. should be one shared helper
+// see the FIXME over there.
 fn line_col(src: &str, offset: usize) -> (usize, usize) {
     let mut line = 1;
     let mut col = 1;
@@ -61,26 +69,26 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
-/// A fully loaded module: its parsed contents plus the bookkeeping the resolver
-/// needs to mangle and rewrite it.
+/// A loaded module: parsed contents plus the bookkeeping the resolver needs to
+/// mangle and rewrite it
 struct Module<'a> {
-    /// Canonical key (an absolute path, or `std/...`, or `<prelude>`), used to
-    /// de-duplicate modules reached by more than one import.
+    /// canonical key (absolute path, or `std/...`, or `<prelude>`). de-dupes
+    /// modules reached by more than one import.
     key: String,
-    /// Human-facing name used in diagnostics.
+    /// source text, also the name shown in diagnostics.
     src: &'a str,
-    /// Mangling prefix, unique per module, e.g. `m2_math`.
+    /// mangling prefix, unique per module, e.g. `m2_math`.
     prefix: String,
     is_entry: bool,
     imports: Vec<Import<'a>>,
-    /// Canonical key of each import (parallel to `imports`), or `None` if that
-    /// import failed to resolve (an error was already recorded).
+    /// canonical key of each import (parallel to `imports`), or `None` if it
+    /// failed to resolve (error already recorded).
     import_keys: Vec<Option<String>>,
     items: Vec<TopLevel<'a>>,
 }
 
-/// The final (post-mangling) name a module exposes for one of its symbols, split
-/// by namespace so call sites and type positions look in the right place.
+/// The final (post-mangling) name a module exposes per symbol, split by namespace
+/// so call sites and type positions look in the right place.
 #[derive(Default)]
 struct SymTab<'a> {
     /// Callable names: functions and externs. `sym -> final name`.
@@ -93,13 +101,12 @@ fn is_export(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| a.value.name == "export")
 }
 
-/// The name a top-level function/struct is emitted under: mangled with the
-/// module prefix, unless it must keep a stable spelling (`extern` link names and
-/// `@export`ed items keep theirs; the entry `main` stays `main`).
+/// Name a top-level fn/struct is emitted under: prefixed with the module prefix,
+/// unless it must keep a stable spelling (`extern` link names and `@export`ed
+/// items keep theirs; the entry `main` stays `main`).
 fn final_fn_name<'a>(m: &Module<'_>, name: &str, attrs: &[Attribute], is_extern: bool, arena: &'a Bump) -> &'a str {
-    // The entry module is unique, so its names can never clash with the
-    // prefixed imported modules; leaving it unmangled keeps diagnostics for
-    // ordinary single-file programs exactly as they were before modules.
+    // entry module is unique so its names can't clash with the prefixed imported
+    // ones; leaving it unmangled keeps single-file diagnostics as they were.
     if is_extern || is_export(attrs) || m.is_entry {
         arena.alloc_str(name)
     } else {
@@ -115,9 +122,9 @@ fn final_struct_name<'a>(m: &Module<'_>, name: &str, attrs: &[Attribute], arena:
     }
 }
 
-/// Resolve an import to its canonical key (no file read for the `std` case;
-/// canonicalises the path for the relative case, which requires the file to
-/// exist). `dir` is the importing module's directory.
+/// Resolve an import to its canonical key. no file read for `std`; for the
+/// relative case canonicalizes the path (so the file has to exist). `dir` is the
+/// importing module's directory.
 fn resolve_key(imp: &Import, dir: Option<&Path>) -> Result<String, String> {
     if imp.path.first() == Some(&"std") {
         let key = imp.path.join("/");
@@ -137,8 +144,8 @@ fn resolve_key(imp: &Import, dir: Option<&Path>) -> Result<String, String> {
     }
 }
 
-/// Load an import's source and the directory its own relative imports resolve
-/// against. Assumes `resolve_key` already succeeded for the same import.
+/// Load an import's source + the dir its own relative imports resolve against.
+/// assumes `resolve_key` already succeeded for this import.
 fn load_import<'a>(imp: &Import, key: &str, dir: Option<&Path>, arena: &'a Bump) -> Result<(&'a str, Option<PathBuf>), String> {
     if imp.path.first() == Some(&"std") {
         Ok((std_source(key).expect("std source vanished after resolve_key"), None))
@@ -152,8 +159,8 @@ fn load_import<'a>(imp: &Import, key: &str, dir: Option<&Path>, arena: &'a Bump)
 }
 
 /// Lex + parse one module's source into `(imports, items)`, printing any
-/// lex/parse diagnostics. The token stream is moved into `arena` so the parsed
-/// AST can borrow from it for `'a`.
+/// lex/parse diagnostics. tokens move into `arena` so the parsed AST can borrow
+/// them for `'a`.
 fn parse_module<'a>(key: &'a str, src: &'a str, arena: &'a Bump)
     -> Result<(Vec<Import<'a>>, Vec<TopLevel<'a>>), ()>
 {
@@ -179,19 +186,19 @@ fn parse_module<'a>(key: &'a str, src: &'a str, arena: &'a Bump)
     }
 }
 
-/// Name-resolution scopes for a single module.
+/// Name-resolution scopes for one module.
 #[derive(Default)]
 struct Scopes<'a> {
-    /// Unqualified callable names in scope -> final emitted name.
+    /// unqualified callable names in scope -> final emitted name.
     calls: HashMap<&'a str, &'a str>,
-    /// Unqualified struct type names in scope -> final emitted name.
+    /// unqualified struct type names in scope -> final emitted name.
     types: HashMap<&'a str, &'a str>,
     /// `qualifier -> (symbol -> final name)` for selective imports.
     quals: HashMap<&'a str, HashMap<&'a str, &'a str>>,
 }
 
-/// Carries the per-module scopes and error sink while rewriting one module's
-/// AST in place.
+/// Holds the per-module scopes and error sink while rewriting a module's AST in
+/// place.
 struct Rewriter<'x, 'a> {
     scopes: &'x Scopes<'a>,
     key: &'x str,
@@ -205,8 +212,11 @@ impl<'x, 'a> Rewriter<'x, 'a> {
         self.errs.push(format!("Import error in {}:{}:{}: {}", self.key, l, c, msg));
     }
 
-    /// Rewrite struct type names inside `ty`, skipping names bound as generic
-    /// parameters of the enclosing function (those are type params, not structs).
+    /// Rewrite struct type names in `ty`, skipping names bound as generic params
+    /// of the enclosing function (those are type params, not structs).
+    /// NOTE: only consults `scopes.types` (unqualified). a selectively-imported
+    /// `geo::Point` in type position never matches and falls through unrewritten
+    /// — see the v1 limitation at the top of the file.
     fn ty(&mut self, ty: &mut Type<'a>, gparams: &HashSet<&str>) {
         match ty {
             Type::Struct(n) => {
@@ -229,9 +239,9 @@ impl<'x, 'a> Rewriter<'x, 'a> {
         }
     }
 
-    /// Resolve a name appearing in call position, mutating it to its final
-    /// emitted name. Bare names not in scope are left untouched (they are locals,
-    /// params, externs resolved globally, intrinsics, or errors caught later).
+    /// Resolve a name in call position to its final emitted name. bare names not
+    /// in scope are left alone (locals, params, globally-resolved externs,
+    /// intrinsics, or errors caught later).
     fn call_name(&mut self, name: &mut &'a str, span: &Span) {
         let full: &str = *name;
         if let Some((qual, sym)) = full.split_once("::") {
@@ -278,6 +288,7 @@ impl<'x, 'a> Rewriter<'x, 'a> {
             }
             ExprNode::Slice(elems) => for el in elems { self.expr(el, gparams); },
             // leaves and bare (non-call) vars: nothing to rewrite
+            // (this is why a generic fn used as a value isn't rewritten cross-module)
             _ => {}
         }
     }
@@ -360,7 +371,7 @@ fn build_symtab<'a>(m: &Module<'a>, arena: &'a Bump) -> SymTab<'a> {
 pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a Bump)
     -> Result<Vec<TopLevel<'a>>, ()>
 {
-    // A module we've decided to load but not parsed yet.
+    // a module we've decided to load but haven't parsed yet.
     struct Pending<'a> {
         key: String,
         src: &'a str,
@@ -370,14 +381,14 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
 
     let mut worklist: VecDeque<Pending<'a>> = VecDeque::new();
 
-    // Prelude first (id 0, if present), so it reads nicely in dumped output and
+    // prelude first (id 0, if present) so it reads nicely in dumped output and
     // becomes the implicit whole-module import of every user module.
     let has_prelude = prelude_src.is_some();
     if let Some(psrc) = prelude_src {
         worklist.push_back(Pending { key: "<prelude>".into(), src: psrc, dir: None, is_entry: false });
     }
 
-    // Entry module.
+    // entry module
     let entry_src = match std::fs::read_to_string(entry) {
         Ok(s) => arena.alloc_str(&s),
         Err(e) => {
@@ -385,6 +396,10 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
             return Err(());
         }
     };
+    // canonical key so a module that imports the entry lands on the same key.
+    // FIXME: if canonicalize fails we fall back to the raw path, but imports
+    // always canonicalize — so a module importing the entry keys it differently,
+    // `seen` misses, and the entry gets parsed + merged twice (dup `main`).
     let entry_key = std::fs::canonicalize(entry)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| entry.to_string_lossy().into_owned());
@@ -410,12 +425,16 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
             Err(()) => { had_error = true; continue; }
         };
 
+        // FIXME: prefix is `m{id}_{basename}` and `id` is enqueue-order, so
+        // emitted symbol names shift whenever unrelated imports are added/removed.
+        // fine within a single link, bad for --shared/--static-lib ABI and for
+        // reproducible IR diffs. want a stable (content/path-based) key instead.
         let prefix = format!("m{}_{}", id, p.key
             .rsplit(['/', '\\']).next().unwrap_or("mod")
             .trim_end_matches(".ixc")
             .replace(|c: char| !c.is_alphanumeric(), "_"));
 
-        // Resolve + enqueue each import.
+        // resolve + enqueue each import.
         let mut import_keys = Vec::with_capacity(imports.len());
         for imp in &imports {
             match resolve_key(imp, p.dir.as_deref()) {
@@ -460,19 +479,19 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
         return Err(());
     }
 
-    // Symbol table for every module (indexed by module id).
+    // symbol table for every module (indexed by module id).
     let symtabs: Vec<SymTab> = modules.iter().map(|m| build_symtab(m, arena)).collect();
     let prelude_id = if has_prelude { Some(0usize) } else { None };
 
     let mut errs: Vec<String> = Vec::new();
 
-    // Pass 1: build every module's name-resolution scopes (owned; the values are
-    // all `&'a`, so `all_scopes` borrows nothing from `modules`/`symtabs`).
+    // pass 1: build every module's name-resolution scopes (owned; values are all
+    // `&'a`, so `all_scopes` borrows nothing from `modules`/`symtabs`).
     let mut all_scopes: Vec<Scopes> = Vec::with_capacity(modules.len());
     for (id, m) in modules.iter().enumerate() {
         let mut scopes = Scopes::default();
 
-        // 1. implicit prelude whole-module import (except for the prelude itself)
+        // 1. implicit prelude whole-module import (except into the prelude itself)
         if let Some(pid) = prelude_id {
             if id != pid {
                 for (&k, &v) in &symtabs[pid].fns { scopes.calls.insert(k, v); }
@@ -493,6 +512,11 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
             match &imp.symbols {
                 None => {
                     // whole module: everything visible unqualified
+                    // FIXME: the collision check below only looks at
+                    // from_import_calls, which never contains prelude-origin
+                    // names. so a whole-module import that redefines a prelude
+                    // symbol (e.g. `print`) silently shadows it with no
+                    // "imported from more than one module" error.
                     for (&k, &v) in &target.fns {
                         if from_import_calls.contains(k) && scopes.calls.get(k).copied() != Some(v) {
                             let (l, c) = line_col(m.src, imp.span.start);
@@ -516,7 +540,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                     }
                 }
                 Some(syms) => {
-                    // selective: visible only under `qualifier::sym`
+                    // selective: visible only as `qualifier::sym`
                     let qualifier = *imp.path.last().unwrap();
                     if let Some(&prev) = qual_owner.get(qualifier) {
                         if prev != target_id {
@@ -542,14 +566,14 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
             }
         }
 
-        // 3. this module's own definitions win over imports
+        // 3. this module's own defs win over imports (inserted last)
         for (&k, &v) in &symtabs[id].fns { scopes.calls.insert(k, v); }
         for (&k, &v) in &symtabs[id].structs { scopes.types.insert(k, v); }
 
         all_scopes.push(scopes);
     }
 
-    // Pass 2: rewrite each module's items in place using its scopes.
+    // pass 2: rewrite each module's items in place using its scopes.
     for (id, m) in modules.iter_mut().enumerate() {
         let key = m.key.clone();
         let src = m.src;
@@ -565,7 +589,16 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
         return Err(());
     }
 
-    // Merge: concatenate all modules, de-duplicating global `extern` names.
+    // merge: concatenate all modules, de-duping global `extern` names.
+    // FIXME: two gaps here.
+    //   1. externs are de-duped by name only, no signature check — two modules
+    //      declaring the same C symbol with *different* signatures silently keep
+    //      whichever came first, and calls elsewhere check against the wrong ABI.
+    //   2. only externs are de-duped at all. two `@export` fns with the same
+    //      final name (or a user fn colliding with a prelude extern) both get
+    //      emitted -> duplicate LLVM symbol at link time, no source-level error.
+    //      the old single-file path caught this as a prelude-collision error.
+    // want a real global symbol table that reconciles/reports conflicts here.
     let mut out: Vec<TopLevel<'a>> = Vec::new();
     let mut seen_externs: HashSet<&str> = HashSet::new();
     for m in &modules {

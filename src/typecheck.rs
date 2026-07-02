@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use crate::{ast::*, intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound}};
 
-/// The signature of a generic function, in terms of its own type parameters.
-/// Param/return types contain `Type::Param`. Used to typecheck calls to the
-/// function before monomorphization materializes concrete instantiations.
+/// a generic function's signature, in terms of its own type params. param/return
+/// types hold `Type::Param`. used to typecheck calls before mono materializes the
+/// concrete instances
 #[derive(Clone, Debug)]
 pub struct GenericFnSig<'a> {
     pub type_params: Vec<&'a str>,
@@ -18,12 +18,12 @@ pub struct Context<'a> {
     pub node_types: HashMap<usize, Type<'a>>,
     /// Struct definitions from name to ordered list of (field name, field type)
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
-    /// Type-parameter names in scope for the function currently being checked,
-    /// e.g. `["T"]` while inside `proc id<T>(...)`. Used to resolve a bare
-    /// `Type::Struct(name)` into a `Type::Param(name)`. Empty outside generics.
+    /// Type-param names in scope for the function being checked, e.g. `["T"]`
+    /// inside `proc id<T>(...)`. used to resolve a bare `Type::Struct(name)` into
+    /// a `Type::Param(name)`. empty outside generics.
     pub generics: Vec<&'a str>,
-    /// Signatures of generic functions, keyed by name. These are not callable via
-    /// the ordinary `Type::Function` path; calls go through `check_generic_call`.
+    /// Generic function signatures, by name. NOT callable via the ordinary
+    /// `Type::Function` path; calls go through `check_generic_call`.
     pub generic_fns: HashMap<&'a str, GenericFnSig<'a>>,
 }
 
@@ -628,8 +628,11 @@ fn infer<'a>(
             typecheck_intrinsic(cx, intrinsic, type_args, args, span, metadata.id)?
         },
         ExprNode::Call { func, type_args, args } => {
-            // User-defined generic call (`foo::<T>(...)`)? Validate against the
-            // generic signature; monomorphization later emits the instantiation.
+            // user generic call (`foo::<T>(...)`) check against the generic sig
+            // mono emits the instance later.
+            // TODO: `.cloned()` copies the whole sig on every generic call site
+            // (twice, since we typecheck again after mono) just to dodge the
+            // borrow of cx
             if let ExprNode::Var(name) = &func.value {
                 if let Some(sig) = cx.generic_fns.get(*name).cloned() {
                     let name = *name;
@@ -882,9 +885,13 @@ fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
     }
 }
 
-/// Substitutes `Type::Param(name)` with its concrete binding, recursing through
-/// compound types. The inverse direction of `resolve_type`: used when a generic
-/// function's signature (which holds `Param`s) is specialized at a call site.
+/// substitute `Type::Param(name)` with its concrete binding, recursing through
+/// compound types. inverse of `resolve_type`: used when a generic sig (which
+/// holds `Param`s) is specialized at a call site.
+// TODO: this, resolve_type, and mono.rs::subst_ty are three near-identical walks
+// over the same compound-type arms, so maybe in the future it could be generalized
+// into a single `Type::walk_mut` or `Type::map` function that takes a closure to
+// apply to each leaf type
 fn subst_param_type<'a>(bindings: &HashMap<&'a str, Type<'a>>, ty: &Type<'a>) -> Type<'a> {
     match ty {
         Type::Param(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
@@ -900,10 +907,9 @@ fn subst_param_type<'a>(bindings: &HashMap<&'a str, Type<'a>>, ty: &Type<'a>) ->
     }
 }
 
-/// Typechecks a call to a user-defined generic function: binds the turbofish
-/// type arguments to the callee's type parameters, substitutes them into the
-/// signature, checks the value arguments, and returns the substituted result
-/// type. Monomorphization later materializes the concrete instantiation.
+/// Typecheck a call to a user generic function: bind the turbofish type args to
+/// the callee's type params, substitute them into the sig, check the value args,
+/// and return the substituted result type. mono materializes the instance later.
 fn check_generic_call<'a>(
     cx: &mut Context<'a>,
     name: &'a str,
@@ -928,7 +934,7 @@ fn check_generic_call<'a>(
         match ta {
             GenericArg::Type(ty) => {
                 // resolve against the caller's own type params (a generic body
-                // may forward its `T`), then check any structs exist.
+                // can forward its `T`), then check any structs exist.
                 let ty = resolve_type(&cx.generics, ty);
                 if let Err(msg) = check_type_resolves(cx, &ty) {
                     return Err(Error { msg: format!("{}(): {}", name, msg), span: span.clone() });
@@ -1004,8 +1010,13 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
     // forward declare functions so that they can be called before their definition
     for node in program {
         match &node.value {
-            // generic functions go into a separate table; they are not callable
-            // via the ordinary function-type path, only through turbofish.
+            // generic functions go into a separate table; not callable via the
+            // ordinary function-type path, only through turbofish.
+            // FIXME: the guard is `!generics.is_empty()`, but type_params below
+            // drops const params. so a function with ONLY const generics
+            // (`proc f<const N: u32>`) lands here with type_params=[] and never
+            // gets inserted into the ordinary scope — `f::<4>(x)` fails ("expects
+            // 0 type args") and `f(x)` fails ("unknown"). it's uncallable.
             TopLevelNode::Function { name, generics, params, return_type, .. }
                 if !generics.is_empty() => {
                 let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {

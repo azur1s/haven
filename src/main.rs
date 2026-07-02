@@ -44,17 +44,23 @@ const PRELUDE_SRC: &str = include_str!("../crt/prelude.ixc");
 fn main() {
     let args = args::Args::parse();
 
-    // Entry source, kept only so diagnostics can map byte offsets to line/col.
+    // entry source, kept only so diagnostics can map byte offsets to line/col
+    // FIXME: this is the *entry* file only, but `ast` below is the merged
+    // multi-module program. every offset_to_line_col(&src, ...) call in this fn
+    // maps spans from imported modules / the prelude against the wrong source,
+    // so those errors print a bogus line:col (module.rs::line_col does it right,
+    // per-module). thread the owning module's src through instead
     let src = std::fs::read_to_string(&args.input).expect("Failed to read file");
 
-    // Arena backing every `&'a str` in the AST (module sources, token streams and
-    // the synthetic mangled/prefixed names minted during module resolution and
-    // monomorphization). Owned here so it outlives the whole compilation.
+    // arena backing every `&'a str` in the AST (module sources, token streams,
+    // and the synthetic mangled/prefixed names minted during module resolution
+    // and monomorphization)
+    // owned here so it outlives the whole compilation
     let arena = bumpalo::Bump::new();
 
-    // Load the entry file and every module it (transitively) imports, inject the
-    // prelude unless disabled, and merge them into one flat, name-mangled program
-    // with all imports resolved away. See `crate::module`.
+    // load the entry file + every module it (transitively) imports, inject the
+    // prelude unless disabled, merge into one flat name-mangled program with all
+    // imports resolved away. see `crate::module`
     let prelude = if args.no_prelude { None } else { Some(PRELUDE_SRC) };
     let ast = match module::load_and_merge(&args.input, prelude, &arena) {
         Ok(ast) => ast,
@@ -101,9 +107,12 @@ fn main() {
                         );
                     });
             } else {
-                // expand generic functions into concrete instances, then
-                // re-typecheck the now fully-concrete program so that node types
-                // are populated for the freshly materialized instantiations.
+                // expand generics into concrete instances, then re-typecheck the
+                // now fully-concrete program so node_types is populated for the
+                // fresh instantiations
+                // TODO: this re-checks the *whole* program (prelude, std, every
+                // concrete fn) from scratch and throws away the first `cx`, when
+                // only the new instances actually need checking
                 let mono_ast = mono::monomorphize(&ast, &arena).unwrap_or_else(|ast::Error { msg, span, .. }| {
                     let (line, col) = offset_to_line_col(&src, span.start);
                     eprintln!("Monomorphization error in {}:{}:{}: {}", span.file, line, col, msg);

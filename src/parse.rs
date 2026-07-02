@@ -6,10 +6,13 @@ use chumsky::{
 };
 use crate::ast::*;
 
-/// Leaks a string to obtain a `&'static str` (which coerces to the source
-/// lifetime). Used for the handful of synthetic identifiers the parser needs to
-/// mint, e.g. the joined `qualifier::symbol` name of a qualified reference. The
-/// compiler is single-shot, so leaking a bounded number of names is fine.
+/// Leak a String to get a `&'static str` (coerces to the source lifetime). used
+/// for the few synthetic identifiers the parser has to mint, e.g. the joined
+/// `qualifier::symbol` of a qualified ref. compiler is single-shot so leaking a
+/// bounded number of names is fine.
+// TODO: the rest of the pipeline now threads am arena for exactly this kind of
+// synthetic name (see module.rs / mono.rs). this leak predates that and should
+// probably use the arena too instead of leaking for the whole process.
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
@@ -270,12 +273,13 @@ fn parse_expr<'tks, 'src: 'tks>()
                     fields,
                 }),
 
-            // A variable, or a module-qualified reference `qualifier::symbol`
-            // (e.g. `math::sinf`). The qualified form is stored as a single
-            // `Var` holding the joined `"qualifier::symbol"` string; the module
-            // resolver splits and rewrites it before any later stage runs. The
-            // `::symbol` is optional and only taken when followed by an
-            // identifier, so a turbofish `::<...>` is left for the call postfix.
+            // a variable, or a module-qualified ref `qualifier::symbol`
+            // (e.g. `math::sinf`). the qualified form is one `Var` holding the
+            // joined `"qualifier::symbol"` string; the module resolver splits and
+            // rewrites it before any later stage. the `::symbol` is optional and
+            // only taken when followed by an ident, so a turbofish `::<...>` is
+            // left for the call postfix.
+            // TODO: only one `::` segment — `a::b::c` leaves `::c` dangling.
             var.then(just(Token::ColonColon).ignore_then(var).or_not())
                 .map(|(a, b)| match b {
                     Some(sym) => ExprNode::Var(leak(format!("{}::{}", a, sym))),
@@ -391,7 +395,11 @@ fn parse_expr<'tks, 'src: 'tks>()
     })
 }
 
-// TODO(fn-as-value): no fn-type production (see module.rs)
+// TODO: no fn-type production yet (fn-as-value), and no user generic-type
+// production either, only the hardcoded `simd<T,N>` handles `name<...>`. so a
+// generic type in type position (`x: List<T>`, nested turbofish `f::<Vec<i32>>`)
+// won't parse. mangle_ty in mono.rs already collapses fn types to "fn", so once
+// this lands watch the mangler collision noted there.
 fn parse_type<'tks, 'src: 'tks>()
 -> impl Parser<
     'tks,
@@ -726,9 +734,12 @@ fn parse_import<'tks, 'src: 'tks>()
 > {
     let var = select_ref! { Token::Var(ident) => *ident };
 
-    // `import seg/seg/...` optionally followed by `{ sym, sym, ... }`. The path
-    // separator reuses the `/` (division) token; it is unambiguous here because
-    // an import statement never contains an expression.
+    // `import seg/seg/...` optionally followed by `{ sym, sym, ... }`. the path
+    // separator reuses the `/` (division) token; unambiguous here since an import
+    // never contains an expression.
+    // TODO: path segments are `var` only, so a segment that lexes to a keyword
+    // (`import std/const`) won't parse. and `{}` is `.at_least(1)`, so an empty
+    // selective import is a hard error rather than a no-op.
     just(Token::Import)
         .ignore_then(
             var.separated_by(just(Token::BinaryOp(BinaryOp::Div)))
@@ -747,8 +758,8 @@ fn parse_import<'tks, 'src: 'tks>()
         .boxed()
 }
 
-/// One item at file scope: either an `import` or a real top-level definition.
-/// They are parsed from the same stream and partitioned by `parse`.
+/// one item at file scope: an `import` or a real top-level definition. parsed
+/// from the same stream and partitioned by `parse`.
 enum FileItem<'a> {
     Import(Import<'a>),
     Item(TopLevel<'a>),

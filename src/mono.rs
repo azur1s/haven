@@ -1,17 +1,14 @@
-//! Monomorphization: turns a program containing generic (type-parameter)
-//! functions into an equivalent program with only concrete functions.
+//! monomorphization: rewrite generic (type-param) functions into concrete ones.
 //!
-//! This runs as an AST -> AST pass *after* the first typecheck (which validates
-//! the program and confirms which functions are generic) and *before* MIL
-//! lowering. Each distinct instantiation of a generic function reachable from a
-//! concrete call site is materialized into its own function with a mangled name
-//! (e.g. `id::<i32>` -> `id$i32`), and every generic call site is rewritten to
-//! call the mangled instance directly. The result is re-typechecked so that
-//! `node_types` is fully populated for the freshly-created concrete nodes; from
-//! MIL's point of view the program was never generic.
+//! runs AST -> AST after the first typecheck (which tells us which functions are
+//! generic) and before MIL lowering. every distinct instantiation reachable from
+//! a concrete call site becomes its own function with a mangled name
+//! (`id::<i32>` -> `id$i32`), and the call site is rewritten to call it directly.
+//! the result gets re-typechecked so node_types is filled in for the new nodes.
+//! MIL never sees a generic.
 //!
-//! Only type parameters are handled. Const generics on user functions are still
-//! unsupported (and rejected earlier during typecheck), so they never reach here.
+//! type params only. const generics on user functions are rejected back in
+//! typecheck, so they never get here.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -19,9 +16,8 @@ use bumpalo::Bump;
 
 use crate::ast::*;
 
-/// A single requested instantiation: the generic function `base` specialized to
-/// the concrete `args`, materialized under the name `mangled`. `span` is the
-/// call site that first requested it, used for error reporting.
+/// one requested instantiation: `base` specialized to `args`, emitted as
+/// `mangled`. `span` is the call site that first asked for it (for errors).
 struct Instantiation<'a> {
     base: &'a str,
     args: Vec<Type<'a>>,
@@ -29,19 +25,17 @@ struct Instantiation<'a> {
     span: Span,
 }
 
-/// Upper bound on the number of distinct instantiations. A backstop for
-/// combinatorial (rather than depth-growing) explosion; real programs stay far
-/// below it.
+/// cap on distinct instantiations. backstop for combinatorial blowup (not
+/// depth-growing); real programs are nowhere near this.
 const INSTANTIATION_LIMIT: usize = 10_000;
 
-/// Upper bound on the nesting depth of a type argument. Polymorphic recursion
-/// like `proc f<T>(...) { f::<*T>(...); }` mints an ever-deeper type
-/// (`T`, `*T`, `**T`, ...); this catches it almost immediately, before the
-/// growing types make each instantiation expensive. No hand-written type nests
-/// anywhere near this deep.
+/// cap on how deep a type argument can nest. polymorphic recursion like
+/// `f<T>(...) { f::<*T>(...) }` grows the type forever (T, *T, **T, ...); this
+/// catches it early, before the growing types make each instance expensive.
+/// nothing hand-written nests this deep.
 const TYPE_DEPTH_LIMIT: usize = 128;
 
-/// Nesting depth of a type: `i32` is 1, `*i32` is 2, `[*i32; 4]` is 3, etc.
+/// how deep a type nests: i32 = 1, *i32 = 2, [*i32; 4] = 3, ...
 fn type_depth(ty: &Type) -> usize {
     match ty {
         Type::Pointer(inner)
@@ -57,23 +51,26 @@ fn type_depth(ty: &Type) -> usize {
 }
 
 struct Mono<'p, 'a> {
-    /// Arena the mangled instantiation names are allocated into; it outlives the
-    /// produced AST, so the `&'a str` names it hands out are valid for `'a`.
+    /// arena the mangled names live in. outlives the AST we produce, so the
+    /// `&'a str` names it hands out are valid for `'a`.
     arena: &'a Bump,
-    /// Generic function templates, keyed by name.
+    /// generic function templates, by name.
     templates: HashMap<&'a str, &'p TopLevel<'a>>,
-    /// Instantiations still to materialize.
+    /// instantiations still to build.
     queue: VecDeque<Instantiation<'a>>,
-    /// Mangled name for each instantiation we've already requested, keyed by the
-    /// mangled string, so a repeated call site reuses one instance (and one
-    /// arena allocation).
+    /// mangled name per instantiation we've already asked for, keyed by the
+    /// mangled string, so repeated call sites reuse one instance (one alloc).
     seen: HashMap<String, &'a str>,
 }
 
-/// Substitutes bound type parameters in `ty` with their concrete bindings. In
-/// raw (pre-typecheck) AST a type parameter appears as `Type::Struct(name)`
-/// (the parser can't tell it apart from a real struct), so both `Struct` and
-/// `Param` spellings are treated as a substitution target when bound.
+/// Substitute bound type params in `ty` with their concrete bindings. in the raw
+/// pre-typecheck AST a type param looks like `Type::Struct(name)` (parser can't
+/// tell it from a real struct), so both Struct and Param get substituted when
+/// bound.
+///
+/// FIXME: a real struct named the same as a bound type param gets wrongly
+/// rewritten inside a generic body (e.g. `struct T` used inside `f<T>`). no
+/// scope check distinguishes them. edge case, but there's no guard.
 fn subst_ty<'a>(ty: &Type<'a>, b: &HashMap<&'a str, Type<'a>>) -> Type<'a> {
     match ty {
         Type::Param(n) | Type::Struct(n) if b.contains_key(n) => b[n].clone(),
@@ -89,8 +86,14 @@ fn subst_ty<'a>(ty: &Type<'a>, b: &HashMap<&'a str, Type<'a>>) -> Type<'a> {
     }
 }
 
-/// Encodes a concrete type into an identifier-safe fragment for a mangled name.
-/// `$`, `_` and alphanumerics are all valid in unquoted LLVM identifiers.
+/// encode a concrete type into an identifier-safe fragment for a mangled name.
+/// $, _ and alphanumerics are all fine in unquoted LLVM identifiers.
+///
+/// FIXME: not injective. a struct named `p_i32` mangles the same as `*i32`, and
+/// all function types collapse to "fn". since `request` keys the instance cache
+/// on this string, two different type args that mangle the same silently share
+/// one instantiation -> wrong specialization. (fn types aren't spellable in a
+/// type position yet, so that half is latent for now.)
 fn mangle_ty(ty: &Type) -> String {
     match ty {
         Type::Void => "void".into(),
@@ -121,8 +124,8 @@ fn mangle_name(base: &str, args: &[Type]) -> String {
 }
 
 impl<'p, 'a> Mono<'p, 'a> {
-    /// Records an instantiation request, returning its (stable) mangled name.
-    /// De-duplicates so each distinct instance is materialized exactly once.
+    /// Record an instantiation request, return its (stable) mangled name.
+    /// de-dupes so each distinct instance is built exactly once.
     fn request(&mut self, base: &'a str, args: Vec<Type<'a>>, span: Span) -> &'a str {
         let key = mangle_name(base, &args);
         if let Some(&m) = self.seen.get(&key) {
@@ -139,15 +142,15 @@ impl<'p, 'a> Mono<'p, 'a> {
             ExprNode::Call { func, type_args, args } => {
                 let new_args: Vec<Expr<'a>> =
                     args.iter().map(|a| self.rebuild_expr(a, b)).collect();
-                // substitute type params inside the turbofish (covers both user
-                // generic calls and intrinsics like `sizeof::<T>()`)
+                // sub type params inside the turbofish (user generic calls +
+                // intrinsics like `sizeof::<T>()`)
                 let subst_targs: Vec<GenericArg<'a>> = type_args.iter().map(|ga| match ga {
                     GenericArg::Type(t) => GenericArg::Type(subst_ty(t, b)),
                     GenericArg::Const(n) => GenericArg::Const(*n),
                 }).collect();
 
-                // A call to a user-defined generic function: mangle to the
-                // concrete instance and drop the turbofish.
+                // user generic call: mangle to the concrete instance, drop the
+                // turbofish.
                 if let ExprNode::Var(name) = &func.value {
                     if self.templates.contains_key(name) {
                         let concrete: Vec<Type<'a>> = subst_targs.iter().map(|ga| match ga {
@@ -192,7 +195,7 @@ impl<'p, 'a> Mono<'p, 'a> {
                 left: Box::new(self.rebuild_expr(left, b)),
                 right: Box::new(self.rebuild_expr(right, b)),
             },
-            // leaves: reproduce verbatim (under a fresh id)
+            // leaves: copy as-is (fresh id)
             ExprNode::Bool(v) => ExprNode::Bool(*v),
             ExprNode::Int32(v) => ExprNode::Int32(*v),
             ExprNode::Int64(v) => ExprNode::Int64(*v),
@@ -236,9 +239,9 @@ impl<'p, 'a> Mono<'p, 'a> {
         Metadata::new(node, stmt.span.clone())
     }
 
-    /// Rebuilds a function with type parameters substituted per `b`, an optional
-    /// new (mangled) name, and no generic list. Call sites inside are rewritten
-    /// and any generic calls discovered are queued.
+    /// Rebuild a function with type params substituted per `b`, an optional new
+    /// (mangled) name, and no generics. call sites inside get rewritten and any
+    /// generic calls found get queued.
     fn rebuild_function(
         &mut self,
         tl: &TopLevel<'a>,
@@ -267,9 +270,9 @@ impl<'p, 'a> Mono<'p, 'a> {
     }
 }
 
-/// Expands all generic functions reachable from concrete call sites into
-/// concrete instances, dropping the templates. Non-generic functions, externs
-/// and structs are preserved (with call sites rewritten).
+/// Expand every generic function reachable from a concrete call site into
+/// concrete instances, drop the templates. non-generic functions, externs and
+/// structs stay (with call sites rewritten).
 pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec<TopLevel<'a>>, Error> {
     let templates: HashMap<&'a str, &TopLevel<'a>> = program.iter()
         .filter_map(|tl| match &tl.value {
@@ -282,8 +285,8 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec
     let mut m = Mono { arena, templates, queue: VecDeque::new(), seen: HashMap::new() };
     let empty: HashMap<&'a str, Type<'a>> = HashMap::new();
 
-    // rebuild concrete functions (seeds the queue via their call sites), keyed
-    // by their original position so they can be re-emitted in source order.
+    // rebuild concrete functions (their call sites seed the queue), keyed by
+    // original position so we can re-emit in source order.
     let mut concrete: HashMap<usize, TopLevel<'a>> = HashMap::new();
     for (i, tl) in program.iter().enumerate() {
         match &tl.value {
@@ -295,9 +298,11 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec
         }
     }
 
-    // materialize each requested instantiation; instances may themselves request
-    // further instantiations, so drain until the queue is empty. Instances are
-    // grouped by their template so they can be emitted next to it.
+    // build each requested instantiation. instances can request more, so drain
+    // till the queue is empty. group by template so they emit next to it.
+    // NOTE: the depth/count guards below fire after pop, i.e. after this item was
+    // already built+queued — so we overshoot the cutoff by one instance. fine as
+    // a backstop, just not a tight bound.
     let mut instances: HashMap<&'a str, Vec<TopLevel<'a>>> = HashMap::new();
     let mut materialized = 0usize;
     while let Some(inst) = m.queue.pop_front() {
@@ -334,8 +339,8 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump) -> Result<Vec
         instances.entry(inst.base).or_default().push(f);
     }
 
-    // reassemble in original source order: each template is replaced in place by
-    // its concrete instances (or dropped if it was never instantiated).
+    // reassemble in source order: each template -> its instances (or nothing if
+    // it was never instantiated).
     let mut output: Vec<TopLevel<'a>> = Vec::with_capacity(program.len());
     for (i, tl) in program.iter().enumerate() {
         match &tl.value {

@@ -546,21 +546,20 @@ impl<'a> Display for TopLevelNode<'a> {
 
 pub type TopLevel<'a> = Metadata<TopLevelNode<'a>>;
 
-/// A module import, e.g. `import std/math` or `import std/math { sinf, cosf }`.
+/// a module import, e.g. `import std/math` or `import std/math { sinf, cosf }`
 ///
-/// Imports are parsed alongside top-level items but kept out of `TopLevelNode`
-/// so the later compiler stages (typecheck, mono, mil, ...) never have to know
-/// about them: the module resolver (`crate::module`) consumes every import,
-/// mangles + merges the referenced modules, and hands those stages a single
-/// flat program of concrete items with no imports left.
+/// kept out of `TopLevelNode` so the later stages (typecheck, mono, mil, ...)
+/// never see imports: the module resolver eats every import, mangles + merges
+/// the referenced modules, and hands those stages one flat program of concrete
+/// items with no imports left
 #[derive(Clone, Debug)]
 pub struct Import<'a> {
     pub span: Span,
-    /// Path segments as written, e.g. `["std", "math"]` or `["utils", "foo"]`.
+    /// path segments as written, e.g. `["std", "math"]` or `["utils", "foo"]`
     pub path: Vec<&'a str>,
-    /// `None` for a whole-module import (`import std/math`): every public symbol
-    /// becomes visible unqualified. `Some(list)` for a selective import
-    /// (`import std/math { sinf }`): only the listed symbols are visible, and
-    /// only qualified under the final path segment (`math::sinf`).
+    /// `None` = whole-module import (`import std/math`): every public symbol
+    /// visible unqualified. `Some(list)` = selective (`import std/math { sinf }`):
+    /// only those symbols, and only qualified under the last path segment
+    /// (`math::sinf`)
     pub symbols: Option<Vec<&'a str>>,
 }
