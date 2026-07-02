@@ -373,25 +373,29 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
         worklist.push_back(Pending { key: "<prelude>".into(), src: psrc, dir: None, is_entry: false });
     }
 
-    // entry module
-    let entry_src = match std::fs::read_to_string(entry) {
-        Ok(s) => arena.alloc_str(&s),
+    // entry module. canonicalize *first* so its key matches how imports are
+    // keyed (imports always canonicalize). otherwise a module that imports the
+    // entry back would key it differently, miss in `seen`, and get the entry
+    // parsed + merged twice (dup `main`). if canonicalize fails we can't read it
+    // anyway, so bail.
+    let entry_path = match std::fs::canonicalize(entry) {
+        Ok(p) => p,
         Err(e) => {
             eprintln!("Error: cannot read entry file '{}': {}", entry.display(), e);
             return Err(());
         }
     };
-    // canonical key so a module that imports the entry lands on the same key.
-    // FIXME: if canonicalize fails we fall back to the raw path, but imports
-    // always canonicalize — so a module importing the entry keys it differently,
-    // `seen` misses, and the entry gets parsed + merged twice (dup `main`).
-    let entry_key = std::fs::canonicalize(entry)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| entry.to_string_lossy().into_owned());
+    let entry_src = match std::fs::read_to_string(&entry_path) {
+        Ok(s) => arena.alloc_str(&s),
+        Err(e) => {
+            eprintln!("Error: cannot read entry file '{}': {}", entry_path.display(), e);
+            return Err(());
+        }
+    };
     worklist.push_back(Pending {
-        key: entry_key,
+        key: entry_path.to_string_lossy().into_owned(),
         src: entry_src,
-        dir: entry.parent().map(|d| d.to_path_buf()),
+        dir: entry_path.parent().map(|d| d.to_path_buf()),
         is_entry: true,
     });
 
@@ -569,27 +573,64 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
         return Err(());
     }
 
-    // merge: concatenate all modules, de-duping global `extern` names.
-    // FIXME: two gaps here.
-    //   1. externs are de-duped by name only, no signature check — two modules
-    //      declaring the same C symbol with *different* signatures silently keep
-    //      whichever came first, and calls elsewhere check against the wrong ABI.
-    //   2. only externs are de-duped at all. two `@export` fns with the same
-    //      final name (or a user fn colliding with a prelude extern) both get
-    //      emitted -> duplicate LLVM symbol at link time, no source-level error.
-    //      the old single-file path caught this as a prelude-collision error.
-    // want a real global symbol table that reconciles/reports conflicts here.
+    // merge: concatenate all modules into one flat program, reconciling the
+    // global callable namespace (functions + externs, keyed by final emitted
+    // name) as we go. two identical `extern` declarations of the same C symbol
+    // are the legit duplicate — de-duped silently. everything else that collides
+    // on a final name would become a duplicate LLVM symbol at link time, so we
+    // turn it into a source diagnostic here instead:
+    //   * two externs, same name, different signature -> mismatched-ABI error
+    //   * any other same-name collision (two defs, or a def vs an extern) ->
+    //     already-defined error. covers colliding `@export`s and a user fn
+    //     shadowing a prelude extern, which the old single-file path caught too.
+    // structs live in a separate namespace; they don't participate here.
     let mut out: Vec<TopLevel<'a>> = Vec::new();
-    let mut seen_externs: HashSet<&str> = HashSet::new();
+    let mut merge_errs: Vec<Error> = Vec::new();
+    let mut seen_callables: HashMap<&str, &TopLevel<'a>> = HashMap::new();
     for m in &modules {
         for tl in &m.items {
-            if let TopLevelNode::Extern { name, .. } = &tl.value {
-                if !seen_externs.insert(name) {
-                    continue; // same global extern already emitted
+            let (name, is_extern, params, ret) = match &tl.value {
+                TopLevelNode::Function { name, params, return_type, .. } =>
+                    (*name, false, params.as_slice(), return_type),
+                TopLevelNode::Extern { name, params, return_type, .. } =>
+                    (*name, true, params.as_slice(), return_type),
+                TopLevelNode::Struct { .. } => { out.push(tl.clone()); continue; }
+            };
+
+            if let Some(prev) = seen_callables.get(name) {
+                let (prev_extern, prev_params, prev_ret) = match &prev.value {
+                    TopLevelNode::Function { params, return_type, .. } =>
+                        (false, params.as_slice(), return_type),
+                    TopLevelNode::Extern { params, return_type, .. } =>
+                        (true, params.as_slice(), return_type),
+                    TopLevelNode::Struct { .. } => unreachable!("only callables are recorded"),
+                };
+                // signatures match on types only (param names are irrelevant to the ABI)
+                let sig_eq = params.len() == prev_params.len()
+                    && params.iter().zip(prev_params).all(|((_, a), (_, b))| a == b)
+                    && ret == prev_ret;
+
+                if is_extern && prev_extern {
+                    if sig_eq {
+                        continue; // same extern already emitted: legit dedup
+                    }
+                    merge_errs.push(Error::new(tl.span.clone(), format!(
+                        "extern '{}' is redeclared with a different signature", name)));
+                } else {
+                    merge_errs.push(Error::new(tl.span.clone(), format!(
+                        "'{}' is already defined", name)));
                 }
+                continue;
             }
+
+            seen_callables.insert(name, tl);
             out.push(tl.clone());
         }
+    }
+
+    if !merge_errs.is_empty() {
+        for e in &merge_errs { diag::report_error("Merge error", e, &sources); }
+        return Err(());
     }
 
     Ok((out, sources))
