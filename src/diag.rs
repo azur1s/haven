@@ -42,7 +42,7 @@ pub fn report(stage: &str, msg: &str, span: &Span, sources: &Sources) {
         .with_message(msg)
         .with_label(Label::new(span).with_color(Color::Red).with_message(msg))
         .finish()
-        // ariadne indexes each Source by char offset — matches `to_span` above.
+        // ariadne indexes each Source by char offset - matches `to_span` above
         .eprint(ariadne::sources(sources.iter().map(|(k, s)| (k.clone(), *s))))
         .ok();
 }

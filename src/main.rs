@@ -4,14 +4,16 @@ use clap::Parser;
 mod args;
 mod ast;
 mod diag;
-mod parse;
-mod module;
 mod intrinsics;
-mod typecheck;
-mod safecheck;
-mod mono;
-mod mil;
-mod llvm;
+
+// The compiler is in this order, so you can check out each stage one by one:
+mod module;    // load and merge modules, resolve imports, name-mangle, and inject the prelude
+mod parse;     // parse the merged source into an AST
+mod typecheck; // typecheck the AST, populating node_types and checking for errors
+mod safecheck; // check for runtime safety issues (e.g. heap allocations) in the AST
+mod mono;      // monomorphize the AST, expanding generics into concrete instances
+mod mil;       // lower the AST into a intermediate representation
+mod llvm;      // emit LLVM IR from the intermediate representation
 
 const RUNTIME_ARCHIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libruntime.a"));
 
@@ -31,184 +33,184 @@ fn main() {
     // load the entry file + every module it (transitively) imports, inject the
     // prelude unless disabled, merge into one flat name-mangled program with all
     // imports resolved away. see `crate::module`
-    let prelude = if args.no_prelude { None } else { Some(PRELUDE_SRC) };
+    // let prelude = if args.no_prelude { None } else { Some(PRELUDE_SRC) };
     // `sources` is (file-key, src) for every loaded module, so diagnostics below
     // quote the span's owning module — not just the entry file.
-    let (ast, sources) = match module::load_and_merge(&args.input, prelude, &arena) {
+    let (ast, sources) = match module::load_and_merge(&args.input, Some(PRELUDE_SRC), &arena) {
         Ok(pair) => pair,
         Err(()) => std::process::exit(1),
     };
 
     {
-            let mut cx = typecheck::Context::new();
-            let typecheck_errs = typecheck::typecheck_program(&mut cx, &ast);
+        let mut cx = typecheck::Context::new();
+        let typecheck_errs = typecheck::typecheck_program(&mut cx, &ast);
 
-            // check if there is no main function when compiling an executable
-            if !args.shared && !args.static_lib {
-                let main_fn = ast.iter().find_map(|item| {
-                    if let ast::TopLevelNode::Function { name, .. } = item.value {
-                        if name == "main" {
-                            Some(())
-                        } else {
-                            None
-                        }
+        // check if there is no main function when compiling an executable
+        if !args.shared && !args.static_lib {
+            let main_fn = ast.iter().find_map(|item| {
+                if let ast::TopLevelNode::Function { name, .. } = item.value {
+                    if name == "main" {
+                        Some(())
                     } else {
                         None
                     }
-                });
-
-                if main_fn.is_none() {
-                    eprintln!("Error: No 'main' function exported");
-                    eprintln!("If you intended to compile a shared/static library, use the --shared or --static-lib flag.");
-                    eprintln!("Otherwise, add a 'main' function to your program and an @export attribute to it.");
-                    std::process::exit(1);
+                } else {
+                    None
                 }
-            }
+            });
 
-            if !typecheck_errs.is_empty() {
-                typecheck_errs.iter()
+            if main_fn.is_none() {
+                eprintln!("Error: No 'main' function exported");
+                eprintln!("If you intended to compile a shared/static library, use the --shared or --static-lib flag.");
+                eprintln!("Otherwise, add a 'main' function to your program and an @export attribute to it.");
+                std::process::exit(1);
+            }
+        }
+
+        if !typecheck_errs.is_empty() {
+            typecheck_errs.iter()
+                .for_each(|e| diag::report_error("Typecheck error", e, &sources));
+            std::process::exit(1);
+        } else {
+            // expand generics into concrete instances, then re-typecheck the
+            // now fully-concrete program so node_types is populated for the
+            // fresh instantiations
+            // TODO: this re-checks the *whole* program (prelude, std, every
+            // concrete fn) from scratch and throws away the first `cx`, when
+            // only the new instances actually need checking
+            let (mono_ast, mono_display) = mono::monomorphize(&ast, &arena).unwrap_or_else(|e| {
+                diag::report_error("Monomorphization error", &e, &sources);
+                std::process::exit(1);
+            });
+            let mut cx = typecheck::Context::new();
+            let mono_errs = typecheck::typecheck_program(&mut cx, &mono_ast);
+            if !mono_errs.is_empty() {
+                mono_errs.iter()
                     .for_each(|e| diag::report_error("Typecheck error", e, &sources));
                 std::process::exit(1);
-            } else {
-                // expand generics into concrete instances, then re-typecheck the
-                // now fully-concrete program so node_types is populated for the
-                // fresh instantiations
-                // TODO: this re-checks the *whole* program (prelude, std, every
-                // concrete fn) from scratch and throws away the first `cx`, when
-                // only the new instances actually need checking
-                let (mono_ast, mono_display) = mono::monomorphize(&ast, &arena).unwrap_or_else(|e| {
-                    diag::report_error("Monomorphization error", &e, &sources);
-                    std::process::exit(1);
-                });
-                let mut cx = typecheck::Context::new();
-                let mono_errs = typecheck::typecheck_program(&mut cx, &mono_ast);
-                if !mono_errs.is_empty() {
-                    mono_errs.iter()
-                        .for_each(|e| diag::report_error("Typecheck error", e, &sources));
-                    std::process::exit(1);
+            }
+
+            safecheck::alloc_check_program(&mono_ast, &mono_display).unwrap_or_else(|errs| {
+                for err in &errs {
+                    diag::report_error("Check error", err, &sources);
                 }
+                std::process::exit(1);
+            });
 
-                safecheck::alloc_check_program(&mono_ast, &mono_display).unwrap_or_else(|errs| {
-                    for err in &errs {
-                        diag::report_error("Check error", err, &sources);
-                    }
-                    std::process::exit(1);
-                });
+            let mil = mil::lower(&mono_ast, &cx);
+            let llvm_ir = llvm::emit(mil);
 
-                let mil = mil::lower(&mono_ast, &cx);
-                let llvm_ir = llvm::emit(mil);
+            let llvm_ir_output_path = args.output.with_extension("ll");
 
-                let llvm_ir_output_path = args.output.with_extension("ll");
+            std::fs::write(&llvm_ir_output_path, llvm_ir)
+                .expect("Failed to write LLVM IR to file");
 
-                std::fs::write(&llvm_ir_output_path, llvm_ir)
-                    .expect("Failed to write LLVM IR to file");
+            if args.emit_ir {
+                std::process::exit(0);
+            }
 
-                if args.emit_ir {
-                    std::process::exit(0);
-                }
+            // Dump the embedded runtime archive into a temporary file
+            let mut temp_runtime = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+            temp_runtime.write_all(RUNTIME_ARCHIVE).expect("Failed to write runtime archive to temp file");
 
-                // Dump the embedded runtime archive into a temporary file
-                let mut temp_runtime = tempfile::NamedTempFile::new().expect("Failed to create temp file");
-                temp_runtime.write_all(RUNTIME_ARCHIVE).expect("Failed to write runtime archive to temp file");
+            if args.emit_optimized_ir {
+                let optimized_ir_output_path = args.output.with_extension("opt.ll");
 
-                if args.emit_optimized_ir {
-                    let optimized_ir_output_path = args.output.with_extension("opt.ll");
-
-                    let status = std::process::Command::new(&args.compiler)
-                        .arg(&llvm_ir_output_path)
-                        // .arg(temp_runtime.path())
-                        .arg("-S")
-                        .arg("-emit-llvm")
-                        .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
-                        .arg("-o")
-                        .arg(&optimized_ir_output_path)
-                        .status()
-                        .expect("Failed to execute compiler for optimized IR");
-
-                    if !status.success() {
-                        eprintln!("Compiler exited with non-zero status when generating optimized IR: {}", status);
-                        std::process::exit(1);
-                    }
-                }
-
-                if args.emit_asm {
-                    let asm_output_path = args.output.with_extension("s");
-
-                    let status = std::process::Command::new(&args.compiler)
-                        .arg(&llvm_ir_output_path)
-                        .arg("-S")
-                        .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
-                        .arg("-o")
-                        .arg(&asm_output_path)
-                        .status()
-                        .expect("Failed to execute compiler for assembly");
-
-                    if !status.success() {
-                        eprintln!("Compiler exited with non-zero status when generating assembly: {}", status);
-                        std::process::exit(1);
-                    }
-
-                    std::process::exit(0);
-                }
-
-                let mut compiler_args = vec![
-                    llvm_ir_output_path.to_str().unwrap(),
-                    temp_runtime.path().to_str().unwrap(),
-                ];
-                compiler_args.extend(args.compiler_flags.split_whitespace());
-
-                // add -lm on non-Windows platforms because math library is
-                // in the CRT for MSVC and MinGW
-                if !cfg!(target_os = "windows") {
-                    compiler_args.push("-lm");
-                }
-
-                let status = if args.shared {
-                    println!("Compiling as a shared library...");
-
-                    let shared_output_path = if cfg!(target_os = "windows") {
-                        args.output.with_extension("dll")
-                    } else if cfg!(target_os = "macos") {
-                        args.output.with_extension("dylib")
-                    } else {
-                        // Default to .so for linux & other platforms
-                        args.output.with_extension("so")
-                    };
-
-                    std::process::Command::new(&args.compiler)
-                        .args(&compiler_args)
-                        .arg("-shared")
-                        .arg("-o")
-                        .arg(&shared_output_path)
-                        .status()
-                        .expect("Failed to execute compiler for shared library")
-                } else if args.static_lib {
-                    todo!("Implement static library compilation");
-                } else {
-                    println!("Compiling as an executable...");
-
-                    let output = if cfg!(target_os = "windows") {
-                        args.output.with_extension("exe")
-                    } else {
-                        args.output
-                    };
-
-                    std::process::Command::new(&args.compiler)
-                        .args(&compiler_args)
-                        .arg("-o")
-                        .arg(&output)
-                        .status()
-                        .expect("Failed to execute compiler for executable")
-                };
+                let status = std::process::Command::new(&args.compiler)
+                    .arg(&llvm_ir_output_path)
+                    // .arg(temp_runtime.path())
+                    .arg("-S")
+                    .arg("-emit-llvm")
+                    .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
+                    .arg("-o")
+                    .arg(&optimized_ir_output_path)
+                    .status()
+                    .expect("Failed to execute compiler for optimized IR");
 
                 if !status.success() {
-                    eprintln!("Compiler exited with non-zero status: {}", status);
+                    eprintln!("Compiler exited with non-zero status when generating optimized IR: {}", status);
+                    std::process::exit(1);
+                }
+            }
+
+            if args.emit_asm {
+                let asm_output_path = args.output.with_extension("s");
+
+                let status = std::process::Command::new(&args.compiler)
+                    .arg(&llvm_ir_output_path)
+                    .arg("-S")
+                    .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
+                    .arg("-o")
+                    .arg(&asm_output_path)
+                    .status()
+                    .expect("Failed to execute compiler for assembly");
+
+                if !status.success() {
+                    eprintln!("Compiler exited with non-zero status when generating assembly: {}", status);
                     std::process::exit(1);
                 }
 
-                if !args.keep_ir {
-                    std::fs::remove_file(llvm_ir_output_path).expect("Failed to remove LLVM IR file");
-                }
+                std::process::exit(0);
             }
+
+            let mut compiler_args = vec![
+                llvm_ir_output_path.to_str().unwrap(),
+                temp_runtime.path().to_str().unwrap(),
+            ];
+            compiler_args.extend(args.compiler_flags.split_whitespace());
+
+            // add -lm on non-Windows platforms because math library is
+            // in the CRT for MSVC and MinGW
+            if !cfg!(target_os = "windows") {
+                compiler_args.push("-lm");
+            }
+
+            let status = if args.shared {
+                println!("Compiling as a shared library...");
+
+                let shared_output_path = if cfg!(target_os = "windows") {
+                    args.output.with_extension("dll")
+                } else if cfg!(target_os = "macos") {
+                    args.output.with_extension("dylib")
+                } else {
+                    // default to .so for linux & other platforms
+                    args.output.with_extension("so")
+                };
+
+                std::process::Command::new(&args.compiler)
+                    .args(&compiler_args)
+                    .arg("-shared")
+                    .arg("-o")
+                    .arg(&shared_output_path)
+                    .status()
+                    .expect("Failed to execute compiler for shared library")
+            } else if args.static_lib {
+                todo!("Implement static library compilation");
+            } else {
+                println!("Compiling as an executable...");
+
+                let output = if cfg!(target_os = "windows") {
+                    args.output.with_extension("exe")
+                } else {
+                    args.output
+                };
+
+                std::process::Command::new(&args.compiler)
+                    .args(&compiler_args)
+                    .arg("-o")
+                    .arg(&output)
+                    .status()
+                    .expect("Failed to execute compiler for executable")
+            };
+
+            if !status.success() {
+                eprintln!("Compiler exited with non-zero status: {}", status);
+                std::process::exit(1);
+            }
+
+            if !args.keep_ir {
+                std::fs::remove_file(llvm_ir_output_path).expect("Failed to remove LLVM IR file");
+            }
+        }
     }
 }

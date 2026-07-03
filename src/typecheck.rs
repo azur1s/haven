@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use crate::{ast::*, intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound}};
 
-/// a generic function's signature, in terms of its own type params. param/return
-/// types hold `Type::Param`. used to typecheck calls before mono materializes the
+/// A generic function's signature, in terms of its own type params. param/return
+/// types hold `Type::Param`. Used to typecheck calls before mono materializes the
 /// concrete instances
 #[derive(Clone, Debug)]
 pub struct GenericFnSig<'a> {
@@ -182,8 +182,8 @@ fn typecheck_intrinsic<'a>(
     expr_id: usize,
 ) -> Result<Type<'a>, Error> {
     let sig = intrinsic.signature();
-    // Validates turbofish/value arity and binds the type/const arguments. Value
-    // arguments remain in `args` (indexed from 0) and are checked per-intrinsic.
+    // validates turbofish/value arity and binds the type/const arguments
+    // value arguments remain in `args` (indexed from 0) and are checked per-intrinsic
     let (tys, consts) = bind_generics(cx, intrinsic, &sig, type_args, args, &span)?;
 
     match intrinsic {
@@ -218,7 +218,7 @@ fn typecheck_intrinsic<'a>(
         }
         Intrinsic::PtrCast => {
             // ptr_cast::<*T>(p: *U) -> *T. The turbofish (validated as a pointer
-            // by bind_generics) is the result type; the argument must be a pointer.
+            // by bind_generics) is the result type, the argument must be a pointer
             let target_ty = tys[0].clone();
             let value_ty = infer(cx, &args[0])?;
             if !matches!(value_ty, Type::Pointer(_)) {
@@ -338,7 +338,7 @@ fn typecheck_intrinsic<'a>(
             let size = consts[0];
 
             let value_ty = infer(cx, &args[0])?;
-            // Only check if inner type is the same, because size can be different
+            // only check if inner type is the same, because size can be different
             match value_ty {
                 Type::Simd(inner_ty, inner_size) if *inner_ty == ty && inner_size > size => {
                     let result_ty = Type::Simd(Box::new(ty), size);
@@ -907,7 +907,7 @@ fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
     }
 }
 
-/// substitute `Type::Param(name)` with its concrete binding, recursing through
+/// Substitute `Type::Param(name)` with its concrete binding, recursing through
 /// compound types. inverse of `resolve_type`: used when a generic sig (which
 /// holds `Param`s) is specialized at a call site.
 // TODO: this, resolve_type, and mono.rs::subst_ty are three near-identical walks

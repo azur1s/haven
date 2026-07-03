@@ -318,7 +318,7 @@ fn parse_expr<'tks, 'src: 'tks>()
                 }
             ),
 
-            // Calls, with an optional turbofish `::<T, N>` before the args.
+            // calls, with an optional turbofish `::<T, N>` before the args.
             // `::` disambiguates from the `<`/`>` comparison operators.
             postfix(
                 300,
@@ -596,10 +596,7 @@ fn parse_attribute<'tks, 'src: 'tks>()
                 .then_ignore(just(Token::RParen))
                 .or_not()
         )
-        .map(|(name, value)| AttributeNode {
-            name,
-            value,
-        })
+        .map(|(name, value)| AttributeNode::new(name, value))
         .map_with(|attr, e| Metadata::new(attr, e.span()))
         .boxed()
 }
@@ -758,7 +755,7 @@ fn parse_import<'tks, 'src: 'tks>()
         .boxed()
 }
 
-/// one item at file scope: an `import` or a real top-level definition. parsed
+/// One item at file scope: an `import` or a real top-level definition. parsed
 /// from the same stream and partitioned by `parse`.
 enum FileItem<'a> {
     Import(Import<'a>),
