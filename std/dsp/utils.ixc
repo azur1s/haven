@@ -1,0 +1,7 @@
+import std/math
+
+// compiler should be able to infer that these is `@alloc(false)`
+proc db_to_lin(db: f32) f32 { return powf(10.0, db / 20.0); }
+proc lin_to_db(lin: f32) f32 { return 20.0 * log10f(lin); }
+proc midi_to_hz(note: f32) f32 { return 440.0 * powf(2.0, (note - 69.0) / 12.0); }
+proc hz_to_midi(hz: f32) f32 { return 69.0 + 12.0 * log2f(hz / 440.0); }

@@ -44,16 +44,20 @@ use crate::ast::*;
 use crate::diag::{self, Sources};
 use crate::parse;
 
-/// Source of an embedded stdlib module, by its `std/...` path.
-// TODO: hardcoded registry. every new std module means editing this match AND
-// keeping resolve_key/load_import in sync (load_import .expect()s this agreeing).
-// would rather this were a data table.
+/// The whole `crt/std` tree, embedded into the binary at build time. Nested
+/// modules just work: `std/dsp/osc` -> `crt/std/dsp/osc.ixc`, no per-file wiring.
+static STD_DIR: include_dir::Dir<'static> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/std");
+
+/// Source of an embedded stdlib module, by its `std/...` import path. The key is
+/// `imp.path.join("/")` (always forward slashes), so `std/<rel>` maps to the
+/// embedded file `<rel>.ixc`.
 fn std_source(key: &str) -> Option<&'static str> {
-    match key {
-        "std/math" => Some(include_str!("../crt/std/math.ixc")),
-        "std/alloc" => Some(include_str!("../crt/std/alloc.ixc")),
-        _ => None,
-    }
+    let rel = key.strip_prefix("std/")?;
+    // include_dir keys files by forward-slash path relative to the embedded root,
+    // on every host platform.
+    let file = format!("{rel}.ixc");
+    STD_DIR.get_file(&file)?.contents_utf8()
 }
 
 /// A loaded module: parsed contents plus the bookkeeping the resolver needs to

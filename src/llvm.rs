@@ -323,7 +323,7 @@ fn emit_terminator<'a>(cx: &mut EmitCtx, term: Terminator<'a>) {
 
     match term {
         Return(None) => emitln!(cx, "    ret void"),
-        Return(Some((value, ty))) => emitln!(cx, "    ret {} {value}", emit_type(&ty)),
+        Return(Some((value, ty))) => emitln!(cx, "    ret {} {}", emit_type(&ty), emit_value(value)),
         Jump(label) => emitln!(cx, "    br label %{label}"),
         Branch { cond, then_block, else_block } =>
             emitln!(cx, "    br i1 {cond}, label %{then_block}, label %{else_block}"),

@@ -1,0 +1,17 @@
+import std/dsp/utils
+
+@export
+proc main() i32 {
+    let x: f32 = 0.5;
+    let db: f32 = lin_to_db(x);
+    let lin: f32 = db_to_lin(db);
+
+    print("Input linear value: ");
+    print_float(x);
+    print("dB value: ");
+    print_float(db);
+    print("Converted back to linear: ");
+    print_float(lin);
+
+    return 0;
+}

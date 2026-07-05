@@ -1,126 +1,87 @@
 use crate::{ast::*, intrinsics::Intrinsic};
 use std::collections::{HashMap, HashSet};
 
-// TODO collect_calls_* and alloc_check_* probably could just be merged into
-// something like a AST walker with callbacks
+// Runtime-safety (`@alloc(false)`) checking.
+//
+// "clean" means a function performs no heap allocation, transitively. The
+// analysis is a greatest fixpoint over the call graph:
+//
+//   * extern    -> clean iff annotated `@alloc(false)` (we trust the user);
+//                  an unannotated extern is an allocating leaf.
+//   * intrinsic -> always clean (dropped during call collection).
+//   * function  -> clean iff every callee is clean.
+//
+// We can't do this in a single definition-order pass, modules are flattened with
+// imports appearing *after* the module that imports them, so a callee can be
+// defined later in the program than its caller. The fixpoint starts every function
+// optimistically clean and propagates dirtiness until it stabilizes, which is
+// order-independent and handles (mutual) recursion correctly.
 
-struct RtSafetyCtx<'a> {
-    // function name -> is it known-clean
-    clean: HashMap<&'a str, bool>,
-    // call graph: caller -> set of callees
-    calls: HashMap<&'a str, HashSet<&'a str>>,
-}
+/// Map from a callable's final (post-mono) name to whether it is known clean.
+type CleanMap<'a> = HashMap<&'a str, bool>;
 
-/// Returns the list of dirty callees found in this expression.
-fn alloc_check_expr<'a>(ctx: &RtSafetyCtx<'a>, e: &Expr<'a>) -> Vec<(&'a str, Span)> {
+/// Returns the immediate calls in this expression whose callee is dirty.
+fn dirty_calls_expr<'a>(clean: &CleanMap<'a>, e: &Expr<'a>) -> Vec<(&'a str, Span)> {
     match &e.value {
         ExprNode::Call { func, args, .. } => {
-            // collect any dirty calls inside the arguments
+            // dirty calls nested in the arguments, first
             let mut dirty: Vec<(&'a str, Span)> = args.iter()
-                .flat_map(|a| alloc_check_expr(ctx, a))
+                .flat_map(|a| dirty_calls_expr(clean, a))
                 .collect();
 
-            // then check the callee
+            // then the callee itself (intrinsics are always clean)
             if let ExprNode::Var(name) = func.value {
-                if Intrinsic::lookup(name).is_none() {
-                    let is_clean = ctx.clean.get(name).copied().unwrap_or(false);
-                    if !is_clean {
-                        dirty.push((name, func.span.clone()));
-                    }
+                if Intrinsic::lookup(name).is_none()
+                    && !clean.get(name).copied().unwrap_or(false)
+                {
+                    dirty.push((name, func.span.clone()));
                 }
             }
             dirty
         }
         ExprNode::Binary { left, right, .. } => {
-            let mut dirty = alloc_check_expr(ctx, left);
-            dirty.extend(alloc_check_expr(ctx, right));
+            let mut dirty = dirty_calls_expr(clean, left);
+            dirty.extend(dirty_calls_expr(clean, right));
             dirty
         }
-        ExprNode::Unary { operand, .. } => alloc_check_expr(ctx, operand),
+        ExprNode::Unary { operand, .. } => dirty_calls_expr(clean, operand),
         ExprNode::Index { slice, index } => {
-            let mut dirty = alloc_check_expr(ctx, slice);
-            dirty.extend(alloc_check_expr(ctx, index));
+            let mut dirty = dirty_calls_expr(clean, slice);
+            dirty.extend(dirty_calls_expr(clean, index));
             dirty
         }
-        // literals & variable reads should always be clean
+        // literals & variable reads are always clean
         _ => vec![],
     }
 }
 
-fn alloc_check_stmt<'a>(ctx: &RtSafetyCtx<'a>, s: &Stmt<'a>) -> Vec<(&'a str, Span)> {
+fn dirty_calls_stmt<'a>(clean: &CleanMap<'a>, s: &Stmt<'a>) -> Vec<(&'a str, Span)> {
     match &s.value {
-        StmtNode::Expr(e) => alloc_check_expr(ctx, e),
+        StmtNode::Expr(e) => dirty_calls_expr(clean, e),
         StmtNode::Block(block) => block.iter()
-            .flat_map(|s| alloc_check_stmt(ctx, s))
+            .flat_map(|s| dirty_calls_stmt(clean, s))
             .collect(),
 
-        StmtNode::Declare { value, .. } => alloc_check_expr(ctx, value),
-        StmtNode::Assign { value, .. } => alloc_check_expr(ctx, value),
+        StmtNode::Declare { value, .. } => dirty_calls_expr(clean, value),
+        StmtNode::Assign { value, .. } => dirty_calls_expr(clean, value),
 
         StmtNode::If { condition, then_branch, else_branch, .. } => {
-            let mut dirty = alloc_check_expr(ctx, condition);
-            dirty.extend(alloc_check_stmt(ctx, then_branch));
+            let mut dirty = dirty_calls_expr(clean, condition);
+            dirty.extend(dirty_calls_stmt(clean, then_branch));
             if let Some(b) = else_branch {
-                dirty.extend(alloc_check_stmt(ctx, b));
+                dirty.extend(dirty_calls_stmt(clean, b));
             }
             dirty
         }
 
         StmtNode::While { condition, body } => {
-            let mut dirty = alloc_check_expr(ctx, condition);
-            dirty.extend(alloc_check_stmt(ctx, body));
+            let mut dirty = dirty_calls_expr(clean, condition);
+            dirty.extend(dirty_calls_stmt(clean, body));
             dirty
         }
 
         StmtNode::Break | StmtNode::Continue => vec![],
-        StmtNode::Return(e) => alloc_check_expr(ctx, e),
-    }
-}
-
-
-fn alloc_check_toplevel<'a>(
-    ctx: &mut RtSafetyCtx<'a>,
-    node: &TopLevel<'a>,
-    display: &HashMap<&'a str, String>,
-) -> Result<(), Vec<Error>> {
-    // mono rewrites generic calls to their mangled instance name; prefer the
-    // friendly spelling it recorded (`alloc::<Vec2>`) over `m2_alloc$alloc$Vec2`.
-    let show = |n: &'a str| display.get(n).map(String::as_str).unwrap_or(n);
-    match &node.value {
-        // if function are marked with @alloc(false), then that function must
-        // not have any allocation or call any function that allocates.
-        TopLevelNode::Function { name, attributes, body, .. } => {
-            let dirty_calls: Vec<(&'a str, Span)> = body.iter()
-                .flat_map(|s| alloc_check_stmt(ctx, s))
-                .collect();
-
-            let is_clean = dirty_calls.is_empty();
-            ctx.clean.insert(name, is_clean);
-
-            if attributes.iter().any(|attr| attr.value.is_false("alloc")) && !is_clean {
-                let errors: Vec<Error> = dirty_calls.into_iter()
-                    .map(|(callee, span)| {
-                        let msg = format!(
-                            "Function '{}' is marked as @alloc(false) but calls '{}', which may allocate.",
-                            show(name),
-                            show(callee),
-                        );
-                        Error::new(span, msg)
-                    })
-                    .collect();
-
-                return Err(errors);
-            }
-            Ok(())
-        },
-        TopLevelNode::Extern { name, attributes, .. } => {
-            if attributes.iter().any(|attr| attr.value.is_false("alloc")) {
-                // trust the user that the extern function is clean
-                ctx.clean.insert(name, true);
-            }
-            Ok(())
-        },
-        TopLevelNode::Struct { .. } => Ok(()),
+        StmtNode::Return(e) => dirty_calls_expr(clean, e),
     }
 }
 
@@ -169,32 +130,77 @@ fn collect_calls_stmt<'a>(calls: &mut HashSet<&'a str>, s: &Stmt<'a>) {
     }
 }
 
-fn populate_call_graph<'a>(ctx: &mut RtSafetyCtx<'a>, program: &[TopLevel<'a>]) {
+/// Compute the clean/dirty status of every callable via a fixpoint.
+fn compute_clean<'a>(program: &[TopLevel<'a>]) -> CleanMap<'a> {
+    let mut clean: CleanMap<'a> = HashMap::new();
+
+    // leaves: externs are clean iff annotated, functions start optimistically
+    // clean and the call graph records who they call
+    let mut calls: HashMap<&'a str, HashSet<&'a str>> = HashMap::new();
     for node in program {
-        if let TopLevelNode::Function { name, body, .. } = &node.value {
-            let mut callees = HashSet::new();
-            for stmt in body {
-                collect_calls_stmt(&mut callees, stmt);
+        match &node.value {
+            TopLevelNode::Extern { name, attributes, .. } => {
+                let is_clean = attributes.iter().any(|a| a.value.is_false("alloc"));
+                clean.insert(name, is_clean);
             }
-            ctx.calls.insert(name, callees);
+            TopLevelNode::Function { name, body, .. } => {
+                let mut callees = HashSet::new();
+                for s in body { collect_calls_stmt(&mut callees, s); }
+                calls.insert(name, callees);
+                clean.insert(name, true);
+            }
+            TopLevelNode::Struct { .. } => {}
         }
     }
+
+    // propagate dirtiness until stable. a function goes dirty as soon as any of
+    // its callees is dirty (or unknown, which we treat conservatively as dirty)
+    loop {
+        let mut changed = false;
+        for (&fname, callees) in &calls {
+            if clean.get(fname).copied() == Some(false) { continue; }
+            let is_dirty = callees.iter()
+                .any(|c| !clean.get(c).copied().unwrap_or(false));
+            if is_dirty {
+                clean.insert(fname, false);
+                changed = true;
+            }
+        }
+        if !changed { break; }
+    }
+
+    clean
 }
 
 pub fn alloc_check_program<'a>(
     program: &[TopLevel<'a>],
     display: &HashMap<&'a str, String>,
 ) -> Result<(), Vec<Error>> {
-    let mut ctx = RtSafetyCtx {
-        clean: HashMap::new(),
-        calls: HashMap::new(),
-    };
+    let clean = compute_clean(program);
 
-    populate_call_graph(&mut ctx, program);
+    // mono rewrites generic calls to their mangled instance name; prefer the
+    // friendly spelling it recorded (`alloc::<Vec2>`) over `m2_alloc$alloc$Vec2`
+    let show = |n: &'a str| display.get(n).map(String::as_str).unwrap_or(n);
 
+    // report each `@alloc(false)` function that came out dirty, pointing at the
+    // offending immediate calls in its body. dirtiness always propagates through
+    // at least one immediate callee, so a dirty function has >=1 span to blame
+    let mut errors: Vec<Error> = Vec::new();
     for node in program {
-        alloc_check_toplevel(&mut ctx, node, display)?;
+        let TopLevelNode::Function { name, attributes, body, .. } = &node.value else { continue };
+        let marked = attributes.iter().any(|attr| attr.value.is_false("alloc"));
+        if !marked || clean.get(name).copied().unwrap_or(false) {
+            continue;
+        }
+
+        for (callee, span) in body.iter().flat_map(|s| dirty_calls_stmt(&clean, s)) {
+            errors.push(Error::new(span, format!(
+                "Function '{}' is marked as @alloc(false) but calls '{}', which may allocate.",
+                show(name),
+                show(callee),
+            )));
+        }
     }
 
-    Ok(())
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
 }
