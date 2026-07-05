@@ -724,10 +724,28 @@ fn parse_toplevel<'tks, 'src: 'tks>()
             fields,
         });
 
+    // module-level constant: `[attrs] const NAME: Type = <expr>;`
+    let global = parse_attribute()
+        .repeated().collect::<Vec<_>>()
+        .then_ignore(just(Token::Const))
+        .then(var.map(|s| *s))
+        .then_ignore(just(Token::Colon))
+        .then(parse_type())
+        .then_ignore(just(Token::Assign))
+        .then(parse_expr())
+        .then_ignore(just(Token::Semicolon))
+        .map(|(((attributes, name), ty), value)| TopLevelNode::Global {
+            name,
+            attributes,
+            ty,
+            value,
+        });
+
     choice((
         function,
         extern_,
         struct_,
+        global,
     ))
         .map_with(|node, e| {
             Metadata::new(

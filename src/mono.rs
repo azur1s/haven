@@ -388,7 +388,8 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
             TopLevelNode::Function { .. } => {
                 concrete.insert(i, m.rebuild_function(tl, &empty, None));
             }
-            TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. } => {}
+            TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. }
+            | TopLevelNode::Global { .. } => {}
         }
     }
 
@@ -454,7 +455,8 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
                 }
             }
             TopLevelNode::Function { .. } => output.push(concrete.remove(&i).unwrap()),
-            TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. } => output.push(tl.clone()),
+            TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. }
+            | TopLevelNode::Global { .. } => output.push(tl.clone()),
         }
     }
 

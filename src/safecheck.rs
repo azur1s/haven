@@ -149,7 +149,7 @@ fn compute_clean<'a>(program: &[TopLevel<'a>]) -> CleanMap<'a> {
                 calls.insert(name, callees);
                 clean.insert(name, true);
             }
-            TopLevelNode::Struct { .. } => {}
+            TopLevelNode::Struct { .. } | TopLevelNode::Global { .. } => {}
         }
     }
 

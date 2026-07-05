@@ -536,6 +536,17 @@ pub enum TopLevelNode<'a> {
         attributes: Vec<Attribute<'a>>,
         fields: Vec<(&'a str, Type<'a>)>,
     },
+
+    /// A module-level constant, e.g. `const SR: f32 = 48000.0;`. The initializer
+    /// must be a compile-time constant (literal or const struct literal); it is
+    /// emitted as an LLVM `constant` global. `@export` gives it external linkage
+    /// so a host can look the symbol up (see the CLAP `clap_entry` use case).
+    Global {
+        name: &'a str,
+        attributes: Vec<Attribute<'a>>,
+        ty: Type<'a>,
+        value: Expr<'a>,
+    },
 }
 
 impl<'a> Display for TopLevelNode<'a> {
@@ -573,6 +584,15 @@ impl<'a> Display for TopLevelNode<'a> {
                 let fields_str = fields.iter().map(|(name, ty)| format!("    {}: {},\n", name, ty)).collect::<String>();
 
                 write!(f, "{}struct {} {{\n{}}}", attrs_str, name, fields_str)
+            },
+            TopLevelNode::Global { name, attributes, ty, value } => {
+                let attrs_str = if attributes.is_empty() {
+                    String::new()
+                } else {
+                    attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
+                };
+
+                write!(f, "{}const {}: {} = {};", attrs_str, name, ty, value.value)
             },
         }
     }

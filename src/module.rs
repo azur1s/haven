@@ -113,6 +113,18 @@ fn final_struct_name<'a>(m: &Module<'_>, name: &str, attrs: &[Attribute], arena:
     }
 }
 
+/// Final emitted name for a module-level global. Same rule as functions: an
+/// `@export`ed or entry-module global keeps its source name (a host looks the
+/// symbol up by that name), everything else is prefixed to avoid cross-module
+/// collisions.
+fn final_global_name<'a>(m: &Module<'_>, name: &str, attrs: &[Attribute], arena: &'a Bump) -> &'a str {
+    if is_export(attrs) || m.is_entry {
+        arena.alloc_str(name)
+    } else {
+        arena.alloc_str(&format!("{}${}", m.prefix, name))
+    }
+}
+
 /// Resolve an import to its canonical key. no file read for `std`; for the
 /// relative case canonicalizes the path (so the file has to exist). `dir` is the
 /// importing module's directory.
@@ -335,6 +347,12 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 *name = self.scopes.types.get(*name).copied().unwrap_or(*name);
                 for (_, ty) in fields { self.ty(ty, &empty); }
             }
+            TopLevelNode::Global { name, ty, value, .. } => {
+                let empty = HashSet::new();
+                *name = self.scopes.calls.get(*name).copied().unwrap_or(*name);
+                self.ty(ty, &empty);
+                self.expr(value, &empty);
+            }
         }
     }
 }
@@ -352,6 +370,10 @@ fn build_symtab<'a>(m: &Module<'a>, arena: &'a Bump) -> SymTab<'a> {
             }
             TopLevelNode::Struct { name, attributes, .. } => {
                 st.structs.insert(name, final_struct_name(m, name, attributes, arena));
+            }
+            // globals live in the callable/value namespace (referenced as vars).
+            TopLevelNode::Global { name, attributes, .. } => {
+                st.fns.insert(name, final_global_name(m, name, attributes, arena));
             }
         }
     }
@@ -592,6 +614,10 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
     let mut out: Vec<TopLevel<'a>> = Vec::new();
     let mut merge_errs: Vec<Error> = Vec::new();
     let mut seen_callables: HashMap<&str, &TopLevel<'a>> = HashMap::new();
+    // globals share the value namespace but carry no signature, so they get their
+    // own dedup keyed by final name. (a global colliding with a *function* name is
+    // left for the downstream duplicate-symbol check.)
+    let mut seen_globals: HashSet<&str> = HashSet::new();
     for m in &modules {
         for tl in &m.items {
             let (name, is_extern, params, ret) = match &tl.value {
@@ -600,6 +626,15 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                 TopLevelNode::Extern { name, params, return_type, .. } =>
                     (*name, true, params.as_slice(), return_type),
                 TopLevelNode::Struct { .. } => { out.push(tl.clone()); continue; }
+                TopLevelNode::Global { name, .. } => {
+                    if !seen_globals.insert(*name) {
+                        merge_errs.push(Error::new(tl.span.clone(), format!(
+                            "global '{}' is already defined", name)));
+                    } else {
+                        out.push(tl.clone());
+                    }
+                    continue;
+                }
             };
 
             if let Some(prev) = seen_callables.get(name) {
@@ -609,6 +644,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                     TopLevelNode::Extern { params, return_type, .. } =>
                         (true, params.as_slice(), return_type),
                     TopLevelNode::Struct { .. } => unreachable!("only callables are recorded"),
+                    TopLevelNode::Global { .. } => unreachable!("globals are deduped separately"),
                 };
                 // signatures match on types only (param names are irrelevant to the ABI)
                 let sig_eq = params.len() == prev_params.len()

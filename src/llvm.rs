@@ -242,6 +242,9 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
             emitln!(cx, "    {dst} = alloca %{name}, align {}", align.unwrap_or(1)),
         FieldPtr { dst, struct_name, base, field_index } =>
             emitln!(cx, "    {dst} = getelementptr %{struct_name}, ptr {base}, i32 0, i32 {field_index}"),
+        // a zero-offset gep off the global symbol yields its address as a `ptr`
+        GlobalPtr { dst, name } =>
+            emitln!(cx, "    {dst} = getelementptr i8, ptr @{name}, i64 0"),
 
         Sizeof { dst, ty } => {
             // classic LLVM sizeof: index one element past a null base, then
@@ -422,6 +425,23 @@ fn emit_string_blob(bytes: &[u8]) -> String {
     out
 }
 
+/// Render a global's constant initializer as an LLVM constant expression (the
+/// text after the type in `@g = constant <ty> <init>`).
+fn emit_const_init(init: &ConstInit) -> String {
+    match init {
+        ConstInit::Scalar(c) => emit_value(Value::Const(c.clone())),
+        // `{ <fty> <finit>, ... }` — the surrounding type (`%Name`) is emitted by
+        // the caller, and each field carries its own inline type.
+        ConstInit::Struct(fields) => {
+            let body = fields.iter()
+                .map(|(ty, init)| format!("{} {}", emit_field_type(ty), emit_const_init(init)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {body} }}")
+        }
+    }
+}
+
 fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
     // read-only global blobs backing string literals (@.str.N)
     for (i, bytes) in module.strings.iter().enumerate() {
@@ -442,6 +462,17 @@ fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
         emitln!(cx, "%{name} = type {{ {body} }}");
     }
     if !module.structs.is_empty() {
+        emitln!(cx, "");
+    }
+
+    // module-level constants. `@export` gets external (dllexport) linkage so a
+    // host can resolve the symbol; everything else stays `internal`.
+    for g in &module.globals {
+        let linkage = if g.export { "dso_local dllexport constant" } else { "internal constant" };
+        emitln!(cx, "@{} = {linkage} {} {}",
+            g.name, emit_field_type(&g.ty), emit_const_init(&g.init));
+    }
+    if !module.globals.is_empty() {
         emitln!(cx, "");
     }
 

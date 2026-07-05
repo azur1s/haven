@@ -99,6 +99,8 @@ pub enum Inst<'a> {
     ExtractValue { dst: Register, val: Value, index: usize },
     // %dst = getelementptr %Name, ptr %base, i32 0, i32 <field_index>
     FieldPtr { dst: Register, struct_name: &'a str, base: Register, field_index: usize },
+    // %dst = ptr to a module-level global @name (a zero-offset gep, so %dst == @name)
+    GlobalPtr { dst: Register, name: &'a str },
 
     // %dst = alloca ty (for mutable locals, if needed)
     Alloca { dst: Register, ty: Type<'a>, align: Option<usize> },
@@ -181,12 +183,35 @@ pub struct Function<'a> {
     pub sret: Option<(Register, &'a str)>,
 }
 
+/// The constant value initializing a module-level global. A restricted subset of
+/// expressions that map onto an LLVM constant aggregate — no code runs to produce
+/// it.
+#[derive(Clone, Debug)]
+pub enum ConstInit<'a> {
+    Scalar(Const),
+    /// A constant struct aggregate: one `(field type, field constant)` per field,
+    /// in declaration order. Nested structs recurse.
+    Struct(Vec<(Type<'a>, ConstInit<'a>)>),
+}
+
+#[derive(Clone, Debug)]
+pub struct Global<'a> {
+    pub name: &'a str,
+    /// `@export`: give the symbol external (dllexport) linkage so a host can look
+    /// it up, instead of the default `internal`.
+    pub export: bool,
+    pub ty: Type<'a>,
+    pub init: ConstInit<'a>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Module<'a> {
     pub functions: Vec<Function<'a>>,
     pub externs: Vec<ExternDecl<'a>>,
     /// Struct definitions, in declaration order: name -> ordered (field name, field type)
     pub structs: Vec<(&'a str, Vec<(&'a str, Type<'a>)>)>,
+    /// Module-level constants, emitted as LLVM `constant` globals.
+    pub globals: Vec<Global<'a>>,
     /// Interned, escape-resolved string-literal blobs. Index `i` is emitted as
     /// the global `@.str.{i}` and referenced by `Const::GlobalStr(i)`.
     pub strings: Vec<Vec<u8>>,
@@ -207,6 +232,9 @@ pub struct LowerCtx<'a> {
     pub loop_stack: Vec<LoopTargets>,
 
     pub env: HashMap<&'a str, (Register, Type<'a>)>,
+    /// Module-level globals in scope: final emitted name -> type. Referenced as
+    /// bare vars, distinct from `env` (locals/params), which shadow these.
+    pub globals: HashMap<&'a str, Type<'a>>,
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>, // from typecheck
     pub node_types: HashMap<usize, Type<'a>>, // from typecheck
     pub current_return_type: Type<'a>,        // return type of the function being lowered
@@ -533,17 +561,36 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
         }
 
         ExprNode::Var(name) => {
-            let (reg, ty) = cx.env[name].clone();
-            match ty {
-                // fixed arrays are stored in env as the alloca register itself, not a pointer
-                // to one, so loading would yield the array value — we want the pointer
-                Type::Array(_, _) => Value::Reg(reg),
-                Type::Struct(_) => Value::Reg(reg),
-                _ => {
-                    let dst = cx.fresh_reg();
-                    cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
-                    Value::Reg(dst)
+            // locals/params (env) shadow module-level globals.
+            if let Some((reg, ty)) = cx.env.get(name).cloned() {
+                match ty {
+                    // fixed arrays are stored in env as the alloca register itself, not a pointer
+                    // to one, so loading would yield the array value — we want the pointer
+                    Type::Array(_, _) => Value::Reg(reg),
+                    Type::Struct(_) => Value::Reg(reg),
+                    _ => {
+                        let dst = cx.fresh_reg();
+                        cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
+                        Value::Reg(dst)
+                    }
                 }
+            } else if let Some(ty) = cx.globals.get(name).cloned() {
+                // reference to a module-level global: its symbol @name is already
+                // a pointer to the constant. Materialize that address, then treat
+                // it like an env entry — hand back the pointer for aggregates,
+                // load the value for scalars.
+                let addr = cx.fresh_reg();
+                cx.emit(Inst::GlobalPtr { dst: addr, name });
+                match ty {
+                    Type::Array(_, _) | Type::Struct(_) => Value::Reg(addr),
+                    _ => {
+                        let dst = cx.fresh_reg();
+                        cx.emit(Inst::Load { dst, ptr: addr, ty, align: None });
+                        Value::Reg(dst)
+                    }
+                }
+            } else {
+                panic!("unknown variable '{name}' in MIL lowering");
             }
         }
 
@@ -1184,6 +1231,44 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(&'a str, Type<'a>)>) {
     }
 }
 
+/// Lower a global's initializer expression to a constant. Scalar literals
+/// (optionally negated) and struct literals of constants are supported; the
+/// typechecker has already rejected anything else, so the unreachable arms
+/// indicate a compiler bug. `structs` supplies field types for struct literals.
+fn lower_const_init<'a>(
+    structs: &HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
+    expr: &Expr<'a>,
+) -> ConstInit<'a> {
+    match &expr.value {
+        ExprNode::Bool(b)    => ConstInit::Scalar(Const::Bool(*b)),
+        ExprNode::Int32(n)   => ConstInit::Scalar(Const::Int32(*n)),
+        ExprNode::Int64(n)   => ConstInit::Scalar(Const::Int64(*n)),
+        ExprNode::Uint32(n)  => ConstInit::Scalar(Const::Uint32(*n)),
+        ExprNode::Uint64(n)  => ConstInit::Scalar(Const::Uint64(*n)),
+        ExprNode::Float32(f) => ConstInit::Scalar(Const::Float32(*f)),
+        ExprNode::Float64(f) => ConstInit::Scalar(Const::Float64(*f)),
+        ExprNode::Unary { op: UnaryOp::Neg, operand } => match &operand.value {
+            ExprNode::Int32(n)   => ConstInit::Scalar(Const::Int32(-*n)),
+            ExprNode::Int64(n)   => ConstInit::Scalar(Const::Int64(-*n)),
+            ExprNode::Uint32(n)  => ConstInit::Scalar(Const::Uint32(n.wrapping_neg())),
+            ExprNode::Uint64(n)  => ConstInit::Scalar(Const::Uint64(n.wrapping_neg())),
+            ExprNode::Float32(f) => ConstInit::Scalar(Const::Float32(-*f)),
+            ExprNode::Float64(f) => ConstInit::Scalar(Const::Float64(-*f)),
+            other => unreachable!("non-constant global initializer reached lowering: -{}", other),
+        },
+        // struct literal: pair each field's declared type with its constant.
+        // typecheck guarantees the fields match the definition in order.
+        ExprNode::Struct { name, fields } => {
+            let defs = &structs[name];
+            let inits = defs.iter().zip(fields.iter())
+                .map(|((_, fty), (_, fexpr))| (fty.clone(), lower_const_init(structs, fexpr)))
+                .collect();
+            ConstInit::Struct(inits)
+        }
+        other => unreachable!("non-constant global initializer reached lowering: {}", other),
+    }
+}
+
 fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 -> (Vec<(Register, Type<'a>)>, Option<(Register, &'a str)>) {
     match &func.value {
@@ -1306,6 +1391,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
         }
         TopLevelNode::Extern { .. } => (vec![], None),
         TopLevelNode::Struct { .. } => (vec![], None),
+        TopLevelNode::Global { .. } => (vec![], None),
     }
 }
 
@@ -1320,6 +1406,7 @@ pub fn lower<'a>(
         blocks: vec![],
         loop_stack: vec![],
         env: HashMap::new(),
+        globals: HashMap::new(),
         structs: typecheck_context.structs.clone(),
         node_types: typecheck_context.node_types.clone(),
         current_return_type: Type::Void,
@@ -1330,6 +1417,15 @@ pub fn lower<'a>(
     let mut functions = Vec::new();
     let mut externs = Vec::new();
     let mut structs = Vec::new();
+    let mut globals = Vec::new();
+
+    // register every global up front so a function can reference one declared
+    // later in the file.
+    for toplevel in program {
+        if let TopLevelNode::Global { name, ty, .. } = &toplevel.value {
+            cx.globals.insert(name, ty.clone());
+        }
+    }
 
     for toplevel in program {
         match &toplevel.value {
@@ -1364,8 +1460,16 @@ pub fn lower<'a>(
             TopLevelNode::Struct { name, fields, .. } => {
                 structs.push((*name, fields.clone()));
             }
+            TopLevelNode::Global { name, attributes, ty, value } => {
+                globals.push(Global {
+                    name,
+                    export: attributes.iter().any(|a| a.value.name == "export"),
+                    ty: ty.clone(),
+                    init: lower_const_init(&cx.structs, value),
+                });
+            }
         }
     }
 
-    Module { functions, externs, structs, strings: cx.strings }
+    Module { functions, externs, structs, globals, strings: cx.strings }
 }

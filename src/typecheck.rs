@@ -31,6 +31,9 @@ pub struct Context<'a> {
     /// Generic function signatures, by name. NOT callable via the ordinary
     /// `Type::Function` path; calls go through `check_generic_call`.
     pub generic_fns: HashMap<&'a str, GenericFnSig<'a>>,
+    /// Names of module-level constants. Used to reject direct assignment to a
+    /// `const` global (they are read-only).
+    pub global_consts: std::collections::HashSet<&'a str>,
 }
 
 impl<'a> Context<'a> {
@@ -42,6 +45,7 @@ impl<'a> Context<'a> {
             generics: Vec::new(),
             const_generics: Vec::new(),
             generic_fns: HashMap::new(),
+            global_consts: std::collections::HashSet::new(),
         }
     }
 
@@ -740,6 +744,16 @@ fn check_stmt<'a>(
         },
 
         StmtNode::Assign { left, value } => {
+            // a `const` global is read-only: reject a direct `GLOBAL = ...`.
+            // (mutating through a pointer/field is still the pointee's business.)
+            if let ExprNode::Var(name) = &left.value {
+                if cx.global_consts.contains(name) {
+                    return Err(Error {
+                        msg: format!("cannot assign to constant global '{}'", name),
+                        span: left.span.clone(),
+                    });
+                }
+            }
             let left_ty = infer(cx, left)?;
             check_expr(cx, &left_ty, value)?;
         },
@@ -818,6 +832,37 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
         | Type::Int32 | Type::Int64
         | Type::Uint32 | Type::Uint64
         | Type::Float32 | Type::Float64 => Ok(()),
+    }
+}
+
+/// Verify that a global's initializer is a compile-time constant we can emit as
+/// an LLVM `constant` aggregate. Only literals (optionally negated) are allowed
+/// for now; struct literals are handled in a later stage, and anything that would
+/// need to run code (variables, calls, indexing, ...) is rejected.
+fn check_const_initializer<'a>(expr: &Expr<'a>) -> Result<(), Error> {
+    match &expr.value {
+        ExprNode::Bool(_)
+        | ExprNode::Int32(_) | ExprNode::Int64(_)
+        | ExprNode::Uint32(_) | ExprNode::Uint64(_)
+        | ExprNode::Float32(_) | ExprNode::Float64(_) => Ok(()),
+        // a negated numeric literal, e.g. `-1.0`, is still a constant
+        ExprNode::Unary { op: UnaryOp::Neg, operand }
+            if matches!(operand.value,
+                ExprNode::Int32(_) | ExprNode::Int64(_)
+                | ExprNode::Uint32(_) | ExprNode::Uint64(_)
+                | ExprNode::Float32(_) | ExprNode::Float64(_)) => Ok(()),
+        // a struct literal is constant iff every field initializer is constant
+        // (nested structs recurse). field names/types are checked by check_expr.
+        ExprNode::Struct { fields, .. } => {
+            for (_, fexpr) in fields {
+                check_const_initializer(fexpr)?;
+            }
+            Ok(())
+        }
+        _ => Err(Error {
+            msg: "global initializer must be a constant (a literal or a struct literal of constants)".into(),
+            span: expr.span.clone(),
+        }),
     }
 }
 
@@ -929,6 +974,17 @@ fn check_toplevel<'a>(
                     });
                 }
             }
+        }
+
+        TopLevelNode::Global { name, ty, value, .. } => {
+            if let Err(msg) = check_type_resolves(cx, ty) {
+                return Err(Error {
+                    msg: format!("In global '{}': {}", name, msg),
+                    span: node.span.clone(),
+                });
+            }
+            check_const_initializer(value)?;
+            check_expr(cx, ty, value)?;
         }
     }
 
@@ -1154,6 +1210,12 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                     params: params.iter().map(|(_, ty)| ty.clone()).collect(),
                     return_type: Box::new(return_type.clone()),
                 });
+            }
+            // globals share the value namespace with functions; register the name
+            // so references resolve as ordinary variables.
+            TopLevelNode::Global { name, ty, .. } => {
+                cx.insert(name, ty.clone());
+                cx.global_consts.insert(name);
             }
             TopLevelNode::Struct { .. } => {}
         }
