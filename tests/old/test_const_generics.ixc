@@ -1,0 +1,34 @@
+// FIXME: fixed arrays passed *by value* (`[T; N]` params) are a separate,
+// pre-existing codegen gap and are intentionally avoided here.
+
+// const param used as an ordinary compile-time value
+proc lane_count<const N: i32>() i32 {
+    return N;
+}
+
+// const param in an arithmetic expression
+proc scaled<const N: i32>(x: i32) i32 {
+    return x * N;
+}
+
+// type + const param, with the const in a `simd<T, N>` type position; the simd
+// is passed through by value (which lowers fine) and returned
+proc id_simd<T, const N: i32>(x: simd<T, N>) simd<T, N> {
+    return x;
+}
+
+@export
+proc main() i32 {
+    print_i32(lane_count::<8>()); // 8   (instance lane_count$8)
+    print_i32(lane_count::<3>()); // 3   (distinct instance lane_count$3)
+    print_i32(scaled::<10>(4));   // 40
+
+    // exercise the simd<T, N> type position end-to-end and observe the result
+    let buf: [f32] = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
+    let v: simd<f32, 4> = simd_splat::<f32, 4>(2.0f32);
+    let w: simd<f32, 4> = id_simd::<f32, 4>(v);
+    simd_store::<f32, 4>(buf, 0, w);
+    print_float(buf[0]);            // 2.000000
+
+    return 0;
+}

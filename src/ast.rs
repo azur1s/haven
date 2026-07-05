@@ -178,6 +178,40 @@ impl Display for BinaryOp {
     }
 }
 
+/// A compile-time constant appearing in a type position — the `N` in `[T; N]` or
+/// `simd<T, N>`. Either a concrete literal or an unresolved const generic
+/// parameter. Like [`Type::Param`], a `Param` is abstract and must never survive
+/// to codegen; monomorphization substitutes it away. Use [`ConstVal::expect_lit`]
+/// at code-gen sites to assert that.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ConstVal<'a> {
+    Lit(usize),
+    /// An unresolved const generic parameter, e.g. the `N` in `[T; N]`. Produced
+    /// by the parser; monomorphization substitutes it with a `Lit`.
+    Param(&'a str),
+}
+
+impl<'a> ConstVal<'a> {
+    /// The concrete literal value. Panics if a const param survived past
+    /// monomorphization — mirrors the `Type::Param` "must not reach codegen"
+    /// contract, so a bug surfaces loudly rather than miscompiling.
+    pub fn expect_lit(&self) -> usize {
+        match self {
+            ConstVal::Lit(n) => *n,
+            ConstVal::Param(name) => panic!("const param '{name}' survived to codegen"),
+        }
+    }
+}
+
+impl<'a> Display for ConstVal<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstVal::Lit(n) => write!(f, "{}", n),
+            ConstVal::Param(name) => write!(f, "{}", name),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type<'a> {
     Void, Bool,
@@ -190,10 +224,10 @@ pub enum Type<'a> {
     },
     Pointer(Box<Self>),
     /// Fixed-size array type, e.g., `[T; N]`
-    Array(Box<Self>, usize),
+    Array(Box<Self>, ConstVal<'a>),
     /// Slice type, e.g., `[T]`
     Slice(Box<Self>),
-    Simd(Box<Self>, usize),
+    Simd(Box<Self>, ConstVal<'a>),
     /// Static string slice (like `&'static str` in Rust)
     Str,
     Struct(&'a str),

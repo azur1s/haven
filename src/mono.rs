@@ -20,7 +20,7 @@ use crate::ast::*;
 /// `mangled`. `span` is the call site that first asked for it (for errors).
 struct Instantiation<'a> {
     base: &'a str,
-    args: Vec<Type<'a>>,
+    args: Vec<ConcreteArg<'a>>,
     mangled: &'a str,
     span: Span,
 }
@@ -67,21 +67,73 @@ struct Mono<'p, 'a> {
     display: HashMap<&'a str, String>,
 }
 
-/// Substitute bound type params in `ty` with their concrete bindings. in the raw
-/// pre-typecheck AST a type param looks like `Type::Struct(name)` (parser can't
-/// tell it from a real struct), so both Struct and Param get substituted when
-/// bound.
+/// A bound const generic parameter: its concrete value plus declared type, so a
+/// value-position use (`return N;`) can be re-emitted as a typed literal.
+#[derive(Clone)]
+struct ConstBind<'a> {
+    val: usize,
+    ty: Type<'a>,
+}
+
+/// Substitutions applied when specializing a template: type params -> concrete
+/// types, const params -> concrete values.
+struct Bindings<'a> {
+    types: HashMap<&'a str, Type<'a>>,
+    consts: HashMap<&'a str, ConstBind<'a>>,
+}
+
+impl<'a> Bindings<'a> {
+    fn empty() -> Self {
+        Bindings { types: HashMap::new(), consts: HashMap::new() }
+    }
+}
+
+/// A fully concrete generic argument at an instantiation site: the value a type
+/// or const param is specialized to. Keys the instance cache and mangled name.
+enum ConcreteArg<'a> {
+    Type(Type<'a>),
+    Const(usize),
+}
+
+/// Substitute a bound const param with its literal value; leave literals and
+/// unbound params untouched.
+fn subst_cv<'a>(cv: &ConstVal<'a>, b: &Bindings<'a>) -> ConstVal<'a> {
+    match cv {
+        ConstVal::Param(n) => match b.consts.get(n) {
+            Some(cb) => ConstVal::Lit(cb.val),
+            None => cv.clone(),
+        },
+        ConstVal::Lit(_) => cv.clone(),
+    }
+}
+
+/// Materialize a bound const param used in value position as a typed integer
+/// literal (`const N: u32` bound to 4 -> `4u32`).
+fn const_literal<'a>(cb: &ConstBind<'a>) -> ExprNode<'a> {
+    match &cb.ty {
+        Type::Int32  => ExprNode::Int32(cb.val as i32),
+        Type::Int64  => ExprNode::Int64(cb.val as i64),
+        Type::Uint32 => ExprNode::Uint32(cb.val as u32),
+        Type::Uint64 => ExprNode::Uint64(cb.val as u64),
+        other => panic!("const generic parameter has non-integer type {}", other),
+    }
+}
+
+/// Substitute bound type and const params in `ty` with their concrete bindings.
+/// in the raw pre-typecheck AST a type param looks like `Type::Struct(name)`
+/// (parser can't tell it from a real struct), so both Struct and Param get
+/// substituted when bound.
 ///
 /// FIXME: a real struct named the same as a bound type param gets wrongly
 /// rewritten inside a generic body (e.g. `struct T` used inside `f<T>`). no
 /// scope check distinguishes them. edge case, but there's no guard.
-fn subst_ty<'a>(ty: &Type<'a>, b: &HashMap<&'a str, Type<'a>>) -> Type<'a> {
+fn subst_ty<'a>(ty: &Type<'a>, b: &Bindings<'a>) -> Type<'a> {
     match ty {
-        Type::Param(n) | Type::Struct(n) if b.contains_key(n) => b[n].clone(),
+        Type::Param(n) | Type::Struct(n) if b.types.contains_key(n) => b.types[n].clone(),
         Type::Pointer(inner)  => Type::Pointer(Box::new(subst_ty(inner, b))),
-        Type::Array(inner, n) => Type::Array(Box::new(subst_ty(inner, b)), *n),
+        Type::Array(inner, n) => Type::Array(Box::new(subst_ty(inner, b)), subst_cv(n, b)),
         Type::Slice(inner)    => Type::Slice(Box::new(subst_ty(inner, b))),
-        Type::Simd(inner, n)  => Type::Simd(Box::new(subst_ty(inner, b)), *n),
+        Type::Simd(inner, n)  => Type::Simd(Box::new(subst_ty(inner, b)), subst_cv(n, b)),
         Type::Function { params, return_type } => Type::Function {
             params: params.iter().map(|p| subst_ty(p, b)).collect(),
             return_type: Box::new(subst_ty(return_type, b)),
@@ -110,9 +162,9 @@ fn mangle_ty(ty: &Type) -> String {
         Type::Float64 => "f64".into(),
         Type::Str => "str".into(),
         Type::Pointer(inner) => format!("p_{}", mangle_ty(inner)),
-        Type::Array(inner, n) => format!("arr{}_{}", n, mangle_ty(inner)),
+        Type::Array(inner, n) => format!("arr{}_{}", n.expect_lit(), mangle_ty(inner)),
         Type::Slice(inner) => format!("slice_{}", mangle_ty(inner)),
-        Type::Simd(inner, n) => format!("simd{}_{}", n, mangle_ty(inner)),
+        Type::Simd(inner, n) => format!("simd{}_{}", n.expect_lit(), mangle_ty(inner)),
         Type::Struct(name) => (*name).into(),
         // Neither should appear in a fully-concrete instantiation; encode them
         // defensively rather than panicking so a bug surfaces as a bad symbol.
@@ -121,9 +173,19 @@ fn mangle_ty(ty: &Type) -> String {
     }
 }
 
-/// `id`, `[i32]` -> `id$slice_i32`.
-fn mangle_name(base: &str, args: &[Type]) -> String {
-    let parts = args.iter().map(mangle_ty).collect::<Vec<_>>().join("$");
+/// Identifier-safe fragment for one generic arg: a mangled type, or a const's
+/// decimal value (`4`). Const values are pure digits and no type mangles to bare
+/// digits, so the two never collide within a single arg list.
+fn mangle_arg(arg: &ConcreteArg) -> String {
+    match arg {
+        ConcreteArg::Type(t) => mangle_ty(t),
+        ConcreteArg::Const(n) => n.to_string(),
+    }
+}
+
+/// `id`, `[i32]` -> `id$slice_i32`; `splat`, `f32`, `4` -> `splat$f32$4`.
+fn mangle_name(base: &str, args: &[ConcreteArg]) -> String {
+    let parts = args.iter().map(mangle_arg).collect::<Vec<_>>().join("$");
     format!("{}${}", base, parts)
 }
 
@@ -132,16 +194,19 @@ fn mangle_name(base: &str, args: &[Type]) -> String {
 /// prefix is an enqueue-order artifact, not something the user wrote) and
 /// re-attaches the turbofish: `alloc`, `[Vec2]` -> `alloc::<Vec2>`. Best-effort;
 /// never fed back into the compiler.
-fn display_name(base: &str, args: &[Type]) -> String {
+fn display_name(base: &str, args: &[ConcreteArg]) -> String {
     let leaf = base.rsplit('$').next().unwrap_or(base);
-    let targs = args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+    let targs = args.iter().map(|a| match a {
+        ConcreteArg::Type(t) => t.to_string(),
+        ConcreteArg::Const(n) => n.to_string(),
+    }).collect::<Vec<_>>().join(", ");
     format!("{}::<{}>", leaf, targs)
 }
 
 impl<'p, 'a> Mono<'p, 'a> {
     /// Record an instantiation request, return its (stable) mangled name.
     /// de-dupes so each distinct instance is built exactly once.
-    fn request(&mut self, base: &'a str, args: Vec<Type<'a>>, span: Span) -> &'a str {
+    fn request(&mut self, base: &'a str, args: Vec<ConcreteArg<'a>>, span: Span) -> &'a str {
         let key = mangle_name(base, &args);
         if let Some(&m) = self.seen.get(&key) {
             return m;
@@ -153,7 +218,7 @@ impl<'p, 'a> Mono<'p, 'a> {
         mangled
     }
 
-    fn rebuild_expr(&mut self, expr: &Expr<'a>, b: &HashMap<&'a str, Type<'a>>) -> Expr<'a> {
+    fn rebuild_expr(&mut self, expr: &Expr<'a>, b: &Bindings<'a>) -> Expr<'a> {
         let node = match &expr.value {
             ExprNode::Call { func, type_args, args } => {
                 let new_args: Vec<Expr<'a>> =
@@ -169,11 +234,10 @@ impl<'p, 'a> Mono<'p, 'a> {
                 // turbofish.
                 if let ExprNode::Var(name) = &func.value {
                     if self.templates.contains_key(name) {
-                        let concrete: Vec<Type<'a>> = subst_targs.iter().map(|ga| match ga {
-                            GenericArg::Type(t) => t.clone(),
-                            GenericArg::Const(_) => unreachable!(
-                                "const generic args on user functions are rejected during typecheck"
-                            ),
+                        let concrete: Vec<ConcreteArg<'a>> = subst_targs.iter().map(|ga| match ga {
+                            GenericArg::Type(t) => ConcreteArg::Type(t.clone()),
+                            // typecheck already validated const args are non-negative.
+                            GenericArg::Const(n) => ConcreteArg::Const(*n as usize),
                         }).collect();
                         let mangled = self.request(name, concrete, expr.span.clone());
                         let new_func = Metadata::new(ExprNode::Var(mangled), func.span.clone());
@@ -220,12 +284,17 @@ impl<'p, 'a> Mono<'p, 'a> {
             ExprNode::Float32(v) => ExprNode::Float32(*v),
             ExprNode::Float64(v) => ExprNode::Float64(*v),
             ExprNode::Str(s) => ExprNode::Str(s),
-            ExprNode::Var(name) => ExprNode::Var(name),
+            // a bound const param used as a value becomes a typed literal; any
+            // other name is copied through.
+            ExprNode::Var(name) => match b.consts.get(name) {
+                Some(cb) => const_literal(cb),
+                None => ExprNode::Var(name),
+            },
         };
         Metadata::new(node, expr.span.clone())
     }
 
-    fn rebuild_stmt(&mut self, stmt: &Stmt<'a>, b: &HashMap<&'a str, Type<'a>>) -> Stmt<'a> {
+    fn rebuild_stmt(&mut self, stmt: &Stmt<'a>, b: &Bindings<'a>) -> Stmt<'a> {
         let node = match &stmt.value {
             StmtNode::Expr(e) => StmtNode::Expr(self.rebuild_expr(e, b)),
             StmtNode::Block(stmts) =>
@@ -261,7 +330,7 @@ impl<'p, 'a> Mono<'p, 'a> {
     fn rebuild_function(
         &mut self,
         tl: &TopLevel<'a>,
-        b: &HashMap<&'a str, Type<'a>>,
+        b: &Bindings<'a>,
         name_override: Option<&'a str>,
     ) -> TopLevel<'a> {
         let TopLevelNode::Function { name, attributes, params, return_type, body, .. } = &tl.value
@@ -308,7 +377,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
         arena, templates,
         queue: VecDeque::new(), seen: HashMap::new(), display: HashMap::new(),
     };
-    let empty: HashMap<&'a str, Type<'a>> = HashMap::new();
+    let empty = Bindings::empty();
 
     // rebuild concrete functions (their call sites seed the queue), keyed by
     // original position so we can re-emit in source order.
@@ -332,7 +401,10 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
     let mut materialized = 0usize;
     while let Some(inst) = m.queue.pop_front() {
         materialized += 1;
-        if let Some(deep) = inst.args.iter().find(|t| type_depth(t) > TYPE_DEPTH_LIMIT) {
+        if let Some(deep) = inst.args.iter().find_map(|a| match a {
+            ConcreteArg::Type(t) if type_depth(t) > TYPE_DEPTH_LIMIT => Some(t),
+            _ => None,
+        }) {
             return Err(Error {
                 msg: format!(
                     "monomorphization of '{}' produced a type argument nested deeper \
@@ -354,12 +426,19 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
         }
         let tl = m.templates[inst.base];
         let TopLevelNode::Function { generics, .. } = &tl.value else { unreachable!() };
-        let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
-            GenericParam::Type(n) => Some(*n),
-            GenericParam::Const(_, _) => None,
-        }).collect();
-        let bindings: HashMap<&'a str, Type<'a>> =
-            type_params.into_iter().zip(inst.args.iter().cloned()).collect();
+        // pair each declared generic param with its concrete arg (positional).
+        let mut bindings = Bindings::empty();
+        for (gp, arg) in generics.iter().zip(&inst.args) {
+            match (gp, arg) {
+                (GenericParam::Type(n), ConcreteArg::Type(t)) => {
+                    bindings.types.insert(n, t.clone());
+                }
+                (GenericParam::Const(n, ty), ConcreteArg::Const(v)) => {
+                    bindings.consts.insert(n, ConstBind { val: *v, ty: ty.clone() });
+                }
+                _ => unreachable!("generic param/arg kind mismatch — validated in typecheck"),
+            }
+        }
         let f = m.rebuild_function(tl, &bindings, Some(inst.mangled));
         instances.entry(inst.base).or_default().push(f);
     }

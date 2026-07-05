@@ -305,7 +305,7 @@ fn coerce<'a>(cx: &mut LowerCtx<'a>, val: Value, from_ty: &Type<'a>, to_ty: &Typ
                 dst: fat1,
                 elem: Value::Reg(fat0),
                 ty: Type::Int32,
-                val: Value::Const(Const::Int32(*len as i32)),
+                val: Value::Const(Const::Int32(len.expect_lit() as i32)),
                 index: 1,
             });
             Value::Reg(fat1)
@@ -413,7 +413,7 @@ fn lower_intrinsic<'a>(
             cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, element_ty: ty.clone() });
             // load the SIMD vector from the element pointer
             let dst = cx.fresh_reg();
-            cx.emit(Inst::Load { dst, ptr: elem_ptr, ty: Type::Simd(Box::new(ty), size), align: None });
+            cx.emit(Inst::Load { dst, ptr: elem_ptr, ty: Type::Simd(Box::new(ty), ConstVal::Lit(size)), align: None });
             Value::Reg(dst)
         }
         Intrinsic::SimdStore => {
@@ -444,7 +444,7 @@ fn lower_intrinsic<'a>(
             cx.emit(Inst::Comment(format!("simd_store")));
             cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, element_ty: ty.clone() });
             // store the SIMD vector to the element pointer
-            cx.emit(Inst::Store { ptr: elem_ptr, val: value_val, ty: Type::Simd(Box::new(ty), size), align: None });
+            cx.emit(Inst::Store { ptr: elem_ptr, val: value_val, ty: Type::Simd(Box::new(ty), ConstVal::Lit(size)), align: None });
             Value::Const(Const::Undef) // placeholder since void return
         }
         Intrinsic::SimdConcat => {
@@ -456,8 +456,8 @@ fn lower_intrinsic<'a>(
             cx.emit(Inst::Comment(format!("simd_concat({}, {}, ..., ...)", ty, size)));
             cx.emit(Inst::Shuffle {
                 dst,
-                value_size: match cx.node_types[&args[0].id] {
-                    Type::Simd(_, s) => s,
+                value_size: match &cx.node_types[&args[0].id] {
+                    Type::Simd(_, s) => s.expect_lit(),
                     _ => unreachable!(),
                 },
                 v0: value1_val,
@@ -479,8 +479,8 @@ fn lower_intrinsic<'a>(
             cx.emit(Inst::Comment(format!("{}({}, {}, ...)", intrinsic, ty, size)));
             cx.emit(Inst::Shuffle {
                 dst,
-                value_size: match cx.node_types[&args[0].id] {
-                    Type::Simd(_, s) => s,
+                value_size: match &cx.node_types[&args[0].id] {
+                    Type::Simd(_, s) => s.expect_lit(),
                     _ => unreachable!(),
                 },
                 v0: value_val,

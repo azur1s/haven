@@ -395,6 +395,15 @@ fn parse_expr<'tks, 'src: 'tks>()
     })
 }
 
+/// A size in a `[T; N]` / `simd<T, N>` type position, before it's validated into
+/// a [`ConstVal`]. A literal keeps its raw `i32` so the bound checks (`> 0`,
+/// `1..=64`) can run and report the offending value; an identifier is a const
+/// generic parameter reference, validated later in typecheck.
+enum SizeArg<'a> {
+    Lit(i32),
+    Param(&'a str),
+}
+
 // TODO: no fn-type production yet (fn-as-value), and no user generic-type
 // production either, only the hardcoded `simd<T,N>` handles `name<...>`. so a
 // generic type in type position (`x: List<T>`, nested turbofish `f::<Vec<i32>>`)
@@ -415,14 +424,15 @@ fn parse_type<'tks, 'src: 'tks>()
             just(Token::LBracket)
                 .ignore_then(ty.clone())
                 .then_ignore(just(Token::Semicolon))
-                .then(select! { Token::Int32(x) => x })
+                .then(select! {
+                    Token::Int32(x) => SizeArg::Lit(x),
+                    Token::Var(n) => SizeArg::Param(n),
+                })
                 .then_ignore(just(Token::RBracket))
-                .try_map(|(inner, size), span| {
-                    if size > 0 {
-                        Ok(Type::Array(Box::new(inner), size as usize))
-                    } else {
-                        Err(Rich::custom(span, format!("invalid array size parameter: {size} (must be greater than 0)")))
-                    }
+                .try_map(|(inner, size), span| match size {
+                    SizeArg::Lit(x) if x > 0 => Ok(Type::Array(Box::new(inner), ConstVal::Lit(x as usize))),
+                    SizeArg::Lit(x) => Err(Rich::custom(span, format!("invalid array size parameter: {x} (must be greater than 0)"))),
+                    SizeArg::Param(n) => Ok(Type::Array(Box::new(inner), ConstVal::Param(n))),
                 }),
             // [T]
             just(Token::LBracket)
@@ -432,7 +442,10 @@ fn parse_type<'tks, 'src: 'tks>()
             // T or simd<T, N>
             var.then(ty.clone()
                 .then_ignore(just(Token::Comma))
-                .then(select! { Token::Int32(x) => x })
+                .then(select! {
+                    Token::Int32(x) => SizeArg::Lit(x),
+                    Token::Var(n) => SizeArg::Param(n),
+                })
                 .delimited_by(
                     just(Token::BinaryOp(BinaryOp::Lt)),
                     just(Token::BinaryOp(BinaryOp::Gt)))
@@ -456,8 +469,11 @@ fn parse_type<'tks, 'src: 'tks>()
                     // hope we reach that point lmao
                     let (ty, size) = size.unwrap();
                     match *name {
-                        "simd" if size > 0 && size <= 64 => Ok(Type::Simd(Box::new(ty), size as usize)),
-                        "simd" => Err(Rich::custom(span, format!("invalid SIMD size parameter: {size} (must be between 1 and 64)"))),
+                        "simd" => match size {
+                            SizeArg::Lit(x) if x > 0 && x <= 64 => Ok(Type::Simd(Box::new(ty), ConstVal::Lit(x as usize))),
+                            SizeArg::Lit(x) => Err(Rich::custom(span, format!("invalid SIMD size parameter: {x} (must be between 1 and 64)"))),
+                            SizeArg::Param(n) => Ok(Type::Simd(Box::new(ty), ConstVal::Param(n))),
+                        },
                         other => Err(Rich::custom(span, format!("unexpected type '{other}' with size parameter"))),
                     }
                 }

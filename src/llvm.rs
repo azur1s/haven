@@ -26,12 +26,12 @@ fn emit_type(ty: &Type) -> String {
         Float64 => "double".to_string(),
         Pointer(_) => "ptr".to_string(),
 
-        Array(t, n) => format!("[{} x {}]", *n, emit_type(t)),
+        Array(t, n) => format!("[{} x {}]", n.expect_lit(), emit_type(t)),
         Slice(_) => "{ ptr, i32 }".to_string(), // struct { ptr, len }
         // `str` is a { ptr, len } fat pointer as a slice
         Str => "{ ptr, i32 }".to_string(),
         // <size x element_type>
-        Simd(ty, size) => format!("<{} x {}>", size, emit_type(ty)),
+        Simd(ty, size) => format!("<{} x {}>", size.expect_lit(), emit_type(ty)),
         Function { .. } => todo!("function pointer type"),
         // struct values are always referenced via pointer in our codegen
         // (see lower_function and lower_expr for ExprNode::Struct)
@@ -50,8 +50,8 @@ fn emit_type(ty: &Type) -> String {
 fn emit_field_type(ty: &Type) -> String {
     match ty {
         Type::Struct(name) => format!("%{name}"),
-        Type::Array(t, n) => format!("[{} x {}]", n, emit_field_type(t)),
-        Type::Simd(t, n) => format!("<{} x {}>", n, emit_field_type(t)),
+        Type::Array(t, n) => format!("[{} x {}]", n.expect_lit(), emit_field_type(t)),
+        Type::Simd(t, n) => format!("<{} x {}>", n.expect_lit(), emit_field_type(t)),
         _ => emit_type(ty),
     }
 }

@@ -6,7 +6,9 @@ use crate::{ast::*, intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBou
 /// concrete instances
 #[derive(Clone, Debug)]
 pub struct GenericFnSig<'a> {
-    pub type_params: Vec<&'a str>,
+    /// Generic parameters in declaration order (type and const params
+    /// interleaved). Turbofish arguments are matched against this positionally.
+    pub generics: Vec<GenericParam<'a>>,
     pub params: Vec<Type<'a>>,
     pub return_type: Type<'a>,
 }
@@ -22,6 +24,10 @@ pub struct Context<'a> {
     /// inside `proc id<T>(...)`. used to resolve a bare `Type::Struct(name)` into
     /// a `Type::Param(name)`. empty outside generics.
     pub generics: Vec<&'a str>,
+    /// Const-param names in scope for the function being checked, e.g. `["N"]`
+    /// inside `proc f<const N: u32>(...)`. Used to validate that a `ConstVal::Param`
+    /// in a type position names a declared const param. Empty outside generics.
+    pub const_generics: Vec<&'a str>,
     /// Generic function signatures, by name. NOT callable via the ordinary
     /// `Type::Function` path; calls go through `check_generic_call`.
     pub generic_fns: HashMap<&'a str, GenericFnSig<'a>>,
@@ -34,6 +40,7 @@ impl<'a> Context<'a> {
             node_types: HashMap::new(),
             structs: HashMap::new(),
             generics: Vec::new(),
+            const_generics: Vec::new(),
             generic_fns: HashMap::new(),
         }
     }
@@ -242,7 +249,7 @@ fn typecheck_intrinsic<'a>(
                 });
             }
 
-            let simd_ty = Type::Simd(Box::new(ty), size);
+            let simd_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
             cx.node_types.insert(expr_id, simd_ty.clone());
             Ok(simd_ty)
         }
@@ -262,7 +269,7 @@ fn typecheck_intrinsic<'a>(
 
             match slice_ty {
                 Type::Slice(inner) | Type::Pointer(inner) if *inner == ty => {
-                    let simd_ty = Type::Simd(Box::new(ty), size);
+                    let simd_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
                     cx.node_types.insert(expr_id, simd_ty.clone());
                     Ok(simd_ty)
                 },
@@ -289,7 +296,7 @@ fn typecheck_intrinsic<'a>(
                 });
             }
 
-            let expected_value_ty = Type::Simd(Box::new(ty.clone()), size);
+            let expected_value_ty = Type::Simd(Box::new(ty.clone()), ConstVal::Lit(size));
             if value_ty != expected_value_ty {
                 return Err(Error {
                     msg: format!("simd_store() value argument must be a SIMD vector of the element type and size, got {}", value_ty),
@@ -314,7 +321,7 @@ fn typecheck_intrinsic<'a>(
             let value1_ty = infer(cx, &args[0])?;
             let value2_ty = infer(cx, &args[1])?;
 
-            let expected_value_ty = Type::Simd(Box::new(ty.clone()), size / 2);
+            let expected_value_ty = Type::Simd(Box::new(ty.clone()), ConstVal::Lit(size / 2));
             if value1_ty != expected_value_ty {
                 return Err(Error {
                     msg: format!("simd_concat() first value argument must be a SIMD vector of the element type and half the size, got {}", value1_ty),
@@ -328,7 +335,7 @@ fn typecheck_intrinsic<'a>(
                 });
             }
 
-            let result_ty = Type::Simd(Box::new(ty), size);
+            let result_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
             cx.node_types.insert(expr_id, result_ty.clone());
             Ok(result_ty)
         }
@@ -340,8 +347,8 @@ fn typecheck_intrinsic<'a>(
             let value_ty = infer(cx, &args[0])?;
             // only check if inner type is the same, because size can be different
             match value_ty {
-                Type::Simd(inner_ty, inner_size) if *inner_ty == ty && inner_size > size => {
-                    let result_ty = Type::Simd(Box::new(ty), size);
+                Type::Simd(inner_ty, inner_size) if *inner_ty == ty && inner_size.expect_lit() > size => {
+                    let result_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
                     cx.node_types.insert(expr_id, result_ty.clone());
                     Ok(result_ty)
                 }
@@ -455,7 +462,7 @@ fn infer<'a>(
             for elem in inner.iter().skip(1) {
                 check_expr(cx, &first_ty, elem)?;
             }
-            Type::Array(Box::new(first_ty), inner.len())
+            Type::Array(Box::new(first_ty), ConstVal::Lit(inner.len()))
         },
         // ExprNode::Slice(inner) => {
         //     let first_ty = infer(cx, &inner[0])?;
@@ -724,6 +731,9 @@ fn check_stmt<'a>(
         },
 
         StmtNode::Declare { name, ty, value } => {
+            if let Err(msg) = check_const_scope(&cx.const_generics, ty) {
+                return Err(Error { msg: format!("in declaration of '{}': {}", name, msg), span: stmt.span.clone() });
+            }
             let ty = resolve_type(&cx.generics, ty);
             check_expr(cx, &ty, value)?;
             cx.insert(name, ty);
@@ -836,6 +846,29 @@ fn check_toplevel<'a>(
                 GenericParam::Type(n) => Some(*n),
                 GenericParam::Const(_, _) => None,
             }).collect();
+            cx.const_generics = generics.iter().filter_map(|g| match g {
+                GenericParam::Const(n, _) => Some(*n),
+                GenericParam::Type(_) => None,
+            }).collect();
+
+            // every `ConstVal::Param` in the signature must name a declared const
+            // param. runs for non-generic fns too (empty scope), so a stray
+            // `[f32; N]` outside a generic is rejected rather than silently
+            // producing an unresolved param.
+            for (pname, ty) in params {
+                if let Err(msg) = check_const_scope(&cx.const_generics, ty) {
+                    return Err(Error {
+                        msg: format!("parameter '{}' of '{}': {}", pname, name, msg),
+                        span: node.span.clone(),
+                    });
+                }
+            }
+            if let Err(msg) = check_const_scope(&cx.const_generics, return_type) {
+                return Err(Error {
+                    msg: format!("return type of '{}': {}", name, msg),
+                    span: node.span.clone(),
+                });
+            }
 
             let return_ty = resolve_type(&cx.generics, return_type);
 
@@ -860,6 +893,7 @@ fn check_toplevel<'a>(
 
             cx.pop_scope();
             cx.generics = Vec::new();
+            cx.const_generics = Vec::new();
         }
 
         // extern declarations have no body to check
@@ -896,9 +930,9 @@ fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
     match ty {
         Type::Struct(name) if generics.contains(name) => Type::Param(name),
         Type::Pointer(inner)  => Type::Pointer(Box::new(resolve_type(generics, inner))),
-        Type::Array(inner, n) => Type::Array(Box::new(resolve_type(generics, inner)), *n),
+        Type::Array(inner, n) => Type::Array(Box::new(resolve_type(generics, inner)), n.clone()),
         Type::Slice(inner)    => Type::Slice(Box::new(resolve_type(generics, inner))),
-        Type::Simd(inner, n)  => Type::Simd(Box::new(resolve_type(generics, inner)), *n),
+        Type::Simd(inner, n)  => Type::Simd(Box::new(resolve_type(generics, inner)), n.clone()),
         Type::Function { params, return_type } => Type::Function {
             params: params.iter().map(|p| resolve_type(generics, p)).collect(),
             return_type: Box::new(resolve_type(generics, return_type)),
@@ -914,16 +948,24 @@ fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
 // over the same compound-type arms, so maybe in the future it could be generalized
 // into a single `Type::walk_mut` or `Type::map` function that takes a closure to
 // apply to each leaf type
-fn subst_param_type<'a>(bindings: &HashMap<&'a str, Type<'a>>, ty: &Type<'a>) -> Type<'a> {
+fn subst_param_type<'a>(
+    types: &HashMap<&'a str, Type<'a>>,
+    consts: &HashMap<&'a str, usize>,
+    ty: &Type<'a>,
+) -> Type<'a> {
+    let sub_cv = |cv: &ConstVal<'a>| match cv {
+        ConstVal::Param(n) => consts.get(n).map(|v| ConstVal::Lit(*v)).unwrap_or_else(|| cv.clone()),
+        ConstVal::Lit(_) => cv.clone(),
+    };
     match ty {
-        Type::Param(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
-        Type::Pointer(inner)  => Type::Pointer(Box::new(subst_param_type(bindings, inner))),
-        Type::Array(inner, n) => Type::Array(Box::new(subst_param_type(bindings, inner)), *n),
-        Type::Slice(inner)    => Type::Slice(Box::new(subst_param_type(bindings, inner))),
-        Type::Simd(inner, n)  => Type::Simd(Box::new(subst_param_type(bindings, inner)), *n),
+        Type::Param(name) => types.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Pointer(inner)  => Type::Pointer(Box::new(subst_param_type(types, consts, inner))),
+        Type::Array(inner, n) => Type::Array(Box::new(subst_param_type(types, consts, inner)), sub_cv(n)),
+        Type::Slice(inner)    => Type::Slice(Box::new(subst_param_type(types, consts, inner))),
+        Type::Simd(inner, n)  => Type::Simd(Box::new(subst_param_type(types, consts, inner)), sub_cv(n)),
         Type::Function { params, return_type } => Type::Function {
-            params: params.iter().map(|p| subst_param_type(bindings, p)).collect(),
-            return_type: Box::new(subst_param_type(bindings, return_type)),
+            params: params.iter().map(|p| subst_param_type(types, consts, p)).collect(),
+            return_type: Box::new(subst_param_type(types, consts, return_type)),
         },
         other => other.clone(),
     }
@@ -940,38 +982,54 @@ fn check_generic_call<'a>(
     args: &[Expr<'a>],
     span: &Span,
 ) -> Result<Type<'a>, Error> {
-    if type_args.len() != sig.type_params.len() {
+    if type_args.len() != sig.generics.len() {
         return Err(Error {
             msg: format!(
-                "{}() expects {} type argument{} in `::<...>`, got {}",
-                name, sig.type_params.len(),
-                if sig.type_params.len() == 1 { "" } else { "s" }, type_args.len(),
+                "{}() expects {} generic argument{} in `::<...>`, got {}",
+                name, sig.generics.len(),
+                if sig.generics.len() == 1 { "" } else { "s" }, type_args.len(),
             ),
             span: span.clone(),
         });
     }
 
-    let mut bindings: HashMap<&'a str, Type<'a>> = HashMap::new();
-    for (pname, ta) in sig.type_params.iter().zip(type_args) {
-        match ta {
-            GenericArg::Type(ty) => {
+    // bind each turbofish arg to its generic param, matched positionally.
+    let mut type_bindings: HashMap<&'a str, Type<'a>> = HashMap::new();
+    let mut const_bindings: HashMap<&'a str, usize> = HashMap::new();
+    for (gp, ta) in sig.generics.iter().zip(type_args) {
+        match (gp, ta) {
+            (GenericParam::Type(pname), GenericArg::Type(ty)) => {
                 // resolve against the caller's own type params (a generic body
                 // can forward its `T`), then check any structs exist.
                 let ty = resolve_type(&cx.generics, ty);
                 if let Err(msg) = check_type_resolves(cx, &ty) {
                     return Err(Error { msg: format!("{}(): {}", name, msg), span: span.clone() });
                 }
-                bindings.insert(pname, ty);
+                type_bindings.insert(pname, ty);
             }
-            GenericArg::Const(_) => return Err(Error {
-                msg: format!("{}() expects a type argument, got a const (const generics on user functions are not supported yet)", name),
+            (GenericParam::Const(pname, _), GenericArg::Const(v)) => {
+                if *v < 0 {
+                    return Err(Error {
+                        msg: format!("{}(): const argument '{}' must be non-negative, got {}", name, pname, v),
+                        span: span.clone(),
+                    });
+                }
+                const_bindings.insert(pname, *v as usize);
+            }
+            (GenericParam::Type(pname), GenericArg::Const(_)) => return Err(Error {
+                msg: format!("{}(): expected a type argument for '{}', got a const value", name, pname),
+                span: span.clone(),
+            }),
+            (GenericParam::Const(pname, _), GenericArg::Type(_)) => return Err(Error {
+                msg: format!("{}(): expected a const argument for '{}', got a type", name, pname),
                 span: span.clone(),
             }),
         }
     }
 
-    let params: Vec<Type<'a>> = sig.params.iter().map(|p| subst_param_type(&bindings, p)).collect();
-    let return_type = subst_param_type(&bindings, &sig.return_type);
+    let params: Vec<Type<'a>> = sig.params.iter()
+        .map(|p| subst_param_type(&type_bindings, &const_bindings, p)).collect();
+    let return_type = subst_param_type(&type_bindings, &const_bindings, &sig.return_type);
 
     if args.len() != params.len() {
         return Err(Error {
@@ -985,6 +1043,31 @@ fn check_generic_call<'a>(
     }
 
     Ok(return_type)
+}
+
+/// Verifies that every `ConstVal::Param` in `ty` names a const generic parameter
+/// in `in_scope`. Ignores type params/structs entirely — those are handled by
+/// `resolve_type`/`check_type_resolves` — so it can run on raw (unresolved) types.
+fn check_const_scope<'a>(in_scope: &[&'a str], ty: &Type<'a>) -> Result<(), String> {
+    fn check_cv<'a>(in_scope: &[&'a str], cv: &ConstVal<'a>) -> Result<(), String> {
+        match cv {
+            ConstVal::Param(n) if !in_scope.contains(n) =>
+                Err(format!("unknown const parameter '{}'", n)),
+            _ => Ok(()),
+        }
+    }
+    match ty {
+        Type::Array(inner, n) | Type::Simd(inner, n) => {
+            check_cv(in_scope, n)?;
+            check_const_scope(in_scope, inner)
+        }
+        Type::Pointer(inner) | Type::Slice(inner) => check_const_scope(in_scope, inner),
+        Type::Function { params, return_type } => {
+            for p in params { check_const_scope(in_scope, p)?; }
+            check_const_scope(in_scope, return_type)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Recursively verifies that every Type::Struct referenced in each Type exists
@@ -1034,23 +1117,20 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
         match &node.value {
             // generic functions go into a separate table; not callable via the
             // ordinary function-type path, only through turbofish.
-            // FIXME: the guard is `!generics.is_empty()`, but type_params below
-            // drops const params. so a function with ONLY const generics
-            // (`proc f<const N: u32>`) lands here with type_params=[] and never
-            // gets inserted into the ordinary scope — `f::<4>(x)` fails ("expects
-            // 0 type args") and `f(x)` fails ("unknown"). it's uncallable.
             TopLevelNode::Function { name, generics, params, return_type, .. }
                 if !generics.is_empty() => {
                 let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
                     GenericParam::Type(n) => Some(*n),
                     GenericParam::Const(_, _) => None,
                 }).collect();
+                // only type params get reclassified `Struct`->`Param`; const params
+                // already arrive as `ConstVal::Param` from the parser.
                 let resolved_params = params.iter()
                     .map(|(_, ty)| resolve_type(&type_params, ty))
                     .collect();
                 let resolved_return = resolve_type(&type_params, return_type);
                 cx.generic_fns.insert(name, GenericFnSig {
-                    type_params,
+                    generics: generics.clone(),
                     params: resolved_params,
                     return_type: resolved_return,
                 });
