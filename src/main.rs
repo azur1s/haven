@@ -185,7 +185,62 @@ fn main() {
                     .status()
                     .expect("Failed to execute compiler for shared library")
             } else if args.static_lib {
-                todo!("Implement static library compilation");
+                println!("Compiling as a static library...");
+
+                // clang won't archive for us, so compile the IR to a single
+                // object first, then bundle it with the runtime archive into one
+                // static library the host can link against.
+                let obj_path = args.output.with_extension("o");
+                let obj_status = std::process::Command::new(&args.compiler)
+                    .arg(&llvm_ir_output_path)
+                    .arg("-c")
+                    .args(&args.compiler_flags.split_whitespace().collect::<Vec<_>>())
+                    .arg("-o")
+                    .arg(&obj_path)
+                    .status()
+                    .expect("Failed to execute compiler for object file");
+
+                if !obj_status.success() {
+                    eprintln!("Compiler exited with non-zero status when generating object file: {}", obj_status);
+                    std::process::exit(1);
+                }
+
+                // On Windows the conventional static lib is a `.lib` produced by
+                // llvm-lib (MSVC-style archive); elsewhere it's a `.a` from
+                // llvm-ar. Both understand our object + the runtime archive's
+                // members.
+                let (archiver, lib_ext) = if cfg!(target_os = "windows") {
+                    ("llvm-lib", "lib")
+                } else {
+                    ("llvm-ar", "a")
+                };
+                let lib_path = args.output.with_extension(lib_ext);
+
+                let mut archive_cmd = std::process::Command::new(archiver);
+                if cfg!(target_os = "windows") {
+                    // llvm-lib: /OUT:foo.lib foo.o libruntime.a
+                    archive_cmd
+                        .arg(format!("/OUT:{}", lib_path.display()))
+                        .arg(&obj_path)
+                        .arg(temp_runtime.path());
+                } else {
+                    // llvm-ar: crs foo.a foo.o libruntime.a
+                    archive_cmd
+                        .arg("crs")
+                        .arg(&lib_path)
+                        .arg(&obj_path)
+                        .arg(temp_runtime.path());
+                }
+
+                let archive_status = archive_cmd
+                    .status()
+                    .unwrap_or_else(|e| panic!("Failed to execute archiver '{}': {}", archiver, e));
+
+                if !obj_path.exists() || std::fs::remove_file(&obj_path).is_err() {
+                    // best-effort cleanup of the intermediate object
+                }
+
+                archive_status
             } else {
                 println!("Compiling as an executable...");
 

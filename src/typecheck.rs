@@ -790,7 +790,20 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
             Err(format!("slice type '{}' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", ty, inner)),
         Type::Str =>
             Err("str type is not allowed in @export functions (its fat-pointer layout is not stable across FFI), pass a raw '*u8' pointer and an explicit length parameter instead".into()),
-        Type::Pointer(inner) => check_export_type(inner), // recurse: *[]f32 is also banned
+        // A pointer is a single machine word regardless of what it points to, so
+        // it is ABI-stable as an opaque handle even when the pointee's layout is
+        // opaque to C (e.g. `*State`, `*u8`, `**u8`). We still reject pointers to
+        // the genuinely fat / target-specific pointees (slice/str/simd/array),
+        // whose *value* representation isn't a plain pointer.
+        Type::Pointer(inner) => match &**inner {
+            Type::Struct(_)
+            | Type::Void | Type::Bool
+            | Type::Int32 | Type::Int64
+            | Type::Uint32 | Type::Uint64
+            | Type::Float32 | Type::Float64
+            | Type::Pointer(_) => Ok(()),
+            _ => check_export_type(inner), // *[]f32, *str, *simd<...> stay banned
+        },
         Type::Simd(_, _) =>
             Err(format!("SIMD type '{}' is not allowed in @export functions because its calling convention is target-specific and not guaranteed to match the expected caller, or that's what I'm told", ty)),
         Type::Function { .. } =>
