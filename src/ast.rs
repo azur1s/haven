@@ -266,7 +266,7 @@ impl<'a> Display for Type<'a> {
             Float32 => write!(f, "f32"), Float64 => write!(f, "f64"),
             Function { params, return_type } => {
                 let params_str = params.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
-                write!(f, "fn({}) -> {}", params_str, return_type)
+                write!(f, "proc({}) {}", params_str, return_type)
             },
             Pointer(inner) => write!(f, "*{}", inner),
             Array(inner, size) => write!(f, "[{}; {}]", inner, size),

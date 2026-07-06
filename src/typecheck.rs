@@ -836,10 +836,11 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
 }
 
 /// Verify that a global's initializer is a compile-time constant we can emit as
-/// an LLVM `constant` aggregate. Only literals (optionally negated) are allowed
-/// for now; struct literals are handled in a later stage, and anything that would
-/// need to run code (variables, calls, indexing, ...) is rejected.
-fn check_const_initializer<'a>(expr: &Expr<'a>) -> Result<(), Error> {
+/// an LLVM `constant` aggregate: literals (optionally negated), struct literals of
+/// constants, and bare function names (a function's address is a link-time
+/// constant). Anything that would need to run code — a call, a load of another
+/// global's value, indexing — is rejected.
+fn check_const_initializer<'a>(cx: &Context<'a>, expr: &Expr<'a>) -> Result<(), Error> {
     match &expr.value {
         ExprNode::Bool(_)
         | ExprNode::Int32(_) | ExprNode::Int64(_)
@@ -851,16 +852,21 @@ fn check_const_initializer<'a>(expr: &Expr<'a>) -> Result<(), Error> {
                 ExprNode::Int32(_) | ExprNode::Int64(_)
                 | ExprNode::Uint32(_) | ExprNode::Uint64(_)
                 | ExprNode::Float32(_) | ExprNode::Float64(_)) => Ok(()),
+        // a bare top-level function name: its address is a link-time constant.
+        // a *global* of function type is excluded — reading its value isn't const.
+        ExprNode::Var(name)
+            if matches!(cx.lookup(name), Some(Type::Function { .. }))
+                && !cx.global_consts.contains(name) => Ok(()),
         // a struct literal is constant iff every field initializer is constant
         // (nested structs recurse). field names/types are checked by check_expr.
         ExprNode::Struct { fields, .. } => {
             for (_, fexpr) in fields {
-                check_const_initializer(fexpr)?;
+                check_const_initializer(cx, fexpr)?;
             }
             Ok(())
         }
         _ => Err(Error {
-            msg: "global initializer must be a constant (a literal or a struct literal of constants)".into(),
+            msg: "global initializer must be a constant (a literal, a struct literal of constants, or a function name)".into(),
             span: expr.span.clone(),
         }),
     }
@@ -983,7 +989,7 @@ fn check_toplevel<'a>(
                     span: node.span.clone(),
                 });
             }
-            check_const_initializer(value)?;
+            check_const_initializer(cx, value)?;
             check_expr(cx, ty, value)?;
         }
     }

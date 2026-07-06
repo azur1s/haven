@@ -420,6 +420,23 @@ fn parse_type<'tks, 'src: 'tks>()
         let var = select_ref! { Token::Var(ident) => ident };
 
         choice((
+            // proc(T1, T2) R  — a function-pointer type. mirrors the declaration
+            // grammar: a comma list of param types, then an optional trailing
+            // return type (defaulting to void). `proc` starts no other type, so
+            // this alternative is unambiguous.
+            just(Token::Proc)
+                .ignore_then(
+                    ty.clone()
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                )
+                .then(ty.clone().or_not())
+                .map(|(params, ret)| Type::Function {
+                    params,
+                    return_type: Box::new(ret.unwrap_or(Type::Void)),
+                }),
             // [T; N]
             just(Token::LBracket)
                 .ignore_then(ty.clone())

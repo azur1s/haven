@@ -32,7 +32,8 @@ fn emit_type(ty: &Type) -> String {
         Str => "{ ptr, i32 }".to_string(),
         // <size x element_type>
         Simd(ty, size) => format!("<{} x {}>", size.expect_lit(), emit_type(ty)),
-        Function { .. } => todo!("function pointer type"),
+        // a function pointer is a plain opaque pointer
+        Function { .. } => "ptr".to_string(),
         // struct values are always referenced via pointer in our codegen
         // (see lower_function and lower_expr for ExprNode::Struct)
         // the named LLVM type `%Name` is only used by AllocaStruct and FieldPtr,
@@ -201,8 +202,13 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                 Xor => "xor",
             }, emit_type(&ty), emit_value(lhs), emit_value(rhs));
         }
-        Call { dst, func, args, return_type, sret } => {
-            // %result = call <return_type> @<function_name>(<arg_type> <arg_val>, ...)
+        Call { dst, callee, args, return_type, sret } => {
+            // %result = call <return_type> <callee>(<arg_type> <arg_val>, ...)
+            // where <callee> is either a function symbol @name or a fn-pointer %reg
+            let callee_str = match callee {
+                Callee::Direct(name) => format!("@{name}"),
+                Callee::Indirect(val) => emit_value(val),
+            };
             let args_str = args.into_iter()
                 .map(|(val, ty)| format!("{} {}", emit_type(&ty), emit_value(val)))
                 .collect::<Vec<_>>()
@@ -215,11 +221,11 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                     } else {
                         format!("ptr sret(%{name}) {slot}, {args_str}")
                     };
-                    emitln!(cx, "    call void @{func}({all_args})");
+                    emitln!(cx, "    call void {callee_str}({all_args})");
                 }
                 None => {
                     let dst_prefix = dst.map(|dst| format!("{dst} = ")).unwrap_or_default();
-                    emitln!(cx, "    {dst_prefix}call {} @{func}({args_str})", emit_type(&return_type));
+                    emitln!(cx, "    {dst_prefix}call {} {callee_str}({args_str})", emit_type(&return_type));
                 }
             }
         }
@@ -439,6 +445,8 @@ fn emit_const_init(init: &ConstInit) -> String {
                 .join(", ");
             format!("{{ {body} }}")
         }
+        // a function's address is written as the bare symbol
+        ConstInit::FnAddr(name) => format!("@{name}"),
     }
 }
 

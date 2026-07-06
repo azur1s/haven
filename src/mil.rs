@@ -69,6 +69,14 @@ impl Display for BlockId {
     }
 }
 
+/// The target of a call: either a statically-known function symbol (`@name`) or a
+/// function-pointer value computed at runtime (`%reg`).
+#[derive(Clone, Debug)]
+pub enum Callee<'a> {
+    Direct(&'a str),
+    Indirect(Value),
+}
+
 #[derive(Clone, Debug)]
 pub enum Inst<'a> {
     Comment(String),
@@ -78,10 +86,10 @@ pub enum Inst<'a> {
     // %dst = <binary op> %lhs, %rhs
     Binary { dst: Register, op: BinaryOp, ty: Type<'a>, lhs: Value, rhs: Value },
 
-    // %dst = call func(args...)
+    // %dst = call callee(args...)
     Call {
         dst: Option<Register>, // None if return type is void
-        func: &'a str,
+        callee: Callee<'a>,
         args: Vec<(Value, Type<'a>)>,
         return_type: Type<'a>,
         // when the callee returns a struct, the result is passed back through
@@ -192,6 +200,9 @@ pub enum ConstInit<'a> {
     /// A constant struct aggregate: one `(field type, field constant)` per field,
     /// in declaration order. Nested structs recurse.
     Struct(Vec<(Type<'a>, ConstInit<'a>)>),
+    /// The address of a top-level function, emitted as `@name` — a link-time
+    /// constant `ptr`. Used for function-pointer fields (e.g. CLAP's `clap_entry`).
+    FnAddr(&'a str),
 }
 
 #[derive(Clone, Debug)]
@@ -589,6 +600,12 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                         Value::Reg(dst)
                     }
                 }
+            } else if matches!(cx.node_types.get(&expr.id), Some(Type::Function { .. })) {
+                // a bare top-level function used as a value: its symbol @name is a
+                // function pointer. Materialize the address (reusing GlobalPtr).
+                let dst = cx.fresh_reg();
+                cx.emit(Inst::GlobalPtr { dst, name });
+                Value::Reg(dst)
             } else {
                 panic!("unknown variable '{name}' in MIL lowering");
             }
@@ -841,9 +858,14 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
 
         ExprNode::Call { func, args, .. } => {
             cx.emit(Inst::Comment(format!("call {}(...)", func.value)));
-            let name = match &func.value {
-                ExprNode::Var(name) => name,
-                _ => todo!("function pointers in calls"),
+            // a bare name that isn't a local/param/global is a top-level function
+            // -> direct call. Anything else (a local holding a fn pointer, a struct
+            // field, etc.) is lowered to a `ptr` value and called indirectly.
+            let callee = match &func.value {
+                ExprNode::Var(name)
+                    if !cx.env.contains_key(name) && !cx.globals.contains_key(name) =>
+                    Callee::Direct(*name),
+                _ => Callee::Indirect(lower_expr(cx, func)),
             };
             // grab the callee's parameter types so we can apply array->slice coercion
             let param_tys: Vec<Type<'a>> = match cx.node_types.get(&func.id).cloned() {
@@ -868,18 +890,18 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 cx.emit(Inst::AllocaStruct { dst: slot, name: sname, align: None });
                 cx.emit(Inst::Call {
                     dst: None,
-                    func: name,
+                    callee,
                     args: lowered_args,
                     return_type: Type::Void,
                     sret: Some((slot, sname)),
                 });
                 Value::Reg(slot)
             } else if return_type == Type::Void {
-                cx.emit(Inst::Call { dst: None, func: name, args: lowered_args, return_type, sret: None });
+                cx.emit(Inst::Call { dst: None, callee, args: lowered_args, return_type, sret: None });
                 Value::Const(Const::Bool(false)) // placeholder
             } else {
                 let dst = cx.fresh_reg();
-                cx.emit(Inst::Call { dst: Some(dst), func: name, args: lowered_args, return_type, sret: None });
+                cx.emit(Inst::Call { dst: Some(dst), callee, args: lowered_args, return_type, sret: None });
                 Value::Reg(dst)
             }
         }
@@ -1265,6 +1287,9 @@ fn lower_const_init<'a>(
                 .collect();
             ConstInit::Struct(inits)
         }
+        // a bare name in a const initializer is a function (typecheck ensured it);
+        // its address @name is the constant.
+        ExprNode::Var(name) => ConstInit::FnAddr(name),
         other => unreachable!("non-constant global initializer reached lowering: {}", other),
     }
 }
@@ -1444,10 +1469,13 @@ pub fn lower<'a>(
                     blocks: cx.blocks.clone(),
                     sret,
                 });
-                // reset for next function
+                // reset for next function. env holds only this function's
+                // params/locals; clearing keeps stale names from a prior function
+                // from masquerading as in-scope (the call dispatch consults it).
                 cx.reg_counter = 0;
                 cx.block_counter = 0;
                 cx.blocks.clear();
+                cx.env.clear();
             }
             TopLevelNode::Extern { name, attributes, params, return_type, .. } => {
                 externs.push(ExternDecl {

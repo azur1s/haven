@@ -20,6 +20,12 @@ use std::collections::{HashMap, HashSet};
 /// Map from a callable's final (post-mono) name to whether it is known clean.
 type CleanMap<'a> = HashMap<&'a str, bool>;
 
+/// Sentinel "callee" for an indirect call through a function pointer. Its target
+/// isn't statically known, so we can't prove it clean — it never appears in the
+/// clean map, so any function that makes one is forced dirty. Not a valid
+/// identifier, so it can't collide with a real callable's name.
+const INDIRECT_CALLEE: &str = "<indirect call>";
+
 /// Returns the immediate calls in this expression whose callee is dirty.
 fn dirty_calls_expr<'a>(clean: &CleanMap<'a>, e: &Expr<'a>) -> Vec<(&'a str, Span)> {
     match &e.value {
@@ -30,12 +36,16 @@ fn dirty_calls_expr<'a>(clean: &CleanMap<'a>, e: &Expr<'a>) -> Vec<(&'a str, Spa
                 .collect();
 
             // then the callee itself (intrinsics are always clean)
-            if let ExprNode::Var(name) = func.value {
-                if Intrinsic::lookup(name).is_none()
-                    && !clean.get(name).copied().unwrap_or(false)
-                {
-                    dirty.push((name, func.span.clone()));
+            match &func.value {
+                ExprNode::Var(name) => {
+                    if Intrinsic::lookup(name).is_none()
+                        && !clean.get(name).copied().unwrap_or(false)
+                    {
+                        dirty.push((*name, func.span.clone()));
+                    }
                 }
+                // indirect call: target unknown, conservatively dirty
+                _ => dirty.push((INDIRECT_CALLEE, func.span.clone())),
             }
             dirty
         }
@@ -88,10 +98,15 @@ fn dirty_calls_stmt<'a>(clean: &CleanMap<'a>, s: &Stmt<'a>) -> Vec<(&'a str, Spa
 fn collect_calls_expr<'a>(calls: &mut HashSet<&'a str>, e: &Expr<'a>) {
     match &e.value {
         ExprNode::Call { func, args, .. } => {
-            if let ExprNode::Var(name) = func.value {
-                if Intrinsic::lookup(name).is_none() {
-                    calls.insert(name);
+            match &func.value {
+                ExprNode::Var(name) => {
+                    if Intrinsic::lookup(name).is_none() {
+                        calls.insert(*name);
+                    }
                 }
+                // indirect call through a fn pointer: record the sentinel so the
+                // enclosing function is forced dirty (target can't be proven clean)
+                _ => { calls.insert(INDIRECT_CALLEE); }
             }
             for arg in args {
                 collect_calls_expr(calls, arg);
