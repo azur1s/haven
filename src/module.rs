@@ -207,11 +207,21 @@ struct Scopes<'a> {
 struct Rewriter<'x, 'a> {
     scopes: &'x Scopes<'a>,
     errs: &'x mut Vec<Error>,
+    /// names bound by params/`let` in the function being walked, innermost last.
+    /// used as a stack: a block records `locals.len()` on entry and truncates
+    /// back to it on exit. a name in here shadows a top-level callable of the
+    /// same name, so bare/call references to it are left unrewritten (it's a
+    /// local value, not the top-level symbol).
+    locals: Vec<&'a str>,
 }
 
 impl<'x, 'a> Rewriter<'x, 'a> {
     fn error(&mut self, span: &Span, msg: String) {
         self.errs.push(Error::new(span.clone(), msg));
+    }
+
+    fn is_local(&self, name: &str) -> bool {
+        self.locals.iter().any(|n| *n == name)
     }
 
     /// Rewrite struct type names in `ty`, skipping names bound as generic params
@@ -256,6 +266,9 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 None => self.error(span, format!(
                     "unknown module qualifier '{}' (did you `import .../{}`?)", qual, qual)),
             }
+        } else if self.is_local(full) {
+            // shadowed by a param/local: this is an indirect call through a value,
+            // not a reference to the top-level symbol. leave it untouched.
         } else if let Some(&f) = self.scopes.calls.get(full) {
             *name = f;
         }
@@ -289,8 +302,16 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 self.expr(right, gparams);
             }
             ExprNode::Slice(elems) => for el in elems { self.expr(el, gparams); },
-            // leaves and bare (non-call) vars: nothing to rewrite
-            // (this is why a generic fn used as a value isn't rewritten cross-module)
+            // a bare name used as a value (fn-as-value): rewrite it to the mangled
+            // top-level name, unless a param/local shadows it (then it's a local
+            // read, leave it). taking a *generic* fn by value has no type args to
+            // monomorphize with; that's handled (or rejected) downstream, not here.
+            ExprNode::Var(name) => {
+                if !self.is_local(name) {
+                    if let Some(&f) = self.scopes.calls.get(*name) { *name = f; }
+                }
+            }
+            // remaining leaves (literals): nothing to rewrite
             _ => {}
         }
     }
@@ -298,10 +319,15 @@ impl<'x, 'a> Rewriter<'x, 'a> {
     fn stmt(&mut self, s: &mut Stmt<'a>, gparams: &HashSet<&str>) {
         match &mut s.value {
             StmtNode::Expr(e) => self.expr(e, gparams),
-            StmtNode::Block(ss) => for s in ss { self.stmt(s, gparams); },
-            StmtNode::Declare { ty, value, .. } => {
+            StmtNode::Block(ss) => {
+                let mark = self.locals.len();
+                for s in ss { self.stmt(s, gparams); }
+                self.locals.truncate(mark); // drop names bound inside the block
+            }
+            StmtNode::Declare { ty, value, name } => {
                 self.ty(ty, gparams);
-                self.expr(value, gparams);
+                self.expr(value, gparams); // walk the initializer BEFORE binding,
+                self.locals.push(name);    // so `let f = f;` sees the outer/top f
             }
             StmtNode::Assign { left, value } => {
                 self.expr(left, gparams);
@@ -329,9 +355,15 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                     GenericParam::Const(..) => None,
                 }).collect();
                 *name = self.scopes.calls.get(*name).copied().unwrap_or(*name);
-                for (_, ty) in params { self.ty(ty, &gparams); }
+                // params are locals for the whole body; body-level `let`s stack on
+                // top. truncate back to 0 so the next function starts clean.
+                for (pname, ty) in params {
+                    self.ty(ty, &gparams);
+                    self.locals.push(pname);
+                }
                 self.ty(return_type, &gparams);
                 for s in body { self.stmt(s, &gparams); }
+                self.locals.clear();
             }
             TopLevelNode::Extern { name, generics, params, return_type, .. } => {
                 let gparams: HashSet<&str> = generics.iter().filter_map(|g| match g {
@@ -589,7 +621,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
     // pass 2: rewrite each module's items in place using its scopes.
     for (id, m) in modules.iter_mut().enumerate() {
         let scopes = &all_scopes[id];
-        let mut rw = Rewriter { scopes, errs: &mut errs };
+        let mut rw = Rewriter { scopes, errs: &mut errs, locals: Vec::new() };
         for tl in &mut m.items {
             rw.toplevel(tl);
         }

@@ -27,37 +27,41 @@ type CleanMap<'a> = HashMap<&'a str, bool>;
 const INDIRECT_CALLEE: &str = "<indirect call>";
 
 /// Returns the immediate calls in this expression whose callee is dirty.
-fn dirty_calls_expr<'a>(clean: &CleanMap<'a>, e: &Expr<'a>) -> Vec<(&'a str, Span)> {
+// `locals` is the stack of param/`let` names in scope at this point (see the
+// rewriter in module.rs for the same shape). a called name that's shadowed by a
+// local isn't the top-level symbol of that name: it's an indirect call through a
+// value, so we route it to INDIRECT_CALLEE instead of the clean-map lookup.
+fn dirty_calls_expr<'a>(clean: &CleanMap<'a>, locals: &[&'a str], e: &Expr<'a>) -> Vec<(&'a str, Span)> {
     match &e.value {
         ExprNode::Call { func, args, .. } => {
             // dirty calls nested in the arguments, first
             let mut dirty: Vec<(&'a str, Span)> = args.iter()
-                .flat_map(|a| dirty_calls_expr(clean, a))
+                .flat_map(|a| dirty_calls_expr(clean, locals, a))
                 .collect();
 
             // then the callee itself (intrinsics are always clean)
             match &func.value {
-                ExprNode::Var(name) => {
+                ExprNode::Var(name) if !locals.contains(name) => {
                     if Intrinsic::lookup(name).is_none()
                         && !clean.get(name).copied().unwrap_or(false)
                     {
                         dirty.push((*name, func.span.clone()));
                     }
                 }
-                // indirect call: target unknown, conservatively dirty
+                // local fn-pointer or any computed callee: target unknown, dirty
                 _ => dirty.push((INDIRECT_CALLEE, func.span.clone())),
             }
             dirty
         }
         ExprNode::Binary { left, right, .. } => {
-            let mut dirty = dirty_calls_expr(clean, left);
-            dirty.extend(dirty_calls_expr(clean, right));
+            let mut dirty = dirty_calls_expr(clean, locals, left);
+            dirty.extend(dirty_calls_expr(clean, locals, right));
             dirty
         }
-        ExprNode::Unary { operand, .. } => dirty_calls_expr(clean, operand),
+        ExprNode::Unary { operand, .. } => dirty_calls_expr(clean, locals, operand),
         ExprNode::Index { slice, index } => {
-            let mut dirty = dirty_calls_expr(clean, slice);
-            dirty.extend(dirty_calls_expr(clean, index));
+            let mut dirty = dirty_calls_expr(clean, locals, slice);
+            dirty.extend(dirty_calls_expr(clean, locals, index));
             dirty
         }
         // literals & variable reads are always clean
@@ -65,82 +69,97 @@ fn dirty_calls_expr<'a>(clean: &CleanMap<'a>, e: &Expr<'a>) -> Vec<(&'a str, Spa
     }
 }
 
-fn dirty_calls_stmt<'a>(clean: &CleanMap<'a>, s: &Stmt<'a>) -> Vec<(&'a str, Span)> {
+fn dirty_calls_stmt<'a>(clean: &CleanMap<'a>, locals: &mut Vec<&'a str>, s: &Stmt<'a>) -> Vec<(&'a str, Span)> {
     match &s.value {
-        StmtNode::Expr(e) => dirty_calls_expr(clean, e),
-        StmtNode::Block(block) => block.iter()
-            .flat_map(|s| dirty_calls_stmt(clean, s))
-            .collect(),
+        StmtNode::Expr(e) => dirty_calls_expr(clean, locals, e),
+        StmtNode::Block(block) => {
+            let mark = locals.len();
+            let mut dirty = Vec::new();
+            for s in block { dirty.extend(dirty_calls_stmt(clean, locals, s)); }
+            locals.truncate(mark);
+            dirty
+        }
 
-        StmtNode::Declare { value, .. } => dirty_calls_expr(clean, value),
-        StmtNode::Assign { value, .. } => dirty_calls_expr(clean, value),
+        StmtNode::Declare { name, value, .. } => {
+            let dirty = dirty_calls_expr(clean, locals, value); // before binding
+            locals.push(name);
+            dirty
+        }
+        StmtNode::Assign { value, .. } => dirty_calls_expr(clean, locals, value),
 
         StmtNode::If { condition, then_branch, else_branch, .. } => {
-            let mut dirty = dirty_calls_expr(clean, condition);
-            dirty.extend(dirty_calls_stmt(clean, then_branch));
+            let mut dirty = dirty_calls_expr(clean, locals, condition);
+            dirty.extend(dirty_calls_stmt(clean, locals, then_branch));
             if let Some(b) = else_branch {
-                dirty.extend(dirty_calls_stmt(clean, b));
+                dirty.extend(dirty_calls_stmt(clean, locals, b));
             }
             dirty
         }
 
         StmtNode::While { condition, body } => {
-            let mut dirty = dirty_calls_expr(clean, condition);
-            dirty.extend(dirty_calls_stmt(clean, body));
+            let mut dirty = dirty_calls_expr(clean, locals, condition);
+            dirty.extend(dirty_calls_stmt(clean, locals, body));
             dirty
         }
 
         StmtNode::Break | StmtNode::Continue => vec![],
-        StmtNode::Return(e) => dirty_calls_expr(clean, e),
+        StmtNode::Return(e) => dirty_calls_expr(clean, locals, e),
     }
 }
 
-fn collect_calls_expr<'a>(calls: &mut HashSet<&'a str>, e: &Expr<'a>) {
+fn collect_calls_expr<'a>(calls: &mut HashSet<&'a str>, locals: &[&'a str], e: &Expr<'a>) {
     match &e.value {
         ExprNode::Call { func, args, .. } => {
             match &func.value {
-                ExprNode::Var(name) => {
+                ExprNode::Var(name) if !locals.contains(name) => {
                     if Intrinsic::lookup(name).is_none() {
                         calls.insert(*name);
                     }
                 }
-                // indirect call through a fn pointer: record the sentinel so the
-                // enclosing function is forced dirty (target can't be proven clean)
+                // indirect call (local fn pointer or computed callee): record the
+                // sentinel so the enclosing function is forced dirty
                 _ => { calls.insert(INDIRECT_CALLEE); }
             }
             for arg in args {
-                collect_calls_expr(calls, arg);
+                collect_calls_expr(calls, locals, arg);
             }
         }
         ExprNode::Binary { left, right, .. } => {
-            collect_calls_expr(calls, left);
-            collect_calls_expr(calls, right);
+            collect_calls_expr(calls, locals, left);
+            collect_calls_expr(calls, locals, right);
         }
-        ExprNode::Unary { operand, .. } => collect_calls_expr(calls, operand),
+        ExprNode::Unary { operand, .. } => collect_calls_expr(calls, locals, operand),
         ExprNode::Index { slice, index } => {
-            collect_calls_expr(calls, slice);
-            collect_calls_expr(calls, index);
+            collect_calls_expr(calls, locals, slice);
+            collect_calls_expr(calls, locals, index);
         }
         _ => {}
     }
 }
 
-fn collect_calls_stmt<'a>(calls: &mut HashSet<&'a str>, s: &Stmt<'a>) {
+fn collect_calls_stmt<'a>(calls: &mut HashSet<&'a str>, locals: &mut Vec<&'a str>, s: &Stmt<'a>) {
     match &s.value {
-        StmtNode::Expr(e) => collect_calls_expr(calls, e),
-        StmtNode::Block(stmts) => stmts.iter().for_each(|s| collect_calls_stmt(calls, s)),
-        StmtNode::Declare { value, .. } => collect_calls_expr(calls, value),
-        StmtNode::Assign { value, .. } => collect_calls_expr(calls, value),
+        StmtNode::Expr(e) => collect_calls_expr(calls, locals, e),
+        StmtNode::Block(stmts) => {
+            let mark = locals.len();
+            for s in stmts { collect_calls_stmt(calls, locals, s); }
+            locals.truncate(mark);
+        }
+        StmtNode::Declare { name, value, .. } => {
+            collect_calls_expr(calls, locals, value); // before binding
+            locals.push(name);
+        }
+        StmtNode::Assign { value, .. } => collect_calls_expr(calls, locals, value),
         StmtNode::If { condition, then_branch, else_branch, .. } => {
-            collect_calls_expr(calls, condition);
-            collect_calls_stmt(calls, then_branch);
-            if let Some(b) = else_branch { collect_calls_stmt(calls, b); }
+            collect_calls_expr(calls, locals, condition);
+            collect_calls_stmt(calls, locals, then_branch);
+            if let Some(b) = else_branch { collect_calls_stmt(calls, locals, b); }
         }
         StmtNode::While { condition, body } => {
-            collect_calls_expr(calls, condition);
-            collect_calls_stmt(calls, body);
+            collect_calls_expr(calls, locals, condition);
+            collect_calls_stmt(calls, locals, body);
         }
-        StmtNode::Return(e) => collect_calls_expr(calls, e),
+        StmtNode::Return(e) => collect_calls_expr(calls, locals, e),
         StmtNode::Break | StmtNode::Continue => {}
     }
 }
@@ -158,9 +177,10 @@ fn compute_clean<'a>(program: &[TopLevel<'a>]) -> CleanMap<'a> {
                 let is_clean = attributes.iter().any(|a| a.value.is_false("alloc"));
                 clean.insert(name, is_clean);
             }
-            TopLevelNode::Function { name, body, .. } => {
+            TopLevelNode::Function { name, params, body, .. } => {
                 let mut callees = HashSet::new();
-                for s in body { collect_calls_stmt(&mut callees, s); }
+                let mut locals: Vec<&'a str> = params.iter().map(|(p, _)| *p).collect();
+                for s in body { collect_calls_stmt(&mut callees, &mut locals, s); }
                 calls.insert(name, callees);
                 clean.insert(name, true);
             }
@@ -202,13 +222,16 @@ pub fn alloc_check_program<'a>(
     // at least one immediate callee, so a dirty function has >=1 span to blame
     let mut errors: Vec<Error> = Vec::new();
     for node in program {
-        let TopLevelNode::Function { name, attributes, body, .. } = &node.value else { continue };
+        let TopLevelNode::Function { name, attributes, params, body, .. } = &node.value else { continue };
         let marked = attributes.iter().any(|attr| attr.value.is_false("alloc"));
         if !marked || clean.get(name).copied().unwrap_or(false) {
             continue;
         }
 
-        for (callee, span) in body.iter().flat_map(|s| dirty_calls_stmt(&clean, s)) {
+        let mut locals: Vec<&'a str> = params.iter().map(|(p, _)| *p).collect();
+        let mut blamed: Vec<(&'a str, Span)> = Vec::new();
+        for s in body { blamed.extend(dirty_calls_stmt(&clean, &mut locals, s)); }
+        for (callee, span) in blamed {
             errors.push(Error::new(span, format!(
                 "Function '{}' is marked as @alloc(false) but calls '{}', which may allocate.",
                 show(name),

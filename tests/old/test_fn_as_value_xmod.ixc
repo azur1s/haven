@@ -1,0 +1,24 @@
+// cross-module function-as-value: a bare name referencing an *imported* function
+// used in value position must be rewritten to its mangled name during module
+// merge (module.rs). before local-scope tracking landed, only call-position
+// names were rewritten, so this failed with "Undefined variable 'square'".
+
+import std/math
+
+proc apply(f: proc(f64) f64, x: f64) f64 {
+    return f(x);
+}
+
+@export
+proc main() i32 {
+    // `square` is imported unqualified from std/math and taken by value here.
+    let g: proc(f64) f64 = square;
+    print_double(apply(g, 3.0f64)); // expect 9.0
+
+    // a local shadowing an imported name is NOT the imported symbol: this reads
+    // the local fn pointer, not std/math's square.
+    let square: proc(f64) f64 = g;
+    print_double(square(4.0f64));   // expect 16.0
+
+    return 0;
+}
