@@ -29,11 +29,11 @@ proc main() i32 {
     let hi_again: str = "\thello";
 
     // check lengths
-    if (len(hi) != 5) { println("len(hi) != 5"); }
+    if (len(hi) != 6) { println("len(hi) != 6"); }
     if (len(empty) != 0) { println("len(empty) != 0"); }
     if (len(escapes) != 5) { println("len(escapes) != 5"); }
     if (len(quoted) != 2) { println("len(quoted) != 2"); }
-    if (len(hi_again) != 5) { println("len(hi_again) != 5"); }
+    if (len(hi_again) != 6) { println("len(hi_again) != 6"); }
 
     return 0;
 }

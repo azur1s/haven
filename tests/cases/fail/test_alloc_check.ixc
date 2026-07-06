@@ -1,3 +1,4 @@
+//@ error: marked as @alloc(false)
 // print_i32 comes from the prelude; an extern not marked @alloc(false) is
 // treated as dirty (may allocate), so anything calling it becomes dirty too
 proc dirty() { print_i32(0); }

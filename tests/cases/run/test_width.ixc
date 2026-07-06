@@ -1,0 +1,32 @@
+// numerical_cast between the scalar widths. The printable conversions are
+// value-checked (truncation direction, sign, round-trips must be exact); the
+// unsigned / 64-bit destinations have no print_* and are exercised compile-only
+// so their cast opcodes (zext / uitofp / fptoui) still get codegen coverage.
+
+@export
+proc main() i32 {
+    // float -> int truncates toward zero (not floor): -2.7 -> -2, not -3
+    print_i32(numerical_cast::<i32>(3.9f64));   // 3
+    print_i32(numerical_cast::<i32>(-2.7f32));  // -2
+
+    // int -> float
+    print_float(numerical_cast::<f32>(5i32));   // 5.000000
+    print_double(numerical_cast::<f64>(-3i32)); // -3.000000
+
+    // widen then narrow, back to the start: i32 -> i64 -> i32
+    print_i32(numerical_cast::<i32>(numerical_cast::<i64>(7i32))); // 7
+
+    // float narrow/widen round-trip: f32 -> f64 -> f32 (1.5 is exact in binary)
+    print_float(numerical_cast::<f32>(numerical_cast::<f64>(1.5f32))); // 1.500000
+
+    // compile-only coverage for the casts that have no printer:
+    // unsigned and 64-bit destinations (zext / uitofp / fptoui / fptrunc).
+    let a: u32 = numerical_cast::<u32>(1i32);
+    let b: u64 = numerical_cast::<u64>(2i64);
+    let c: u32 = numerical_cast::<u32>(3.0f32);
+    let d: u64 = numerical_cast::<u64>(4.0f64);
+    let e: i64 = numerical_cast::<i64>(5u32);
+    let f: f64 = numerical_cast::<f64>(6u64);
+
+    return 0;
+}

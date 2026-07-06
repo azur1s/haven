@@ -5,7 +5,6 @@ struct Vec2 {
     y: f32,
 }
 
-@alloc(false)
 proc new_vec2_heap(x: f32, y: f32) *Vec2 {
     let ptr: *Vec2 = alloc::<Vec2>(1u64);
     ptr.x = x;

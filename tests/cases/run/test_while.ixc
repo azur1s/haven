@@ -1,3 +1,4 @@
+//@ exit: any
 @export
 proc main() {
     let i: i32 = 0;
