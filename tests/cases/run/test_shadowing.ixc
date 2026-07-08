@@ -1,0 +1,57 @@
+//@ exit: 0
+// Regression test for shadowing in MIL lowering. Before name resolution keyed
+// storage by binding identity, same-named locals collapsed onto one slot:
+//   - different types in sibling scopes -> invalid LLVM IR (hard miscompile)
+//   - same type in nested scopes        -> silent wrong value (outer clobbered)
+
+// a local shadowing a parameter must not disturb the parameter's slot.
+proc shadow_param(a: i32) i32 {
+    print("param a=");
+    print_i32(a);        // 7
+    print("\n");
+    if (a > 0) {
+        let a: i32 = 100; // shadows the param
+        print("inner a=");
+        print_i32(a);     // 100
+        print("\n");
+    }
+    print("after a=");
+    print_i32(a);         // 7 — param slot untouched
+    print("\n");
+    return a;
+}
+
+@export
+proc main() i32 {
+    // 1) nested same-type shadow: inner write must not clobber the outer.
+    let x: i32 = 1;
+    if (1 == 1) {
+        let x: i32 = 99;
+        print("inner x=");
+        print_i32(x);     // 99
+        print("\n");
+    }
+    print("outer x=");
+    print_i32(x);         // 1
+    print("\n");
+
+    // 2) sibling-scope shadows with DIFFERENT types. Each `y` gets its own slot;
+    //    previously these shared one alloca and produced invalid IR.
+    if (1 == 1) {
+        let y: i32 = 5;
+        print("y i32=");
+        print_i32(y);     // 5
+        print("\n");
+    }
+    if (1 == 1) {
+        let y: f32 = 2.5f32;
+        print("y f32=");
+        print_float(y);   // 2.500000
+        print("\n");
+    }
+
+    // 3) local shadowing a param.
+    shadow_param(7);
+
+    return 0;
+}

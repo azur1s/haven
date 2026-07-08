@@ -58,6 +58,18 @@ impl<T> Metadata<T> {
     }
 }
 
+/// A resolved value binding: which specific declaration a `Var` use refers to.
+/// Produced by name resolution (in the typechecker) and consumed by MIL lowering
+/// to key each variable's storage slot. Locals are identified by their `Declare`
+/// statement's node id — globally unique, so two same-named locals in different
+/// scopes (shadowing) never collide. Params are identified by name, which is
+/// unique within a single function's parameter list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Binding<'a> {
+    Local(usize),
+    Param(&'a str),
+}
+
 /// Extension trait to add a convenient method for creating metadata from a value and span.
 // pub trait MetadataExt<T> {
 //     fn make_metadata(self, span: Span) -> Metadata<T>;

@@ -15,9 +15,18 @@ pub struct GenericFnSig<'a> {
 
 #[derive(Clone, Debug)]
 pub struct Context<'a> {
-    pub scopes: Vec<HashMap<&'a str, Type<'a>>>,
+    /// Lexical scope stack. Each entry maps a name to its binding identity and
+    /// type. The binding is `None` for module-level globals/functions (resolved
+    /// via the global namespace in codegen, not a local slot) and `Some` for
+    /// params and locals.
+    pub scopes: Vec<HashMap<&'a str, (Option<Binding<'a>>, Type<'a>)>>,
     /// Map from Expr/Stmt/TopLevel IDs to their inferred types, for use in later codegen
     pub node_types: HashMap<usize, Type<'a>>,
+    /// Name resolution: maps each `Var` use's node id to the specific param/local
+    /// binding it refers to. Globals are absent (they fall back to the global
+    /// namespace). Consumed by MIL lowering to key variable storage, which makes
+    /// shadowing correct — two same-named locals get distinct `Binding::Local`s.
+    pub resolved: HashMap<usize, Binding<'a>>,
     /// Struct definitions from name to ordered list of (field name, field type)
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
     /// Type-param names in scope for the function being checked, e.g. `["T"]`
@@ -41,6 +50,7 @@ impl<'a> Context<'a> {
         Self {
             scopes: vec![HashMap::new()], // global scope
             node_types: HashMap::new(),
+            resolved: HashMap::new(),
             structs: HashMap::new(),
             generics: Vec::new(),
             const_generics: Vec::new(),
@@ -57,12 +67,12 @@ impl<'a> Context<'a> {
         self.scopes.pop();
     }
 
-    pub fn insert(&mut self, name: &'a str, ty: Type<'a>) {
-        self.scopes.last_mut().unwrap().insert(name, ty);
+    pub fn insert(&mut self, name: &'a str, binding: Option<Binding<'a>>, ty: Type<'a>) {
+        self.scopes.last_mut().unwrap().insert(name, (binding, ty));
     }
 
     /// Walk scopes from innermost to outermost, returning the first match for `name`
-    pub fn lookup(&self, name: &str) -> Option<&Type<'a>> {
+    pub fn lookup(&self, name: &str) -> Option<&(Option<Binding<'a>>, Type<'a>)> {
         self.scopes.iter().rev().find_map(|scope| scope.get(name))
     }
 }
@@ -441,16 +451,20 @@ fn infer<'a>(
         ExprNode::Str(_)     => Type::Str,
 
         ExprNode::Var(name) => {
-            match cx.lookup(name) {
-                Some(ty) => ty.clone(),
-                None => {
-                    let msg = format!("Undefined variable '{}'", name);
-                    return Err(Error {
-                        msg,
-                        span,
-                    });
-                }
+            let Some((binding, ty)) = cx.lookup(name) else {
+                let msg = format!("Undefined variable '{}'", name);
+                return Err(Error {
+                    msg,
+                    span,
+                });
+            };
+            let binding = *binding;
+            let ty = ty.clone();
+            // record which param/local this use resolves to (globals -> None)
+            if let Some(b) = binding {
+                cx.resolved.insert(metadata.id, b);
             }
+            ty
         },
 
         ExprNode::Slice(inner) if inner.len() == 0 => {
@@ -740,7 +754,9 @@ fn check_stmt<'a>(
             }
             let ty = resolve_type(&cx.generics, ty);
             check_expr(cx, &ty, value)?;
-            cx.insert(name, ty);
+            // the local's binding identity is this Declare stmt's node id, which
+            // is globally unique — so shadowed same-named locals stay distinct.
+            cx.insert(name, Some(Binding::Local(stmt.id)), ty);
         },
 
         StmtNode::Assign { left, value } => {
@@ -855,7 +871,7 @@ fn check_const_initializer<'a>(cx: &Context<'a>, expr: &Expr<'a>) -> Result<(), 
         // a bare top-level function name: its address is a link-time constant.
         // a *global* of function type is excluded — reading its value isn't const.
         ExprNode::Var(name)
-            if matches!(cx.lookup(name), Some(Type::Function { .. }))
+            if matches!(cx.lookup(name), Some((_, Type::Function { .. })))
                 && !cx.global_consts.contains(name) => Ok(()),
         // a struct literal is constant iff every field initializer is constant
         // (nested structs recurse). field names/types are checked by check_expr.
@@ -941,14 +957,16 @@ fn check_toplevel<'a>(
             // const generics are ordinary compile-time values, visible in the body
             for g in generics {
                 if let GenericParam::Const(cname, cty) = g {
-                    cx.insert(cname, cty.clone());
+                    // const generics are substituted with literals by mono, so
+                    // they never surface as `Var` uses in the lowered program.
+                    cx.insert(cname, None, cty.clone());
                 }
             }
 
             // push params into scope, resolving type-param references
             for (pname, ty) in params {
                 let resolved = resolve_type(&cx.generics, ty);
-                cx.insert(pname, resolved);
+                cx.insert(pname, Some(Binding::Param(pname)), resolved);
             }
 
             for stmt in body {
@@ -1212,7 +1230,7 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
             }
             TopLevelNode::Function { name, params, return_type, .. }
             | TopLevelNode::Extern { name, params, return_type, .. } => {
-                cx.insert(name, Type::Function {
+                cx.insert(name, None, Type::Function {
                     params: params.iter().map(|(_, ty)| ty.clone()).collect(),
                     return_type: Box::new(return_type.clone()),
                 });
@@ -1220,7 +1238,7 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
             // globals share the value namespace with functions; register the name
             // so references resolve as ordinary variables.
             TopLevelNode::Global { name, ty, .. } => {
-                cx.insert(name, ty.clone());
+                cx.insert(name, None, ty.clone());
                 cx.global_consts.insert(name);
             }
             TopLevelNode::Struct { .. } => {}

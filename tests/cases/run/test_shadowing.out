@@ -1,0 +1,14 @@
+inner x=99
+
+outer x=1
+
+y i32=5
+
+y f32=2.500000
+
+param a=7
+
+inner a=100
+
+after a=7
+

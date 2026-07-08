@@ -242,12 +242,17 @@ pub struct LowerCtx<'a> {
     pub blocks: Vec<BasicBlock<'a>>,
     pub loop_stack: Vec<LoopTargets>,
 
-    pub env: HashMap<&'a str, (Register, Type<'a>)>,
+    /// Storage slot per param/local, keyed by resolved binding identity (not by
+    /// name) so shadowed same-named locals get distinct slots. Cleared per fn.
+    pub env: HashMap<Binding<'a>, (Register, Type<'a>)>,
     /// Module-level globals in scope: final emitted name -> type. Referenced as
     /// bare vars, distinct from `env` (locals/params), which shadow these.
     pub globals: HashMap<&'a str, Type<'a>>,
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>, // from typecheck
     pub node_types: HashMap<usize, Type<'a>>, // from typecheck
+    /// Name resolution from typecheck: `Var` node id -> its param/local binding.
+    /// Absent for globals/functions, which resolve via `globals` / direct calls.
+    pub resolved: HashMap<usize, Binding<'a>>, // from typecheck
     pub current_return_type: Type<'a>,        // return type of the function being lowered
     pub sret_param: Option<Register>,         // out-pointer slot, if the current fn returns a struct
     pub strings: Vec<Vec<u8>>,                // interned string-literal blobs (-> @.str.N)
@@ -572,8 +577,9 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
         }
 
         ExprNode::Var(name) => {
-            // locals/params (env) shadow module-level globals.
-            if let Some((reg, ty)) = cx.env.get(name).cloned() {
+            // locals/params (env) shadow module-level globals. resolution picked
+            // the exact binding for this use, so shadowing is already decided.
+            if let Some((reg, ty)) = cx.resolved.get(&expr.id).and_then(|b| cx.env.get(b)).cloned() {
                 match ty {
                     // fixed arrays are stored in env as the alloca register itself, not a pointer
                     // to one, so loading would yield the array value — we want the pointer
@@ -863,7 +869,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             // field, etc.) is lowered to a `ptr` value and called indirectly.
             let callee = match &func.value {
                 ExprNode::Var(name)
-                    if !cx.env.contains_key(name) && !cx.globals.contains_key(name) =>
+                    if !cx.resolved.contains_key(&func.id) && !cx.globals.contains_key(name) =>
                     Callee::Direct(*name),
                 _ => Callee::Indirect(lower_expr(cx, func)),
             };
@@ -944,7 +950,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
 
 fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
     match &expr.value {
-        ExprNode::Var(name) => cx.env[name].0,
+        ExprNode::Var(_) => cx.env[&cx.resolved[&expr.id]].0,
 
         ExprNode::Access { base, field } => {
             let base_val = lower_expr(cx, base);
@@ -1060,7 +1066,10 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             }
         }
 
-        StmtNode::Declare { name, ty, value } => {
+        StmtNode::Declare { ty, value, .. } => {
+            // this local's binding identity is the Declare stmt's node id, matching
+            // what name resolution recorded for every use of it.
+            let binding = Binding::Local(stmt.id);
             let val = lower_expr(cx, value);
             let value_ty = cx.node_types[&value.id].clone();
             match ty {
@@ -1071,7 +1080,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
                     };
-                    cx.env.insert(name, (arr_reg, ty.clone()));
+                    cx.env.insert(binding, (arr_reg, ty.clone()));
                 }
                 Type::Struct(struct_name) => {
                     let src_reg = match val {
@@ -1085,17 +1094,17 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                     // anything else (Var, field access, etc.) references someone
                     // else's storage and needs a copy for value semantics.
                     if matches!(value.value, ExprNode::Struct { .. } | ExprNode::Call { .. }) {
-                        cx.env.insert(name, (src_reg, ty.clone()));
+                        cx.env.insert(binding, (src_reg, ty.clone()));
                     } else {
                         let dst_reg = cx.fresh_reg();
                         cx.emit(Inst::AllocaStruct { dst: dst_reg, name: struct_name, align: None });
                         copy_struct(cx, struct_name, src_reg, dst_reg);
-                        cx.env.insert(name, (dst_reg, ty.clone()));
+                        cx.env.insert(binding, (dst_reg, ty.clone()));
                     }
                 }
                 _ => {
                     let val = coerce(cx, val, &value_ty, ty);
-                    let (ptr, _) = cx.env[name]; // already alloca'd
+                    let (ptr, _) = cx.env[&binding]; // already alloca'd
                     cx.emit(Inst::Store { ptr, val, ty: ty.clone(), align: None });
                 }
             }
@@ -1229,13 +1238,14 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 /// Recursively collect all local variable declarations in the function body,
 /// including nested ones in blocks and branches.
 /// This is for emitting all Alloca instructions upfront in the entry block
-fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(&'a str, Type<'a>)>) {
+fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(usize, &'a str, Type<'a>)>) {
     match &stmt.value {
         StmtNode::Declare { name, ty, .. } => {
             // skip fixed arrays and structs: the literal's own alloca becomes
             // the local's slot (see the Declare arm in lower_stmt)
             if !matches!(ty, Type::Array(_, _) | Type::Struct(_)) {
-                out.push((name, ty.clone()));
+                // key by the Declare stmt's node id (its binding identity)
+                out.push((stmt.id, name, ty.clone()));
             }
         }
         StmtNode::Block(stmts) => {
@@ -1349,7 +1359,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                     let param_ptr = cx.fresh_reg();
                     cx.emit(Inst::Alloca { dst: param_ptr, ty: ty.clone(), align: None });
                     cx.emit(Inst::Store { ptr: param_ptr, val: Value::Reg(fat1), ty: ty.clone(), align: None });
-                    cx.env.insert(name, (param_ptr, ty.clone()));
+                    cx.env.insert(Binding::Param(name), (param_ptr, ty.clone()));
 
                     // push BOTH as incoming params
                     param_regs.push((ptr_reg, Type::Pointer(Box::new(inner_ty.clone()))));
@@ -1367,7 +1377,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                     let local_reg = cx.fresh_reg();
                     cx.emit(Inst::AllocaStruct { dst: local_reg, name: struct_name, align: None });
                     copy_struct(cx, struct_name, param_reg, local_reg);
-                    cx.env.insert(name, (local_reg, ty.clone()));
+                    cx.env.insert(Binding::Param(name), (local_reg, ty.clone()));
                 } else {
                     // actual register for the parameter value
                     // e.g. @foo(T %param_regN, ...)
@@ -1379,21 +1389,22 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                     cx.emit(Inst::Store { ptr: param_ptr, val: Value::Reg(param_reg), ty: ty.clone(), align: None });
 
                     param_regs.push((param_reg, ty.clone()));
-                    cx.env.insert(name, (param_ptr, ty.clone()));
+                    cx.env.insert(Binding::Param(name), (param_ptr, ty.clone()));
                 }
             }
 
-            // collect all local variable declarations in the function body and emit Allocas for them
-            // TODO handle shadowing since this will collide on the same name
+            // collect all local variable declarations in the function body and emit Allocas for them.
+            // each local is keyed by its Declare's node id, so shadowed same-named
+            // locals get distinct slots (uses are routed by name resolution).
             let mut locals = Vec::new();
             for stmt in body {
                 collect_locals(stmt, &mut locals);
             }
-            for (name, ty) in locals {
+            for (decl_id, name, ty) in locals {
                 let local_reg = cx.fresh_reg();
                 cx.emit(Inst::Comment(format!("local {}: {}", name, ty)));
                 cx.emit(Inst::Alloca { dst: local_reg, ty: ty.clone(), align: None });
-                cx.env.insert(name, (local_reg, ty.clone()));
+                cx.env.insert(Binding::Local(decl_id), (local_reg, ty.clone()));
             }
 
             cx.emit(Inst::Comment("function body".to_string()));
@@ -1434,6 +1445,7 @@ pub fn lower<'a>(
         globals: HashMap::new(),
         structs: typecheck_context.structs.clone(),
         node_types: typecheck_context.node_types.clone(),
+        resolved: typecheck_context.resolved.clone(),
         current_return_type: Type::Void,
         sret_param: None,
         strings: Vec::new(),
