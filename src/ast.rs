@@ -84,8 +84,8 @@ pub enum Binding<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token<'a> {
     Bool(bool),
-    Int32(i32), Int64(i64),
-    Uint32(u32), Uint64(u64),
+    Int8(i8), Int32(i32), Int64(i64),
+    Uint8(u8), Uint32(u32), Uint64(u64),
     Float32(f32), Float64(f64),
     Str(&'a str),
     Var(&'a str),
@@ -109,8 +109,10 @@ impl Display for Token<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Token::Bool(b)      => write!(f, "{}", b),
+            Token::Int8(n)      => write!(f, "{}i8", n),
             Token::Int32(n)     => write!(f, "{}i32", n),
             Token::Int64(n)     => write!(f, "{}i64", n),
+            Token::Uint8(n)     => write!(f, "{}u8", n),
             Token::Uint32(n)    => write!(f, "{}u32", n),
             Token::Uint64(n)    => write!(f, "{}u64", n),
             Token::Float32(n)   => write!(f, "{}f32", n),
@@ -296,8 +298,8 @@ impl<'a> Display for Type<'a> {
 #[derive(Clone, Debug)]
 pub enum ExprNode<'a> {
     Bool(bool),
-    Int32(i32), Int64(i64),
-    Uint32(u32), Uint64(u64),
+    Int8(i8), Int32(i32), Int64(i64),
+    Uint8(u8), Uint32(u32), Uint64(u64),
     Float32(f32), Float64(f64),
     /// String literal `"..."`. Holds the raw source text between the quotes.
     /// escape sequences are resolved later, during MIL lowering, e.g.
@@ -341,8 +343,10 @@ impl<'a> Display for ExprNode<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ExprNode::Bool(val) => write!(f, "{}", val),
+            ExprNode::Int8(val) => write!(f, "{}i8", val),
             ExprNode::Int32(val) => write!(f, "{}i32", val),
             ExprNode::Int64(val) => write!(f, "{}i64", val),
+            ExprNode::Uint8(val) => write!(f, "{}u8", val),
             ExprNode::Uint32(val) => write!(f, "{}u32", val),
             ExprNode::Uint64(val) => write!(f, "{}u64", val),
             ExprNode::Float32(val) => write!(f, "{}f32", val),

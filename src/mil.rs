@@ -33,8 +33,10 @@ impl Display for Value {
 pub enum Const {
     Undef, // for uninitialized values (e.g. insertvalue with undef)
     Bool(bool),
+    Int8(i8),
     Int32(i32),
     Int64(i64),
+    Uint8(u8),
     Uint32(u32),
     Uint64(u64),
     Float32(f32),
@@ -49,8 +51,10 @@ impl Display for Const {
         match self {
             Const::Undef => write!(f, "undef"),
             Const::Bool(b) => write!(f, "{}", b),
+            Const::Int8(n) => write!(f, "{}", n),
             Const::Int32(n) => write!(f, "{}", n),
             Const::Int64(n) => write!(f, "{}", n),
+            Const::Uint8(n) => write!(f, "{}", n),
             Const::Uint32(n) => write!(f, "{}", n),
             Const::Uint64(n) => write!(f, "{}", n),
             Const::Float32(n)=> write!(f, "{:?}", n),
@@ -545,8 +549,10 @@ fn lower_intrinsic<'a>(
 fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
     match &expr.value {
         ExprNode::Bool(b)    => Value::Const(Const::Bool(*b)),
+        ExprNode::Int8(n)    => Value::Const(Const::Int8(*n)),
         ExprNode::Int32(n)   => Value::Const(Const::Int32(*n)),
         ExprNode::Int64(n)   => Value::Const(Const::Int64(*n)),
+        ExprNode::Uint8(n)   => Value::Const(Const::Uint8(*n)),
         ExprNode::Uint32(n)  => Value::Const(Const::Uint32(*n)),
         ExprNode::Uint64(n)  => Value::Const(Const::Uint64(*n)),
         ExprNode::Float32(n) => Value::Const(Const::Float32(*n)),
@@ -1273,15 +1279,19 @@ fn lower_const_init<'a>(
 ) -> ConstInit<'a> {
     match &expr.value {
         ExprNode::Bool(b)    => ConstInit::Scalar(Const::Bool(*b)),
+        ExprNode::Int8(n)    => ConstInit::Scalar(Const::Int8(*n)),
         ExprNode::Int32(n)   => ConstInit::Scalar(Const::Int32(*n)),
         ExprNode::Int64(n)   => ConstInit::Scalar(Const::Int64(*n)),
+        ExprNode::Uint8(n)   => ConstInit::Scalar(Const::Uint8(*n)),
         ExprNode::Uint32(n)  => ConstInit::Scalar(Const::Uint32(*n)),
         ExprNode::Uint64(n)  => ConstInit::Scalar(Const::Uint64(*n)),
         ExprNode::Float32(f) => ConstInit::Scalar(Const::Float32(*f)),
         ExprNode::Float64(f) => ConstInit::Scalar(Const::Float64(*f)),
         ExprNode::Unary { op: UnaryOp::Neg, operand } => match &operand.value {
+            ExprNode::Int8(n)    => ConstInit::Scalar(Const::Int8(-*n)),
             ExprNode::Int32(n)   => ConstInit::Scalar(Const::Int32(-*n)),
             ExprNode::Int64(n)   => ConstInit::Scalar(Const::Int64(-*n)),
+            ExprNode::Uint8(n)   => ConstInit::Scalar(Const::Uint8(n.wrapping_neg())),
             ExprNode::Uint32(n)  => ConstInit::Scalar(Const::Uint32(n.wrapping_neg())),
             ExprNode::Uint64(n)  => ConstInit::Scalar(Const::Uint64(n.wrapping_neg())),
             ExprNode::Float32(f) => ConstInit::Scalar(Const::Float32(-*f)),

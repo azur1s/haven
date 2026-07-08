@@ -126,6 +126,7 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
             emitln!(cx, "    {dst} = fneg float {}", emit_value(val)),
         Unary { dst, op, val, ty } =>
             emitln!(cx, "    {dst} = {}, {}", match op {
+                UnaryOp::Neg if ty == Type::Int8 => "sub i8 0",
                 UnaryOp::Neg if ty == Type::Int32 => "sub i32 0",
                 UnaryOp::Neg if ty == Type::Int64 => "sub i64 0",
 
@@ -146,8 +147,8 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
             };
 
             let is_float = matches!(inner, Type::Float32 | Type::Float64);
-            let is_signed_int = matches!(inner, Type::Int32 | Type::Int64);
-            let is_unsigned_int = matches!(inner, Type::Uint32 | Type::Uint64);
+            let is_signed_int = matches!(inner, Type::Int8 | Type::Int32 | Type::Int64);
+            let is_unsigned_int = matches!(inner, Type::Uint8 | Type::Uint32 | Type::Uint64);
 
             let flags_str = if *inner == Type::Float32 || *inner == Type::Float64 {
                 format!(" {}", cx.current_fast_math_flags.to_str())
@@ -310,6 +311,35 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                 (Float64, Uint32) => emitln!(cx, "    {dst} = call i32 @llvm.fptoui.sat.i32.f64(double {value})"),
                 (Float64, Int64)  => emitln!(cx, "    {dst} = call i64 @llvm.fptosi.sat.i64.f64(double {value})"),
                 (Float64, Uint64) => emitln!(cx, "    {dst} = call i64 @llvm.fptoui.sat.i64.f64(double {value})"),
+
+                // --- 8-bit integer (i8 / u8) conversions ---
+                // same 8-bit width: identity bitcast
+                (Int8, Int8) | (Int8, Uint8) | (Uint8, Int8) | (Uint8, Uint8) =>
+                    emitln!(cx, "    {dst} = bitcast i8 {} to i8", value),
+
+                // widening from 8-bit: signed source sign-extends, unsigned zero-extends
+                (Int8, Int32) | (Int8, Uint32)  => emitln!(cx, "    {dst} = sext i8 {} to i32", value),
+                (Int8, Int64) | (Int8, Uint64)  => emitln!(cx, "    {dst} = sext i8 {} to i64", value),
+                (Uint8, Int32) | (Uint8, Uint32) => emitln!(cx, "    {dst} = zext i8 {} to i32", value),
+                (Uint8, Int64) | (Uint8, Uint64) => emitln!(cx, "    {dst} = zext i8 {} to i64", value),
+
+                // narrowing to 8-bit: truncate (signedness of source is irrelevant)
+                (Int32, Int8) | (Int32, Uint8) | (Uint32, Int8) | (Uint32, Uint8) =>
+                    emitln!(cx, "    {dst} = trunc i32 {} to i8", value),
+                (Int64, Int8) | (Int64, Uint8) | (Uint64, Int8) | (Uint64, Uint8) =>
+                    emitln!(cx, "    {dst} = trunc i64 {} to i8", value),
+
+                // 8-bit integer to float
+                (Int8, Float32)  => emitln!(cx, "    {dst} = sitofp i8 {} to float", value),
+                (Int8, Float64)  => emitln!(cx, "    {dst} = sitofp i8 {} to double", value),
+                (Uint8, Float32) => emitln!(cx, "    {dst} = uitofp i8 {} to float", value),
+                (Uint8, Float64) => emitln!(cx, "    {dst} = uitofp i8 {} to double", value),
+
+                // float to 8-bit integer (saturating, matching the wider widths above)
+                (Float32, Int8)  => emitln!(cx, "    {dst} = call i8 @llvm.fptosi.sat.i8.f32(float {value})"),
+                (Float32, Uint8) => emitln!(cx, "    {dst} = call i8 @llvm.fptoui.sat.i8.f32(float {value})"),
+                (Float64, Int8)  => emitln!(cx, "    {dst} = call i8 @llvm.fptosi.sat.i8.f64(double {value})"),
+                (Float64, Uint8) => emitln!(cx, "    {dst} = call i8 @llvm.fptoui.sat.i8.f64(double {value})"),
 
                 (f, t) => unreachable!("unsupported type extension from {f:?} to {t:?}"),
             };
@@ -501,6 +531,10 @@ declare i32 @llvm.fptosi.sat.i32.f64(double)
 declare i32 @llvm.fptoui.sat.i32.f64(double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare i64 @llvm.fptoui.sat.i64.f64(double)
+declare i8 @llvm.fptosi.sat.i8.f32(float)
+declare i8 @llvm.fptoui.sat.i8.f32(float)
+declare i8 @llvm.fptosi.sat.i8.f64(double)
+declare i8 @llvm.fptoui.sat.i8.f64(double)
 
 "#;
 

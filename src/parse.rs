@@ -62,8 +62,10 @@ fn lexer<'a> (
                 .or_not()
         ).try_map(|(n, suffix): (&str, _), span| {
             match suffix {
+                Some(('i', 8))  => try_parse_int!(i8, n, span).map(Token::Int8),
                 Some(('i', 32)) => try_parse_int!(i32, n, span).map(Token::Int32),
                 Some(('i', 64)) => try_parse_int!(i64, n, span).map(Token::Int64),
+                Some(('u', 8))  => try_parse_int!(u8, n, span).map(Token::Uint8),
                 Some(('u', 32)) => try_parse_int!(u32, n, span).map(Token::Uint32),
                 Some(('u', 64)) => try_parse_int!(u64, n, span).map(Token::Uint64),
                 None => try_parse_int!(i32, n, span).map(Token::Int32),
@@ -237,8 +239,10 @@ fn parse_expr<'tks, 'src: 'tks>()
         choice((
             select_ref! {
                 Token::Bool(b)    => ExprNode::Bool(*b),
+                Token::Int8(i)    => ExprNode::Int8(*i),
                 Token::Int32(i)   => ExprNode::Int32(*i),
                 Token::Int64(i)   => ExprNode::Int64(*i),
+                Token::Uint8(u)   => ExprNode::Uint8(*u),
                 Token::Uint32(u)  => ExprNode::Uint32(*u),
                 Token::Uint64(u)  => ExprNode::Uint64(*u),
                 Token::Float32(f) => ExprNode::Float32(*f),

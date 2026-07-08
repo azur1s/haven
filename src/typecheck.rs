@@ -388,8 +388,10 @@ fn check_expr<'a>(
 
     let actual = match value {
         ExprNode::Bool(_)    => Type::Bool,
+        ExprNode::Int8(_)    => Type::Int8,
         ExprNode::Int32(_)   => Type::Int32,
         ExprNode::Int64(_)   => Type::Int64,
+        ExprNode::Uint8(_)   => Type::Uint8,
         ExprNode::Uint32(_)  => Type::Uint32,
         ExprNode::Uint64(_)  => Type::Uint64,
         ExprNode::Float32(_) => Type::Float32,
@@ -442,8 +444,10 @@ fn infer<'a>(
 
     let ty = match value {
         ExprNode::Bool(_)    => Type::Bool,
+        ExprNode::Int8(_)    => Type::Int8,
         ExprNode::Int32(_)   => Type::Int32,
         ExprNode::Int64(_)   => Type::Int64,
+        ExprNode::Uint8(_)   => Type::Uint8,
         ExprNode::Uint32(_)  => Type::Uint32,
         ExprNode::Uint64(_)  => Type::Uint64,
         ExprNode::Float32(_) => Type::Float32,
@@ -859,14 +863,14 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
 fn check_const_initializer<'a>(cx: &Context<'a>, expr: &Expr<'a>) -> Result<(), Error> {
     match &expr.value {
         ExprNode::Bool(_)
-        | ExprNode::Int32(_) | ExprNode::Int64(_)
-        | ExprNode::Uint32(_) | ExprNode::Uint64(_)
+        | ExprNode::Int8(_) | ExprNode::Int32(_) | ExprNode::Int64(_)
+        | ExprNode::Uint8(_) | ExprNode::Uint32(_) | ExprNode::Uint64(_)
         | ExprNode::Float32(_) | ExprNode::Float64(_) => Ok(()),
         // a negated numeric literal, e.g. `-1.0`, is still a constant
         ExprNode::Unary { op: UnaryOp::Neg, operand }
             if matches!(operand.value,
-                ExprNode::Int32(_) | ExprNode::Int64(_)
-                | ExprNode::Uint32(_) | ExprNode::Uint64(_)
+                ExprNode::Int8(_) | ExprNode::Int32(_) | ExprNode::Int64(_)
+                | ExprNode::Uint8(_) | ExprNode::Uint32(_) | ExprNode::Uint64(_)
                 | ExprNode::Float32(_) | ExprNode::Float64(_)) => Ok(()),
         // a bare top-level function name: its address is a link-time constant.
         // a *global* of function type is excluded — reading its value isn't const.

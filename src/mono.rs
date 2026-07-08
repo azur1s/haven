@@ -111,8 +111,10 @@ fn subst_cv<'a>(cv: &ConstVal<'a>, b: &Bindings<'a>) -> ConstVal<'a> {
 /// literal (`const N: u32` bound to 4 -> `4u32`).
 fn const_literal<'a>(cb: &ConstBind<'a>) -> ExprNode<'a> {
     match &cb.ty {
+        Type::Int8   => ExprNode::Int8(cb.val as i8),
         Type::Int32  => ExprNode::Int32(cb.val as i32),
         Type::Int64  => ExprNode::Int64(cb.val as i64),
+        Type::Uint8  => ExprNode::Uint8(cb.val as u8),
         Type::Uint32 => ExprNode::Uint32(cb.val as u32),
         Type::Uint64 => ExprNode::Uint64(cb.val as u64),
         other => panic!("const generic parameter has non-integer type {}", other),
@@ -279,8 +281,10 @@ impl<'p, 'a> Mono<'p, 'a> {
             },
             // leaves: copy as-is (fresh id)
             ExprNode::Bool(v) => ExprNode::Bool(*v),
+            ExprNode::Int8(v) => ExprNode::Int8(*v),
             ExprNode::Int32(v) => ExprNode::Int32(*v),
             ExprNode::Int64(v) => ExprNode::Int64(*v),
+            ExprNode::Uint8(v) => ExprNode::Uint8(*v),
             ExprNode::Uint32(v) => ExprNode::Uint32(*v),
             ExprNode::Uint64(v) => ExprNode::Uint64(*v),
             ExprNode::Float32(v) => ExprNode::Float32(*v),
