@@ -470,8 +470,10 @@ fn parse_type<'tks, 'src: 'tks>()
                     Ok(match *name {
                         "void" => Type::Void,
                         "bool" => Type::Bool,
+                        "i8"   => Type::Int8,
                         "i32"  => Type::Int32,
                         "i64"  => Type::Int64,
+                        "u8"   => Type::Uint8,
                         "u32"  => Type::Uint32,
                         "u64"  => Type::Uint64,
                         "f32"  => Type::Float32,

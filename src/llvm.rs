@@ -16,10 +16,12 @@ fn emit_type(ty: &Type) -> String {
     match ty {
         Void => "void".to_string(),
         Bool => "i1".to_string(),
+        Int8 => "i8".to_string(),
         Int32 => "i32".to_string(),
         Int64 => "i64".to_string(),
-        // LLVM just use i32 for unsigned integers and rely on the
+        // LLVM just use one width for unsigned integers and rely on the
         // instructions (or us) to interpret them correctly
+        Uint8 => "i8".to_string(),
         Uint32 => "i32".to_string(),
         Uint64 => "i64".to_string(),
         Float32 => "float".to_string(),

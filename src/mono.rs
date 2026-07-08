@@ -154,8 +154,10 @@ fn mangle_ty(ty: &Type) -> String {
     match ty {
         Type::Void => "void".into(),
         Type::Bool => "bool".into(),
+        Type::Int8 => "i8".into(),
         Type::Int32 => "i32".into(),
         Type::Int64 => "i64".into(),
+        Type::Uint8 => "u8".into(),
         Type::Uint32 => "u32".into(),
         Type::Uint64 => "u64".into(),
         Type::Float32 => "f32".into(),

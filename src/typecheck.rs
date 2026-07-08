@@ -828,8 +828,8 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
         Type::Pointer(inner) => match &**inner {
             Type::Struct(_)
             | Type::Void | Type::Bool
-            | Type::Int32 | Type::Int64
-            | Type::Uint32 | Type::Uint64
+            | Type::Int8 | Type::Int32 | Type::Int64
+            | Type::Uint8 | Type::Uint32 | Type::Uint64
             | Type::Float32 | Type::Float64
             | Type::Pointer(_) => Ok(()),
             _ => check_export_type(inner), // *[]f32, *str, *simd<...> stay banned
@@ -845,8 +845,8 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
             Err("generic type parameters are not allowed in @export functions".into()),
         // these are all fine across FFI
         Type::Void | Type::Bool
-        | Type::Int32 | Type::Int64
-        | Type::Uint32 | Type::Uint64
+        | Type::Int8 | Type::Int32 | Type::Int64
+        | Type::Uint8 | Type::Uint32 | Type::Uint64
         | Type::Float32 | Type::Float64 => Ok(()),
     }
 }

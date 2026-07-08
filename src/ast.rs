@@ -227,8 +227,8 @@ impl<'a> Display for ConstVal<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type<'a> {
     Void, Bool,
-    Int32, Int64,
-    Uint32, Uint64,
+    Int8, Int32, Int64,
+    Uint8, Uint32, Uint64,
     Float32, Float64,
     Function {
         params: Vec<Type<'a>>,
@@ -253,13 +253,15 @@ pub enum Type<'a> {
 impl<'a> Type<'a> {
     pub fn is_numeric(&self) -> bool {
         matches!(self,
-            Type::Int32 | Type::Int64
-            | Type::Uint32 | Type::Uint64
+            Type::Int8 | Type::Int32 | Type::Int64
+            | Type::Uint8 | Type::Uint32 | Type::Uint64
             | Type::Float32 | Type::Float64)
     }
 
     pub fn is_integer(&self) -> bool {
-        matches!(self, Type::Int32 | Type::Int64 | Type::Uint32 | Type::Uint64)
+        matches!(self,
+            Type::Int8 | Type::Int32 | Type::Int64
+            | Type::Uint8 | Type::Uint32 | Type::Uint64)
     }
 
     pub fn is_numeric_or_numeric_simd(&self) -> bool {
@@ -273,8 +275,8 @@ impl<'a> Display for Type<'a> {
         match self {
             Void => write!(f, "void"),
             Bool => write!(f, "bool"),
-            Uint32 => write!(f, "u32"), Uint64 => write!(f, "u64"),
-            Int32 => write!(f, "i32"), Int64 => write!(f, "i64"),
+            Uint8 => write!(f, "u8"), Uint32 => write!(f, "u32"), Uint64 => write!(f, "u64"),
+            Int8 => write!(f, "i8"), Int32 => write!(f, "i32"), Int64 => write!(f, "i64"),
             Float32 => write!(f, "f32"), Float64 => write!(f, "f64"),
             Function { params, return_type } => {
                 let params_str = params.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");

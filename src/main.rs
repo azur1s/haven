@@ -5,6 +5,7 @@ mod args;
 mod ast;
 mod diag;
 mod intrinsics;
+mod layout;    // C-ABI byte layout of types (size/align/field offsets), for by-value struct FFI
 
 // The compiler is in this order, so you can check out each stage one by one:
 mod module;    // load and merge modules, resolve imports, name-mangle, and inject the prelude
