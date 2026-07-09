@@ -40,9 +40,8 @@ use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
 
-use crate::ast::*;
+use crate::front::{ast::*, parse};
 use crate::diag::{self, Sources};
-use crate::parse;
 
 /// The whole `crt/std` tree, embedded into the binary at build time. Nested
 /// modules just work: `std/dsp/osc` -> `crt/std/dsp/osc.ixc`, no per-file wiring.

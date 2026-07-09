@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::Type;
+use crate::front::ast::Type;
 
 /// Struct definitions, keyed by name: each maps to its ordered `(field, type)`
 /// list. This is the same shape `LowerCtx.structs` already carries (see
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!((size_of(&outer, &s), align_of(&outer, &s)), (12, 4));
 
         // [Inner; 3] is 24 bytes, align 4.
-        let arr = Type::Array(Box::new(Type::Struct("Inner")), crate::ast::ConstVal::Lit(3));
+        let arr = Type::Array(Box::new(Type::Struct("Inner")), crate::front::ast::ConstVal::Lit(3));
         assert_eq!((size_of(&arr, &s), align_of(&arr, &s)), (24, 4));
     }
 
@@ -226,9 +226,9 @@ mod tests {
     fn simd_and_fat_pointers() {
         let s = table(&[]);
         // <2 x f32> -> 8 bytes, align 8; <4 x f32> -> 16 bytes, align 16.
-        let v2 = Type::Simd(Box::new(Type::Float32), crate::ast::ConstVal::Lit(2));
+        let v2 = Type::Simd(Box::new(Type::Float32), crate::front::ast::ConstVal::Lit(2));
         assert_eq!((size_of(&v2, &s), align_of(&v2, &s)), (8, 8));
-        let v4 = Type::Simd(Box::new(Type::Float32), crate::ast::ConstVal::Lit(4));
+        let v4 = Type::Simd(Box::new(Type::Float32), crate::front::ast::ConstVal::Lit(4));
         assert_eq!((size_of(&v4, &s), align_of(&v4, &s)), (16, 16));
 
         // slice / str fat pointer: { ptr@0, i32@8 } -> 16 bytes, align 8.

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-use crate::ast::*;
+use crate::front::ast::*;
 use crate::intrinsics::Intrinsic;
 
 // Unique SSA temps that will never be reassigned
@@ -1443,7 +1443,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 
 pub fn lower<'a>(
     program: &[TopLevel<'a>],
-    typecheck_context: &crate::typecheck::Context<'a>,
+    typecheck_context: &crate::mid::typecheck::Context<'a>,
 ) -> Module<'a> {
     let mut cx = LowerCtx {
         reg_counter: 0,

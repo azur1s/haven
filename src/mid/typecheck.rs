@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::{ast::*, intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound}};
+use crate::{front::ast::*, intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound}};
 
 /// A generic function's signature, in terms of its own type params. param/return
 /// types hold `Type::Param`. Used to typecheck calls before mono materializes the
@@ -558,7 +558,7 @@ fn infer<'a>(
         },
 
         ExprNode::Binary { op, left, right } => {
-            use crate::ast::BinaryOp::*;
+            use crate::front::ast::BinaryOp::*;
             match op {
                 Eq | Ne => {
                     let left_ty = infer(cx, left)?;
@@ -815,7 +815,10 @@ fn check_stmt<'a>(
 /// Check whether a type is allowed in an @export function signature.
 /// Some types are not allowed because they have unknown layout or calling convention,
 /// or I just don't know how to handle it.
-fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
+fn check_export_type<'a>(
+    ty: &Type<'a>,
+    structs: &HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
+) -> Result<(), String> {
     match ty {
         // TODO check if this is correct
         Type::Array(inner, _) =>
@@ -836,15 +839,24 @@ fn check_export_type<'a>(ty: &Type<'a>) -> Result<(), String> {
             | Type::Uint8 | Type::Uint32 | Type::Uint64
             | Type::Float32 | Type::Float64
             | Type::Pointer(_) => Ok(()),
-            _ => check_export_type(inner), // *[]f32, *str, *simd<...> stay banned
+            _ => check_export_type(inner, structs), // *[]f32, *str, *simd<...> stay banned
         },
         Type::Simd(_, _) =>
             Err(format!("SIMD type '{}' is not allowed in @export functions because its calling convention is target-specific and not guaranteed to match the expected caller, or that's what I'm told", ty)),
         Type::Function { .. } =>
             Err("function pointer types are not supported in @export functions".into()),
-        // TODO something like @repr(C)
-        Type::Struct(_) =>
-            Err(format!("struct type '{}' has unknown layout and cannot be used in @export functions", ty)),
+        // A by-value struct is now ABI-lowered (SysV eightbyte classification),
+        // so it may cross the FFI boundary as long as every field is itself
+        // export-safe. Recurse so a struct hiding a slice/str/array is rejected.
+        Type::Struct(name) => {
+            let fields = structs.get(name)
+                .ok_or_else(|| format!("unknown struct '{}'", name))?;
+            for (fname, fty) in fields {
+                check_export_type(fty, structs)
+                    .map_err(|e| format!("field '{}' of struct '{}': {}", fname, name, e))?;
+            }
+            Ok(())
+        }
         Type::Param(_) =>
             Err("generic type parameters are not allowed in @export functions".into()),
         // these are all fine across FFI
@@ -908,14 +920,14 @@ fn check_toplevel<'a>(
                     });
                 }
                 for (param_name, ty) in params {
-                    if let Err(msg) = check_export_type(ty) {
+                    if let Err(msg) = check_export_type(ty, &cx.structs) {
                         return Err(Error {
                             msg: format!("parameter '{}' in @export function '{}': {}", param_name, name, msg),
                             span: node.span.clone(),
                         });
                     }
                 }
-                if let Err(msg) = check_export_type(return_type) {
+                if let Err(msg) = check_export_type(return_type, &cx.structs) {
                     return Err(Error {
                         msg: format!("return type in @export function '{}': {}", name, msg),
                         span: node.span.clone(),

@@ -1,5 +1,7 @@
-use crate::ast::*;
-use crate::mil::*;
+use crate::front::ast::*;
+use crate::mid::mil::*;
+use crate::back::abi::{self, Abi, Reg};
+use crate::back::layout::{self, StructTable};
 
 fn emit_value(val: Value) -> String {
     match val {
@@ -99,14 +101,52 @@ impl FastMathFlags {
     }
 }
 
-struct EmitCtx {
+struct EmitCtx<'a> {
     buf: String,
     current_fast_math_flags: FastMathFlags,
+    /// Struct layouts, for on-the-fly SysV ABI classification of by-value structs.
+    structs: StructTable<'a>,
+    /// Fresh-name counter for ABI coercion temporaries (`%abi.N`), kept separate
+    /// from MIL's `%tN` registers so the two never collide.
+    abi_ctr: usize,
+    /// When the function currently being emitted returns a struct in registers
+    /// (SysV Direct class), this holds the local slot the body writes the result
+    /// into, plus its coerced register pieces — so `ret void` becomes a
+    /// load-and-return of the coerced value. `None` for void/scalar/sret returns.
+    sret_direct: Option<(Register, Vec<Reg>)>,
 }
 
-impl EmitCtx {
+impl<'a> EmitCtx<'a> {
     fn emit(&mut self, str: String) {
         self.buf.push_str(&str);
+    }
+
+    /// A fresh `%abi.N` temporary name for coercion glue.
+    fn abi_tmp(&mut self) -> String {
+        let name = format!("%abi.{}", self.abi_ctr);
+        self.abi_ctr += 1;
+        name
+    }
+
+    /// SysV classification of a by-value struct named `name`.
+    fn struct_abi(&self, name: &str) -> Abi {
+        abi::classify(&Type::Struct(name), &self.structs)
+    }
+
+    /// Byte alignment of struct `name`, for `byval`/`sret` attributes.
+    fn struct_align(&self, name: &str) -> usize {
+        layout::align_of(&Type::Struct(name), &self.structs)
+    }
+}
+
+/// The LLVM type a Direct-class struct is passed/returned as: a single register
+/// type for one eightbyte, or an anonymous `{ .. }` aggregate for two.
+fn coerced_aggregate_ty(regs: &[Reg]) -> String {
+    if regs.len() == 1 {
+        regs[0].to_llvm().to_string()
+    } else {
+        let body = regs.iter().map(|r| r.to_llvm()).collect::<Vec<_>>().join(", ");
+        format!("{{ {body} }}")
     }
 }
 
@@ -117,7 +157,7 @@ macro_rules! emitln {
     }};
 }
 
-fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
+fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
     use Inst::*;
 
     match inst {
@@ -212,20 +252,58 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
                 Callee::Direct(name) => format!("@{name}"),
                 Callee::Indirect(val) => emit_value(val),
             };
-            let args_str = args.into_iter()
-                .map(|(val, ty)| format!("{} {}", emit_type(&ty), emit_value(val)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            match sret {
-                // struct return: void call with the result slot as a leading sret arg
-                Some((slot, name)) => {
-                    let all_args = if args_str.is_empty() {
-                        format!("ptr sret(%{name}) {slot}")
-                    } else {
-                        format!("ptr sret(%{name}) {slot}, {args_str}")
-                    };
-                    emitln!(cx, "    call void {callee_str}({all_args})");
+            // Expand arguments, coercing Direct-class by-value structs into their
+            // eightbyte registers (the loads land before the call, above).
+            let mut arg_frags: Vec<String> = Vec::new();
+            for (val, ty) in args {
+                match &ty {
+                    Type::Struct(name) => match cx.struct_abi(name) {
+                        Abi::Direct(regs) => {
+                            let ptr = emit_value(val);
+                            for (t, v) in emit_struct_to_regs(cx, &ptr, &regs) {
+                                arg_frags.push(format!("{t} {v}"));
+                            }
+                        }
+                        // Memory struct: pass a `byval` pointer. The backend
+                        // copies our storage into the callee's frame, so the
+                        // callee owns its copy (matches the C ABI).
+                        Abi::Memory => arg_frags.push(format!(
+                            "ptr byval(%{name}) align {} {}", cx.struct_align(name), emit_value(val))),
+                    },
+                    _ => arg_frags.push(format!("{} {}", emit_type(&ty), emit_value(val))),
                 }
+            }
+            let args_str = arg_frags.join(", ");
+            match sret {
+                Some((slot, name)) => match cx.struct_abi(name) {
+                    // Direct struct return: the call yields the coerced aggregate;
+                    // unpack it into the caller's result slot.
+                    Abi::Direct(regs) => {
+                        let agg_ty = coerced_aggregate_ty(&regs);
+                        let r = cx.abi_tmp();
+                        emitln!(cx, "    {r} = call {agg_ty} {callee_str}({args_str})");
+                        let vals: Vec<String> = if regs.len() == 1 {
+                            vec![r]
+                        } else {
+                            (0..regs.len()).map(|i| {
+                                let v = cx.abi_tmp();
+                                emitln!(cx, "    {v} = extractvalue {agg_ty} {r}, {i}");
+                                v
+                            }).collect()
+                        };
+                        emit_regs_to_struct(cx, &slot.to_string(), &regs, &vals);
+                    }
+                    // Memory struct return: void call with a leading sret slot arg.
+                    Abi::Memory => {
+                        let sret_arg = format!("ptr sret(%{name}) align {} {slot}", cx.struct_align(name));
+                        let all_args = if args_str.is_empty() {
+                            sret_arg
+                        } else {
+                            format!("{sret_arg}, {args_str}")
+                        };
+                        emitln!(cx, "    call void {callee_str}({all_args})");
+                    }
+                },
                 None => {
                     let dst_prefix = dst.map(|dst| format!("{dst} = ")).unwrap_or_default();
                     emitln!(cx, "    {dst_prefix}call {} {callee_str}({args_str})", emit_type(&return_type));
@@ -359,11 +437,31 @@ fn emit_inst<'a>(cx: &mut EmitCtx, inst: Inst<'a>) {
     };
 }
 
-fn emit_terminator<'a>(cx: &mut EmitCtx, term: Terminator<'a>) {
+fn emit_terminator<'a>(cx: &mut EmitCtx<'a>, term: Terminator<'a>) {
     use Terminator::*;
 
     match term {
-        Return(None) => emitln!(cx, "    ret void"),
+        Return(None) => match cx.sret_direct.clone() {
+            // Direct struct return: the body wrote the result into the slot; pull
+            // the coerced eightbytes back out and return them by value.
+            Some((slot, regs)) => {
+                let pairs = emit_struct_to_regs(cx, &slot.to_string(), &regs);
+                if pairs.len() == 1 {
+                    let (ty, v) = &pairs[0];
+                    emitln!(cx, "    ret {ty} {v}");
+                } else {
+                    let agg_ty = coerced_aggregate_ty(&regs);
+                    let mut cur = "undef".to_string();
+                    for (i, (ty, v)) in pairs.iter().enumerate() {
+                        let next = cx.abi_tmp();
+                        emitln!(cx, "    {next} = insertvalue {agg_ty} {cur}, {ty} {v}, {i}");
+                        cur = next;
+                    }
+                    emitln!(cx, "    ret {agg_ty} {cur}");
+                }
+            }
+            None => emitln!(cx, "    ret void"),
+        },
         Return(Some((value, ty))) => emitln!(cx, "    ret {} {}", emit_type(&ty), emit_value(value)),
         Jump(label) => emitln!(cx, "    br label %{label}"),
         Branch { cond, then_block, else_block } =>
@@ -371,7 +469,7 @@ fn emit_terminator<'a>(cx: &mut EmitCtx, term: Terminator<'a>) {
     }
 }
 
-fn emit_block<'a>(cx: &mut EmitCtx, block: BasicBlock<'a>) {
+fn emit_block<'a>(cx: &mut EmitCtx<'a>, block: BasicBlock<'a>) {
     emitln!(cx, "  {}:", block.id);
     block.instructions.into_iter().for_each(|inst| emit_inst(cx, inst));
     if let Some(terminator) = block.terminator {
@@ -381,7 +479,40 @@ fn emit_block<'a>(cx: &mut EmitCtx, block: BasicBlock<'a>) {
     }
 }
 
-fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {
+/// Emit loads pulling each eightbyte of a Direct-class struct out of the storage
+/// at `struct_ptr`, returning the `(llvm_type, value)` pairs to pass or return.
+fn emit_struct_to_regs<'a>(cx: &mut EmitCtx<'a>, struct_ptr: &str, regs: &[Reg]) -> Vec<(String, String)> {
+    regs.iter().enumerate().map(|(i, r)| {
+        let ty = r.to_llvm();
+        let ptr = gep_eightbyte(cx, struct_ptr, i);
+        let val = cx.abi_tmp();
+        emitln!(cx, "    {val} = load {ty}, ptr {ptr}, align 1");
+        (ty.to_string(), val)
+    }).collect()
+}
+
+/// Emit stores writing each coerced `value` into the struct storage at
+/// `struct_ptr`, at its eightbyte offset — the inverse of `emit_struct_to_regs`.
+fn emit_regs_to_struct<'a>(cx: &mut EmitCtx<'a>, struct_ptr: &str, regs: &[Reg], values: &[String]) {
+    for (i, (r, v)) in regs.iter().zip(values).enumerate() {
+        let ty = r.to_llvm();
+        let ptr = gep_eightbyte(cx, struct_ptr, i);
+        emitln!(cx, "    store {ty} {v}, ptr {ptr}, align 1");
+    }
+}
+
+/// A pointer to eightbyte `i` (byte offset `i*8`) within `struct_ptr`. Offset 0
+/// reuses the base pointer directly.
+fn gep_eightbyte<'a>(cx: &mut EmitCtx<'a>, struct_ptr: &str, i: usize) -> String {
+    if i == 0 {
+        return struct_ptr.to_string();
+    }
+    let ptr = cx.abi_tmp();
+    emitln!(cx, "    {ptr} = getelementptr i8, ptr {struct_ptr}, i64 {}", i * 8);
+    ptr
+}
+
+fn emit_function<'a>(cx: &mut EmitCtx<'a>, func: Function<'a>) {
     let mut export = false;
 
     let attrs = func.attributes.iter()
@@ -409,30 +540,83 @@ fn emit_function<'a>(cx: &mut EmitCtx, func: Function<'a>) {
     let linkage = if export { "dso_local dllexport" } else { "internal" };
     let attrs_str = if attrs.is_empty() { String::new() } else { format!(" {attrs}") };
 
-    let params_str = func.params.into_iter()
-        .map(|(reg, ty)| format!("{} {reg}", emit_type(&ty)))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    // struct-returning functions return void and take a hidden leading sret param
-    let (ret_ty_str, params_str) = match &func.sret {
-        Some((reg, name)) => {
-            let sret_param = format!("ptr sret(%{name}) {reg}");
-            let params = if params_str.is_empty() {
-                sret_param
-            } else {
-                format!("{sret_param}, {params_str}")
-            };
-            ("void".to_string(), params)
+    // Build the parameter list, coercing by-value Direct structs into their
+    // eightbyte registers. Each such struct also needs entry glue that rebuilds
+    // it into the `ptr` register the MIL body expects — recorded here, emitted
+    // once inside the entry block below.
+    let mut sig_params: Vec<String> = Vec::new();
+    let mut param_rebuilds: Vec<(Register, &str, Vec<Reg>, Vec<String>)> = Vec::new();
+    for (reg, ty) in &func.params {
+        match ty {
+            Type::Struct(name) => match cx.struct_abi(name) {
+                Abi::Direct(regs) => {
+                    let names: Vec<String> = regs.iter().map(|_| cx.abi_tmp()).collect();
+                    for (r, n) in regs.iter().zip(&names) {
+                        sig_params.push(format!("{} {n}", r.to_llvm()));
+                    }
+                    param_rebuilds.push((*reg, name, regs, names));
+                }
+                // Memory struct: received as a `byval` pointer — the caller's
+                // copy, which this frame owns. (The MIL body still copies it into
+                // a local on entry; harmless, just a second copy.)
+                Abi::Memory => sig_params.push(format!(
+                    "ptr byval(%{name}) align {} {reg}", cx.struct_align(name))),
+            },
+            _ => sig_params.push(format!("{} {reg}", emit_type(ty))),
         }
-        None => (emit_type(&func.return_type), params_str),
+    }
+
+    // Return type: a Direct struct returns its coerced aggregate (no sret param);
+    // a Memory struct keeps the sret out-pointer; anything else is itself.
+    let ret_ty_str = match &func.sret {
+        Some((reg, name)) => match cx.struct_abi(name) {
+            Abi::Direct(regs) => {
+                // The slot the body writes into is now a local, not a parameter;
+                // record it so each `ret` loads and returns the coerced value.
+                cx.sret_direct = Some((*reg, regs.clone()));
+                coerced_aggregate_ty(&regs)
+            }
+            Abi::Memory => {
+                cx.sret_direct = None;
+                sig_params.insert(0, format!("ptr sret(%{name}) align {} {reg}", cx.struct_align(name)));
+                "void".to_string()
+            }
+        },
+        None => {
+            cx.sret_direct = None;
+            emit_type(&func.return_type)
+        }
     };
+
+    let params_str = sig_params.join(", ");
     emitln!(cx, "define {linkage} {ret_ty_str} @{}({params_str}){attrs_str} {{", func.name);
+
+    // Entry preamble: rebuild Direct struct params into their `ptr` registers,
+    // and allocate the local slot for a Direct struct return. These allocas live
+    // in an unnamed entry block that falls through to the MIL entry.
+    let has_preamble = !param_rebuilds.is_empty() || cx.sret_direct.is_some();
+    let first_block = func.blocks.first().map(|b| b.id);
+    for (reg, name, regs, names) in param_rebuilds {
+        emitln!(cx, "    {reg} = alloca %{name}");
+        emit_regs_to_struct(cx, &reg.to_string(), &regs, &names);
+    }
+    if let Some((reg, _)) = &cx.sret_direct {
+        // struct name for the alloca comes from func.sret
+        let (_, name) = func.sret.as_ref().unwrap();
+        emitln!(cx, "    {reg} = alloca %{name}");
+    }
+    if has_preamble {
+        if let Some(id) = first_block {
+            emitln!(cx, "    br label %{id}");
+        }
+    }
+
     func.blocks.into_iter().for_each(|block| emit_block(cx, block));
     emitln!(cx, "}}");
+    cx.sret_direct = None;
 }
 
-fn emit_extern<'a>(cx: &mut EmitCtx, ext: ExternDecl<'a>) {
+fn emit_extern<'a>(cx: &mut EmitCtx<'a>, ext: ExternDecl<'a>) {
     let attrs = ext.attributes.iter()
         .filter_map(|a| match (a.value.name, a.value.value.as_deref()) {
             ("inline", Some("always")) => Some("alwaysinline"),
@@ -442,11 +626,35 @@ fn emit_extern<'a>(cx: &mut EmitCtx, ext: ExternDecl<'a>) {
         .join(" ");
     let attrs_str = if attrs.is_empty() { String::new() } else { format!(" {attrs}") };
 
-    let params_str = ext.params.into_iter()
-        .map(|ty| emit_type(&ty))
-        .collect::<Vec<_>>()
-        .join(", ");
-    emitln!(cx, "declare {} @{}({params_str}){attrs_str}", emit_type(&ext.return_type), ext.name);
+    let mut params: Vec<String> = ext.params.iter()
+        .flat_map(|ty| abi_param_types(cx, ty))
+        .collect();
+    // A Memory-class struct return uses a hidden leading sret pointer and returns
+    // void — the same shape MIL lowers the matching call to.
+    let ret_str = match &ext.return_type {
+        Type::Struct(name) => match cx.struct_abi(name) {
+            Abi::Direct(regs) => coerced_aggregate_ty(&regs),
+            Abi::Memory => {
+                params.insert(0, format!("ptr sret(%{name}) align {}", cx.struct_align(name)));
+                "void".to_string()
+            }
+        },
+        _ => emit_type(&ext.return_type),
+    };
+    emitln!(cx, "declare {ret_str} @{}({}){attrs_str}", ext.name, params.join(", "));
+}
+
+/// The LLVM parameter type(s) for a single source-level parameter of type `ty`.
+/// A by-value Direct struct expands into its coerced eightbyte registers; a
+/// Memory struct is one `byval` pointer; anything else is one type as usual.
+fn abi_param_types<'a>(cx: &EmitCtx<'a>, ty: &Type<'a>) -> Vec<String> {
+    match ty {
+        Type::Struct(name) => match cx.struct_abi(name) {
+            Abi::Direct(regs) => regs.iter().map(|r| r.to_llvm().to_string()).collect(),
+            Abi::Memory => vec![format!("ptr byval(%{name}) align {}", cx.struct_align(name))],
+        },
+        _ => vec![emit_type(ty)],
+    }
 }
 
 /// Emit a byte blob as the body of an LLVM `c"..."` string constant.
@@ -482,7 +690,7 @@ fn emit_const_init(init: &ConstInit) -> String {
     }
 }
 
-fn emit_module<'a>(cx: &mut EmitCtx, module: Module<'a>) {
+fn emit_module<'a>(cx: &mut EmitCtx<'a>, module: Module<'a>) {
     // read-only global blobs backing string literals (@.str.N)
     for (i, bytes) in module.strings.iter().enumerate() {
         emitln!(cx, "@.str.{i} = private unnamed_addr constant [{} x i8] c\"{}\"",
@@ -542,9 +750,15 @@ pub fn emit<'a>(module: Module<'a>) -> String {
     let mut header = format!("; ModuleID = 'compiled_module'\n");
     header.push_str(PREPEND.trim_start());
 
+    // Struct layouts, for SysV ABI classification during emission.
+    let structs: StructTable = module.structs.iter().cloned().collect();
+
     let mut cx = EmitCtx {
         buf: header,
         current_fast_math_flags: FastMathFlags::None,
+        structs,
+        abi_ctr: 0,
+        sret_direct: None,
     };
     emit_module(&mut cx, module);
     cx.buf

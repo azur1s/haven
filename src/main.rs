@@ -2,19 +2,23 @@ use std::io::Write;
 use clap::Parser;
 
 mod args;
-mod ast;
+// mod ast;
 mod diag;
 mod intrinsics;
-mod layout;    // C-ABI byte layout of types (size/align/field offsets), for by-value struct FFI
+// mod layout;    // C-ABI byte layout of types (size/align/field offsets), for by-value struct FFI
+// mod abi;       // x86-64 SysV eightbyte classification (how by-value structs cross the FFI boundary)
 
 // The compiler is in this order, so you can check out each stage one by one:
-mod module;    // load and merge modules, resolve imports, name-mangle, and inject the prelude
-mod parse;     // parse the merged source into an AST
-mod typecheck; // typecheck the AST, populating node_types and checking for errors
-mod safecheck; // check for runtime safety issues (e.g. heap allocations) in the AST
-mod mono;      // monomorphize the AST, expanding generics into concrete instances
-mod mil;       // lower the AST into a intermediate representation
-mod llvm;      // emit LLVM IR from the intermediate representation
+// mod module;    // load and merge modules, resolve imports, name-mangle, and inject the prelude
+// mod parse;     // parse the merged source into an AST
+// mod typecheck; // typecheck the AST, populating node_types and checking for errors
+// mod safecheck; // check for runtime safety issues (e.g. heap allocations) in the AST
+// mod mono;      // monomorphize the AST, expanding generics into concrete instances
+// mod mil;       // lower the AST into a intermediate representation
+// mod llvm;      // emit LLVM IR from the intermediate representation
+mod front;
+mod mid;
+mod back;
 
 const RUNTIME_ARCHIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libruntime.a"));
 
@@ -37,19 +41,19 @@ fn main() {
     // let prelude = if args.no_prelude { None } else { Some(PRELUDE_SRC) };
     // `sources` is (file-key, src) for every loaded module, so diagnostics below
     // quote the span's owning module — not just the entry file.
-    let (ast, sources) = match module::load_and_merge(&args.input, Some(PRELUDE_SRC), &arena) {
+    let (ast, sources) = match front::module::load_and_merge(&args.input, Some(PRELUDE_SRC), &arena) {
         Ok(pair) => pair,
         Err(()) => std::process::exit(1),
     };
 
     {
-        let mut cx = typecheck::Context::new();
-        let typecheck_errs = typecheck::typecheck_program(&mut cx, &ast);
+        let mut cx = mid::typecheck::Context::new();
+        let typecheck_errs = mid::typecheck::typecheck_program(&mut cx, &ast);
 
         // check if there is no main function when compiling an executable
         if !args.shared && !args.static_lib {
             let main_fn = ast.iter().find_map(|item| {
-                if let ast::TopLevelNode::Function { name, .. } = item.value {
+                if let front::ast::TopLevelNode::Function { name, .. } = item.value {
                     if name == "main" {
                         Some(())
                     } else {
@@ -79,27 +83,27 @@ fn main() {
             // TODO: this re-checks the *whole* program (prelude, std, every
             // concrete fn) from scratch and throws away the first `cx`, when
             // only the new instances actually need checking
-            let (mono_ast, mono_display) = mono::monomorphize(&ast, &arena).unwrap_or_else(|e| {
+            let (mono_ast, mono_display) = mid::mono::monomorphize(&ast, &arena).unwrap_or_else(|e| {
                 diag::report_error("Monomorphization error", &e, &sources);
                 std::process::exit(1);
             });
-            let mut cx = typecheck::Context::new();
-            let mono_errs = typecheck::typecheck_program(&mut cx, &mono_ast);
+            let mut cx = mid::typecheck::Context::new();
+            let mono_errs = mid::typecheck::typecheck_program(&mut cx, &mono_ast);
             if !mono_errs.is_empty() {
                 mono_errs.iter()
                     .for_each(|e| diag::report_error("Typecheck error", e, &sources));
                 std::process::exit(1);
             }
 
-            safecheck::alloc_check_program(&mono_ast, &mono_display).unwrap_or_else(|errs| {
+            mid::safecheck::alloc_check_program(&mono_ast, &mono_display).unwrap_or_else(|errs| {
                 for err in &errs {
                     diag::report_error("Check error", err, &sources);
                 }
                 std::process::exit(1);
             });
 
-            let mil = mil::lower(&mono_ast, &cx);
-            let llvm_ir = llvm::emit(mil);
+            let mil = mid::mil::lower(&mono_ast, &cx);
+            let llvm_ir = back::llvm::emit(mil);
 
             let llvm_ir_output_path = args.output.with_extension("ll");
 

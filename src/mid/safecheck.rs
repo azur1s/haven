@@ -1,4 +1,4 @@
-use crate::{ast::*, intrinsics::Intrinsic};
+use crate::{front::ast::*, intrinsics::Intrinsic};
 use std::collections::{HashMap, HashSet};
 
 // Runtime-safety (`@alloc(false)`) checking.

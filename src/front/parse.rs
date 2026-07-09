@@ -4,7 +4,7 @@ use chumsky::{
     pratt::*,
     prelude::*,
 };
-use crate::ast::*;
+use crate::front::ast::*;
 
 /// Leak a String to get a `&'static str` (coerces to the source lifetime). used
 /// for the few synthetic identifiers the parser has to mint, e.g. the joined

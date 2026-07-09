@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use ariadne::{Color, Label, Report, ReportKind};
 
-use crate::ast::{Error, Span};
+use crate::front::ast::{Error, Span};
 
 /// `(file-key, source-text)` for every module a diagnostic might point into.
 /// Built once by the module loader (keys match `Span::file`) and threaded down

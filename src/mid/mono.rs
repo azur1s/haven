@@ -14,7 +14,7 @@ use std::collections::{HashMap, VecDeque};
 
 use bumpalo::Bump;
 
-use crate::ast::*;
+use crate::front::ast::*;
 
 /// one requested instantiation: `base` specialized to `args`, emitted as
 /// `mangled`. `span` is the call site that first asked for it (for errors).
