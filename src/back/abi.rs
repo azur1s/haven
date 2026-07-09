@@ -11,6 +11,12 @@
 //! integers, floats, pointers and small SIMD. Anything larger is MEMORY. We do
 //! not model `__m256`/`__m512` (SSEUP) or unaligned/packed structs, since the
 //! language produces neither.
+//!
+//! On Windows we instead follow the Microsoft x64 convention, which diverges
+//! only for aggregates: a struct/array of size 1/2/4/8 bytes rides in a single
+//! *integer* register (even an all-float one like `Vector2`), and every other
+//! aggregate is passed by reference (`byval`/`sret`). Scalars are unchanged. See
+//! [`classify_win64`].
 
 use crate::front::ast::Type;
 use crate::back::layout::{self, StructTable};
@@ -95,8 +101,21 @@ fn merge(a: Class, b: Class) -> Class {
     }
 }
 
-/// Classify how `ty` is passed/returned on x86-64 SysV.
+/// Classify how `ty` is passed/returned across the C ABI, picking the flavor for
+/// the target we compile to. ixc currently emits code for the host, so the
+/// choice is made by `cfg!` — a Windows-hosted compiler uses the Microsoft x64
+/// convention, everything else x86-64 System V. When a real `--target` flag
+/// lands, thread the selector through here instead.
 pub fn classify<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
+    if cfg!(target_os = "windows") {
+        classify_win64(ty, structs)
+    } else {
+        classify_sysv(ty, structs)
+    }
+}
+
+/// Classify how `ty` is passed/returned on x86-64 System V (Linux, macOS, BSDs).
+pub fn classify_sysv<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
     let size = layout::size_of(ty, structs);
 
     // Zero-sized: nothing to pass.
@@ -133,6 +152,34 @@ pub fn classify<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
         })
         .collect();
     Abi::Direct(regs)
+}
+
+/// Classify how `ty` is passed/returned under the Microsoft x64 convention
+/// (Windows).
+///
+/// The rules only diverge from SysV for aggregates:
+///
+///   * A struct/array whose size is exactly 1/2/4/8 bytes rides in a single
+///     *integer* register of that width — even an all-float one like `Vector2`,
+///     which SysV would hand to an SSE register as `<2 x float>`. This is why
+///     by-value struct FFI to raylib silently misdrew on Windows before.
+///   * Any other aggregate (sizes 3/5/6/7, or larger than 8 bytes) is passed by
+///     reference: a `byval` pointer argument / `sret` return slot.
+///
+/// Scalars — including pointers and SIMD vector types — keep their natural
+/// register, exactly as under SysV, so we delegate anything that isn't a struct
+/// or array to [`classify_sysv`]. The downstream pack/unpack glue is bytewise, so
+/// coercing an all-float eightbyte to `i64` needs no other changes.
+pub fn classify_win64<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
+    match ty {
+        Type::Struct(_) | Type::Array(..) => match layout::size_of(ty, structs) {
+            0 => Abi::Direct(vec![]),
+            size @ (1 | 2 | 4 | 8) => Abi::Direct(vec![Reg::Int(size)]),
+            _ => Abi::Memory,
+        },
+        // Scalars/pointers/SIMD are placed identically to SysV.
+        _ => classify_sysv(ty, structs),
+    }
 }
 
 /// Accumulated state for one eightbyte as leaves are folded into it.
@@ -258,12 +305,21 @@ mod tests {
         defs.iter().cloned().collect()
     }
 
-    /// Classify and render as the list of LLVM coercion types (or "memory").
-    fn llvm<'a>(ty: &Type<'a>, s: &StructTable<'a>) -> Vec<String> {
-        match classify(ty, s) {
+    fn render(abi: Abi) -> Vec<String> {
+        match abi {
             Abi::Memory => vec!["memory".into()],
             Abi::Direct(regs) => regs.iter().map(|r| r.to_llvm().to_string()).collect(),
         }
+    }
+
+    /// Classify on SysV and render as the list of LLVM coercion types (or "memory").
+    fn llvm<'a>(ty: &Type<'a>, s: &StructTable<'a>) -> Vec<String> {
+        render(classify_sysv(ty, s))
+    }
+
+    /// Same, but classify under the Microsoft x64 convention.
+    fn llvm_win64<'a>(ty: &Type<'a>, s: &StructTable<'a>) -> Vec<String> {
+        render(classify_win64(ty, s))
     }
 
     #[test]
@@ -414,5 +470,74 @@ mod tests {
             vec![("xs", Type::Array(Box::new(Type::Float32), ConstVal::Lit(3)))],
         )]);
         assert_eq!(llvm(&Type::Struct("Arr"), &s), ["<2 x float>", "float"]);
+    }
+
+    // --- Microsoft x64 (Windows) ------------------------------------------
+
+    #[test]
+    fn win64_scalars_match_sysv() {
+        // Bare scalars keep their natural register on both ABIs: floats in SSE,
+        // ints/pointers in GP.
+        let s = table(&[]);
+        assert_eq!(llvm_win64(&Type::Int8, &s), ["i8"]);
+        assert_eq!(llvm_win64(&Type::Int64, &s), ["i64"]);
+        assert_eq!(llvm_win64(&Type::Float32, &s), ["float"]);
+        assert_eq!(llvm_win64(&Type::Float64, &s), ["double"]);
+        assert_eq!(llvm_win64(&Type::Pointer(Box::new(Type::Int8)), &s), ["ptr"]);
+    }
+
+    #[test]
+    fn win64_color_still_packs_to_one_i32() {
+        // 4-byte aggregate -> one integer register on both ABIs (this is why
+        // colors always rendered on Windows).
+        let s = table(&[(
+            "Color",
+            vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8), ("a", Type::Uint8)],
+        )]);
+        assert_eq!(llvm_win64(&Type::Struct("Color"), &s), ["i32"]);
+    }
+
+    #[test]
+    fn win64_vector2_is_one_integer_register() {
+        // The regression: an 8-byte all-float struct goes in a *GP* register on
+        // Win64 (i64), not an SSE `<2 x float>` as under SysV.
+        let s = table(&[("Vector2", vec![("x", Type::Float32), ("y", Type::Float32)])]);
+        assert_eq!(llvm_win64(&Type::Struct("Vector2"), &s), ["i64"]);
+        assert_eq!(llvm(&Type::Struct("Vector2"), &s), ["<2 x float>"]); // SysV, for contrast
+    }
+
+    #[test]
+    fn win64_pointer_wrapper_is_one_integer_register() {
+        // An 8-byte struct wrapping a pointer also passes as a single i64.
+        let s = table(&[("Ref", vec![("p", Type::Pointer(Box::new(Type::Float32)))])]);
+        assert_eq!(llvm_win64(&Type::Struct("Ref"), &s), ["i64"]);
+    }
+
+    #[test]
+    fn win64_odd_sized_aggregate_goes_to_memory() {
+        // 3 bytes is not 1/2/4/8, so it is passed by reference — unlike SysV,
+        // which would coalesce it into one small integer eightbyte.
+        let s = table(&[(
+            "Rgb",
+            vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8)],
+        )]);
+        assert!(classify_win64(&Type::Struct("Rgb"), &s).is_memory());
+    }
+
+    #[test]
+    fn win64_over_eight_bytes_goes_to_memory() {
+        // Vector3 (12 bytes) and Rectangle (16 bytes) both pass by reference on
+        // Win64, where SysV would split them across two registers.
+        let s = table(&[
+            ("Vector3", vec![("x", Type::Float32), ("y", Type::Float32), ("z", Type::Float32)]),
+            ("Rectangle", vec![
+                ("x", Type::Float32), ("y", Type::Float32),
+                ("w", Type::Float32), ("h", Type::Float32),
+            ]),
+        ]);
+        assert!(classify_win64(&Type::Struct("Vector3"), &s).is_memory());
+        assert!(classify_win64(&Type::Struct("Rectangle"), &s).is_memory());
+        // SysV keeps them in registers.
+        assert_eq!(llvm(&Type::Struct("Vector3"), &s), ["<2 x float>", "float"]);
     }
 }

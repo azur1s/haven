@@ -43,10 +43,13 @@ proc osc_set_freq(o: *Osc, freq: f32, sr: f32) {
     o.inc = freq / sr;
 }
 
+proc osc_set_phase(o: *Osc, phase: f32) {
+    o.phase = fmodf(phase, 1.0);
+}
+
 @alloc(false)
 proc osc_advance(o: *Osc) {
-    o.phase = o.phase + o.inc;
-    if (o.phase >= 1.0) { o.phase = o.phase - 1.0; }
+    o.phase = fmodf(o.phase + o.inc, 1.0);
 }
 
 @alloc(false)
