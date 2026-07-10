@@ -389,6 +389,7 @@ fn parse_expr<'tks, 'src: 'tks>()
 
             bin!(BinaryOp::Mul, 180),
             bin!(BinaryOp::Div, 180),
+            bin!(BinaryOp::Mod, 180),
 
             bin!(BinaryOp::Add, 170),
             bin!(BinaryOp::Sub, 170),

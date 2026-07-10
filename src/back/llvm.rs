@@ -162,16 +162,25 @@ fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
 
     match inst {
         Comment(s) => emitln!(cx, "    ; {}", s),
-        Unary { dst, op: UnaryOp::Neg, val, ty: Type::Float32 } =>
-            emitln!(cx, "    {dst} = fneg float {}", emit_value(val)),
+        // Negation. Floats (scalar or SIMD lanes) use `fneg`; integers, signed or
+        // unsigned, use `0 - x` (a vector zero is `zeroinitializer`). Signedness
+        // is irrelevant: two's-complement negation is the same bit pattern.
+        Unary { dst, op: UnaryOp::Neg, val, ty } => {
+            let inner = match &ty {
+                Type::Simd(inner, _) => inner.as_ref(),
+                _ => &ty,
+            };
+            let ty_str = emit_type(&ty);
+            if matches!(inner, Type::Float32 | Type::Float64) {
+                emitln!(cx, "    {dst} = fneg {ty_str} {}", emit_value(val));
+            } else {
+                let zero = if matches!(ty, Type::Simd(_, _)) { "zeroinitializer" } else { "0" };
+                emitln!(cx, "    {dst} = sub {ty_str} {zero}, {}", emit_value(val));
+            }
+        }
         Unary { dst, op, val, ty } =>
             emitln!(cx, "    {dst} = {}, {}", match op {
-                UnaryOp::Neg if ty == Type::Int8 => "sub i8 0",
-                UnaryOp::Neg if ty == Type::Int32 => "sub i32 0",
-                UnaryOp::Neg if ty == Type::Int64 => "sub i64 0",
-
-                // UnaryOp::Neg if ty == Type::Float32 => "fneg float",
-                UnaryOp::Neg => unreachable!(),
+                UnaryOp::Neg => unreachable!("handled above"),
                 UnaryOp::Not if ty == Type::Int32 => "xor i32 -1",
                 UnaryOp::Not => "xor i1 1", // logical not
                 // this should've be mapped to different instructions (mil.rs)
