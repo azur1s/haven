@@ -417,15 +417,19 @@ impl<'a> Display for GenericParam<'a> {
 pub enum GenericArg<'a> {
     /// A type argument, e.g. `f32`, `[i32; 4]`, `*T`.
     Type(Type<'a>),
-    /// A compile-time constant argument (literal only for now), e.g. `4`.
-    Const(i64),
+    /// A compile-time constant argument: either a literal (`4`) or a const
+    /// generic parameter forwarded by name (the `N` in `simd_load::<f32, N>`).
+    /// Note the parser can't tell a forwarded const param from a type — both are
+    /// bare idents — so it emits those as `Type(Struct(name))`; typecheck and
+    /// monomorphization reclassify them once the callee's kinds are known.
+    Const(ConstVal<'a>),
 }
 
 impl<'a> Display for GenericArg<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             GenericArg::Type(ty) => write!(f, "{}", ty),
-            GenericArg::Const(n) => write!(f, "{}", n),
+            GenericArg::Const(cv) => write!(f, "{}", cv),
         }
     }
 }

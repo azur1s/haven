@@ -265,6 +265,12 @@ pub struct LowerCtx<'a> {
     pub resolved: HashMap<usize, Binding<'a>>, // from typecheck
     pub current_return_type: Type<'a>,        // return type of the function being lowered
     pub sret_param: Option<Register>,         // out-pointer slot, if the current fn returns a struct
+    /// When set, the next struct/array literal lowered fills this pre-allocated
+    /// slot instead of allocating a fresh one. Used to hoist a loop-local's slot
+    /// to the entry block (see `collect_locals`) so it isn't re-alloca'd every
+    /// iteration. The literal lowering `take()`s it, so it applies to exactly the
+    /// outermost literal and never leaks into nested field/element literals.
+    pub store_target: Option<Register>,
     pub strings: Vec<Vec<u8>>,                // interned string-literal blobs (-> @.str.N)
 }
 
@@ -380,7 +386,7 @@ fn ta_type<'a>(type_args: &[GenericArg<'a>], i: usize) -> Type<'a> {
 /// Pulls a const from a turbofish const argument.
 fn ta_const(type_args: &[GenericArg<'_>], i: usize) -> usize {
     match &type_args[i] {
-        GenericArg::Const(n) => *n as usize,
+        GenericArg::Const(cv) => cv.expect_lit(),
         _ => unreachable!("expected a const argument at position {i}"),
     }
 }
@@ -630,8 +636,17 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
         }
 
         ExprNode::Struct { name, fields } => {
-            let dst = cx.fresh_reg();
-            cx.emit(Inst::AllocaStruct { dst, name, align: None });
+            // reuse a hoisted entry-block slot if the caller provided one;
+            // otherwise this literal owns a fresh slot. take() so nested field
+            // literals don't inherit the target.
+            let dst = match cx.store_target.take() {
+                Some(slot) => slot,
+                None => {
+                    let dst = cx.fresh_reg();
+                    cx.emit(Inst::AllocaStruct { dst, name, align: None });
+                    dst
+                }
+            };
 
             for (i, (_field_name, field_expr)) in fields.iter().enumerate() {
                 let field_ty = cx.structs[name][i].1.clone();
@@ -719,12 +734,21 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             };
 
             // %arr_reg = alloca [N x T]
-            let arr_reg = cx.fresh_reg();
-            cx.emit(Inst::AllocaArray {
-                dst: arr_reg,
-                ty: ty.clone(),
-                length: elements.len(),
-            });
+            // a fixed array bound to a local may reuse a hoisted entry-block slot
+            // (see `collect_locals`); the fat-pointer case always allocs backing
+            // storage fresh and never carries a store_target.
+            let arr_reg = match (is_fixed, cx.store_target.take()) {
+                (true, Some(slot)) => slot,
+                _ => {
+                    let arr_reg = cx.fresh_reg();
+                    cx.emit(Inst::AllocaArray {
+                        dst: arr_reg,
+                        ty: ty.clone(),
+                        length: elements.len(),
+                    });
+                    arr_reg
+                }
+            };
 
             // %ptr = gep
             for (index, element) in elements.iter().enumerate() {
@@ -1082,12 +1106,24 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             // this local's binding identity is the Declare stmt's node id, matching
             // what name resolution recorded for every use of it.
             let binding = Binding::Local(stmt.id);
+            // A struct/array literal local has a slot hoisted to the entry block
+            // (collect_locals pre-allocated it into env); point the literal at that
+            // slot so it fills it in place instead of alloca'ing at the literal
+            // site — which, inside a loop, would grow the stack every iteration.
+            if matches!(ty, Type::Array(_, _) | Type::Struct(_))
+                && matches!(value.value, ExprNode::Struct { .. } | ExprNode::Slice(_))
+            {
+                let (slot, _) = cx.env[&binding]; // pre-allocated in the entry block
+                cx.store_target = Some(slot);
+                lower_expr(cx, value); // fills `slot`, consuming store_target
+                return;
+            }
             let val = lower_expr(cx, value);
             let value_ty = cx.node_types[&value.id].clone();
             match ty {
                 Type::Array(_, _) => {
-                    // for fixed-size arrays, we don't alloca the array, we
-                    // just store the value directly into the variable's register
+                    // a non-literal array value (e.g. a var) is already backed by a
+                    // slot; adopt its register directly.
                     let arr_reg = match val {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
@@ -1099,13 +1135,11 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
                     };
-                    // if the RHS already owns a fresh slot, adopt it as this
-                    // local's storage & no copy needed: a struct literal allocs
-                    // its own slot, and a struct-returning call writes into a
-                    // fresh sret slot nobody else aliases.
-                    // anything else (Var, field access, etc.) references someone
-                    // else's storage and needs a copy for value semantics.
-                    if matches!(value.value, ExprNode::Struct { .. } | ExprNode::Call { .. }) {
+                    // a struct-returning call writes into a fresh sret slot nobody
+                    // else aliases, so adopt it. anything else (Var, field access,
+                    // etc.) references someone else's storage and needs a copy for
+                    // value semantics. (Struct literals are handled above.)
+                    if matches!(value.value, ExprNode::Call { .. }) {
                         cx.env.insert(binding, (src_reg, ty.clone()));
                     } else {
                         let dst_reg = cx.fresh_reg();
@@ -1252,12 +1286,21 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 /// This is for emitting all Alloca instructions upfront in the entry block
 fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(usize, &'a str, Type<'a>)>) {
     match &stmt.value {
-        StmtNode::Declare { name, ty, .. } => {
-            // skip fixed arrays and structs: the literal's own alloca becomes
-            // the local's slot (see the Declare arm in lower_stmt)
-            if !matches!(ty, Type::Array(_, _) | Type::Struct(_)) {
-                // key by the Declare stmt's node id (its binding identity)
-                out.push((stmt.id, name, ty.clone()));
+        StmtNode::Declare { name, ty, value } => {
+            // key by the Declare stmt's node id (its binding identity)
+            match ty {
+                // A struct/array *literal* used to alloca at its own site, which
+                // sits inside any enclosing loop body and grows the stack every
+                // iteration. Hoist one slot to the entry block; the Declare arm
+                // fills it in place via store_target. Non-literal struct/array
+                // declares (a struct-returning call, or a var copy) still adopt
+                // or copy in lower_stmt and are not pre-allocated here.
+                Type::Array(_, _) | Type::Struct(_) => {
+                    if matches!(value.value, ExprNode::Struct { .. } | ExprNode::Slice(_)) {
+                        out.push((stmt.id, name, ty.clone()));
+                    }
+                }
+                _ => out.push((stmt.id, name, ty.clone())),
             }
         }
         StmtNode::Block(stmts) => {
@@ -1419,7 +1462,19 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
             for (decl_id, name, ty) in locals {
                 let local_reg = cx.fresh_reg();
                 cx.emit(Inst::Comment(format!("local {}: {}", name, ty)));
-                cx.emit(Inst::Alloca { dst: local_reg, ty: ty.clone(), align: None });
+                match &ty {
+                    // struct/array literal locals are hoisted here (collect_locals)
+                    // so the slot is allocated once, not per loop iteration.
+                    Type::Struct(struct_name) => {
+                        cx.emit(Inst::AllocaStruct { dst: local_reg, name: struct_name, align: None });
+                    }
+                    Type::Array(inner, length) => {
+                        cx.emit(Inst::AllocaArray { dst: local_reg, ty: (**inner).clone(), length: length.expect_lit() });
+                    }
+                    _ => {
+                        cx.emit(Inst::Alloca { dst: local_reg, ty: ty.clone(), align: None });
+                    }
+                }
                 cx.env.insert(Binding::Local(decl_id), (local_reg, ty.clone()));
             }
 
@@ -1466,6 +1521,7 @@ pub fn lower<'a>(
         resolved: typecheck_context.resolved.clone(),
         current_return_type: Type::Void,
         sret_param: None,
+        store_target: None,
         strings: Vec::new(),
     };
 

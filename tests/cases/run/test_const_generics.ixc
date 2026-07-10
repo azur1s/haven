@@ -17,6 +17,14 @@ proc id_simd<T, const N: i32>(x: simd<T, N>) simd<T, N> {
     return x;
 }
 
+// const param forwarded by name into intrinsic turbofishes: `simd_load::<f32, N>`
+// and `simd_store::<f32, N>` reuse the enclosing `const N`, which mono bakes into
+// a concrete lane count (here N = 4).
+proc simd_copy<const N: i32>(dst: [f32], src: [f32]) {
+    let v: simd<f32, N> = simd_load::<f32, N>(src, 0);
+    simd_store::<f32, N>(dst, 0, v);
+}
+
 @export
 proc main() i32 {
     print_i32(lane_count::<8>()); // 8   (instance lane_count$8)
@@ -29,6 +37,13 @@ proc main() i32 {
     let w: simd<f32, 4> = id_simd::<f32, 4>(v);
     simd_store::<f32, 4>(buf, 0, w);
     print_float(buf[0]);            // 2.000000
+
+    // forward the const param through simd_load/simd_store turbofishes
+    let src: [f32] = [7.0f32, 8.0f32, 9.0f32, 10.0f32];
+    let dst: [f32] = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
+    simd_copy::<4>(dst, src);
+    print_float(dst[0]);            // 7.000000
+    print_float(dst[3]);            // 10.000000
 
     return 0;
 }

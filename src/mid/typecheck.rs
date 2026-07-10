@@ -146,7 +146,7 @@ fn bind_generics<'a>(
     type_args: &[GenericArg<'a>],
     args: &[Expr<'a>],
     span: &Span,
-) -> Result<(Vec<Type<'a>>, Vec<usize>), Error> {
+) -> Result<(Vec<Type<'a>>, Vec<ConstVal<'a>>), Error> {
     let n_type = sig.type_params.len();
     let n_const = sig.const_params.len();
 
@@ -183,15 +183,39 @@ fn bind_generics<'a>(
     }
     let mut consts = Vec::with_capacity(n_const);
     for (j, bound) in sig.const_params.iter().enumerate() {
-        match &type_args[n_type + j] {
-            GenericArg::Const(n) => consts.push(check_const_arg(intrinsic, *bound, *n, span)?),
+        let cv = match &type_args[n_type + j] {
+            GenericArg::Const(ConstVal::Lit(n)) => {
+                check_const_arg(intrinsic, *bound, *n as i64, span)?;
+                ConstVal::Lit(*n)
+            }
+            // already-symbolic (not produced by the parser today, but kept total)
+            GenericArg::Const(ConstVal::Param(name)) => ConstVal::Param(name),
+            // a bare ident forwarded from an enclosing `const N` parses as a type;
+            // accept it as a symbolic const and leave the range check to the
+            // post-mono re-typecheck, when the value is a concrete literal.
+            GenericArg::Type(ty) if const_param_name(ty)
+                .is_some_and(|n| cx.const_generics.contains(&n)) =>
+            {
+                ConstVal::Param(const_param_name(ty).unwrap())
+            }
             GenericArg::Type(_) => return Err(Error {
                 msg: format!("{}() expects a const for type argument {}, got a type", intrinsic, n_type + j + 1),
                 span: span.clone(),
             }),
-        }
+        };
+        consts.push(cv);
     }
     Ok((tys, consts))
+}
+
+/// If `ty` is a bare identifier (`Type::Struct` before resolution, or `Type::Param`
+/// after), returns that name — the two shapes a forwarded const generic parameter
+/// can take in a turbofish argument. Compound types are never const params.
+fn const_param_name<'a>(ty: &Type<'a>) -> Option<&'a str> {
+    match ty {
+        Type::Struct(name) | Type::Param(name) => Some(name),
+        _ => None,
+    }
 }
 
 fn typecheck_intrinsic<'a>(
@@ -253,7 +277,7 @@ fn typecheck_intrinsic<'a>(
         }
         Intrinsic::SimdSplat => {
             let ty = tys[0].clone();
-            let size = consts[0];
+            let size = consts[0].clone();
 
             let value_ty = infer(cx, &args[0])?;
             if value_ty != ty {
@@ -263,13 +287,13 @@ fn typecheck_intrinsic<'a>(
                 });
             }
 
-            let simd_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
+            let simd_ty = Type::Simd(Box::new(ty), size);
             cx.node_types.insert(expr_id, simd_ty.clone());
             Ok(simd_ty)
         }
         Intrinsic::SimdLoad => {
             let ty = tys[0].clone();
-            let size = consts[0];
+            let size = consts[0].clone();
 
             let slice_ty = infer(cx, &args[0])?;
             let offset_ty = infer(cx, &args[1])?;
@@ -283,7 +307,7 @@ fn typecheck_intrinsic<'a>(
 
             match slice_ty {
                 Type::Slice(inner) | Type::Pointer(inner) if *inner == ty => {
-                    let simd_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
+                    let simd_ty = Type::Simd(Box::new(ty), size);
                     cx.node_types.insert(expr_id, simd_ty.clone());
                     Ok(simd_ty)
                 },
@@ -297,7 +321,7 @@ fn typecheck_intrinsic<'a>(
         }
         Intrinsic::SimdStore => {
             let ty = tys[0].clone();
-            let size = consts[0];
+            let size = consts[0].clone();
 
             let slice_ty = infer(cx, &args[0])?;
             let offset_ty = infer(cx, &args[1])?;
@@ -310,7 +334,7 @@ fn typecheck_intrinsic<'a>(
                 });
             }
 
-            let expected_value_ty = Type::Simd(Box::new(ty.clone()), ConstVal::Lit(size));
+            let expected_value_ty = Type::Simd(Box::new(ty.clone()), size);
             if value_ty != expected_value_ty {
                 return Err(Error {
                     msg: format!("simd_store() value argument must be a SIMD vector of the element type and size, got {}", value_ty),
@@ -330,39 +354,56 @@ fn typecheck_intrinsic<'a>(
         }
         Intrinsic::SimdConcat => {
             let ty = tys[0].clone();
-            let size = consts[0];
+            let size = consts[0].clone();
 
             let value1_ty = infer(cx, &args[0])?;
             let value2_ty = infer(cx, &args[1])?;
 
-            let expected_value_ty = Type::Simd(Box::new(ty.clone()), ConstVal::Lit(size / 2));
-            if value1_ty != expected_value_ty {
+            // both operands must be half-width vectors of the element type. the
+            // exact half-size relation is only statically checkable when the size
+            // is a literal; for a symbolic const param we verify the shape and
+            // defer the width check to the post-mono re-typecheck.
+            let expected_value_ty = match &size {
+                ConstVal::Lit(n) => Some(Type::Simd(Box::new(ty.clone()), ConstVal::Lit(n / 2))),
+                ConstVal::Param(_) => None,
+            };
+            let half_ok = |v: &Type<'a>| match &expected_value_ty {
+                Some(expected) => v == expected,
+                None => matches!(v, Type::Simd(inner, _) if **inner == ty),
+            };
+            if !half_ok(&value1_ty) {
                 return Err(Error {
                     msg: format!("simd_concat() first value argument must be a SIMD vector of the element type and half the size, got {}", value1_ty),
                     span,
                 });
             }
-            if value2_ty != expected_value_ty {
+            if !half_ok(&value2_ty) {
                 return Err(Error {
                     msg: format!("simd_concat() second value argument must be a SIMD vector of the element type and half the size, got {}", value2_ty),
                     span,
                 });
             }
 
-            let result_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
+            let result_ty = Type::Simd(Box::new(ty.clone()), size.clone());
             cx.node_types.insert(expr_id, result_ty.clone());
             Ok(result_ty)
         }
         Intrinsic::SimdLow | Intrinsic::SimdHigh => {
             // simd_low/high::<T, N>(value: simd[T, M]) -> simd[T, N] where N < M
             let ty = tys[0].clone();
-            let size = consts[0];
+            let size = consts[0].clone();
 
             let value_ty = infer(cx, &args[0])?;
-            // only check if inner type is the same, because size can be different
+            // the input must be a wider vector of the element type. `N < M` is only
+            // checkable statically when both are literals; a symbolic const param
+            // defers the width comparison to the post-mono re-typecheck.
+            let wider = |inner_size: &ConstVal<'a>| match (inner_size, &size) {
+                (ConstVal::Lit(m), ConstVal::Lit(n)) => m > n,
+                _ => true,
+            };
             match value_ty {
-                Type::Simd(inner_ty, inner_size) if *inner_ty == ty && inner_size.expect_lit() > size => {
-                    let result_ty = Type::Simd(Box::new(ty), ConstVal::Lit(size));
+                Type::Simd(ref inner_ty, ref inner_size) if **inner_ty == ty && wider(inner_size) => {
+                    let result_ty = Type::Simd(Box::new(ty.clone()), size.clone());
                     cx.node_types.insert(expr_id, result_ty.clone());
                     Ok(result_ty)
                 }
@@ -1156,23 +1197,36 @@ fn check_generic_call<'a>(
                 }
                 type_bindings.insert(pname, ty);
             }
-            (GenericParam::Const(pname, _), GenericArg::Const(v)) => {
-                if *v < 0 {
-                    return Err(Error {
-                        msg: format!("{}(): const argument '{}' must be non-negative, got {}", name, pname, v),
-                        span: span.clone(),
-                    });
-                }
-                const_bindings.insert(pname, *v as usize);
+            (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Lit(v))) => {
+                const_bindings.insert(pname, *v);
             }
+            // forwarding a const generic by name into another generic function
+            // isn't supported yet: const bindings must reduce to a concrete value
+            // here (they're substituted, not kept symbolic like intrinsic args).
+            (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Param(fwd))) => return Err(Error {
+                msg: format!("{}(): forwarding const parameter '{}' to '{}' is not supported yet", name, fwd, pname),
+                span: span.clone(),
+            }),
             (GenericParam::Type(pname), GenericArg::Const(_)) => return Err(Error {
                 msg: format!("{}(): expected a type argument for '{}', got a const value", name, pname),
                 span: span.clone(),
             }),
-            (GenericParam::Const(pname, _), GenericArg::Type(_)) => return Err(Error {
-                msg: format!("{}(): expected a const argument for '{}', got a type", name, pname),
-                span: span.clone(),
-            }),
+            (GenericParam::Const(pname, _), GenericArg::Type(ty)) => {
+                // a bare-ident turbofish arg that names an in-scope const param is
+                // a (currently unsupported) forward; otherwise it's a real type in
+                // a const slot.
+                if const_param_name(ty).is_some_and(|n| cx.const_generics.contains(&n)) {
+                    return Err(Error {
+                        msg: format!("{}(): forwarding const parameter '{}' to '{}' is not supported yet",
+                            name, const_param_name(ty).unwrap(), pname),
+                        span: span.clone(),
+                    });
+                }
+                return Err(Error {
+                    msg: format!("{}(): expected a const argument for '{}', got a type", name, pname),
+                    span: span.clone(),
+                });
+            }
         }
     }
 

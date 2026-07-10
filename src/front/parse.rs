@@ -329,7 +329,16 @@ fn parse_expr<'tks, 'src: 'tks>()
                 just(Token::ColonColon)
                     .ignore_then(
                         choice((
-                            select! { Token::Int32(n) => GenericArg::Const(n as i64) },
+                            select! { Token::Int32(n) => n }.try_map(|n, span| {
+                                if n < 0 {
+                                    Err(Rich::custom(span, "const turbofish argument must be non-negative"))
+                                } else {
+                                    Ok(GenericArg::Const(ConstVal::Lit(n as usize)))
+                                }
+                            }),
+                            // a bare ident here (e.g. `N`) is ambiguous between a type
+                            // and a forwarded const param; it parses as a type and gets
+                            // reclassified downstream once the callee's kinds are known.
                             parse_type().map(GenericArg::Type),
                         ))
                         .separated_by(just(Token::Comma))

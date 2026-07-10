@@ -53,12 +53,12 @@ proc gen_square_wave(buf_l: *f32, buf_r: *f32, num_samples: i32, phase: f32) {
 
 // vector copy: move 8 samples at a time with one load/store pair
 @alloc(false)
-proc copy_simd(dst: *f32, src: *f32, num_samples: i32) {
+proc copy_simd<const N: u32>(dst: *f32, src: *f32, num_samples: i32) {
     let i: i32 = 0;
     while (i < num_samples) {
-        let v: simd<f32, 8> = simd_load::<f32, 8>(src, i);
-        simd_store::<f32, 8>(dst, i, v);
-        i = i + 8;
+        let v: simd<f32, N> = simd_load::<f32, N>(src, i);
+        simd_store::<f32, N>(dst, i, v);
+        i = i + numerical_cast::<i32>(N);
     }
     // scalar tail copy for any remaining samples (when num_samples is not a
     // multiple of 8)
@@ -128,8 +128,8 @@ proc main() i32 {
         gen_square_wave(orig_l, orig_r, num_samples, phase);
 
         // fresh copy of the originals each frame, then filter it
-        copy_simd(work_l, orig_l, num_samples);
-        copy_simd(work_r, orig_r, num_samples);
+        copy_simd::<8>(work_l, orig_l, num_samples);
+        copy_simd::<8>(work_r, orig_r, num_samples);
         process_stereo(work_l, work_r, num_samples);
 
         BeginDrawing();

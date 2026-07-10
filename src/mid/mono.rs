@@ -144,6 +144,19 @@ fn subst_ty<'a>(ty: &Type<'a>, b: &Bindings<'a>) -> Type<'a> {
     }
 }
 
+/// Substitute bound params in a turbofish argument. A const generic forwarded by
+/// name (`simd_load::<f32, N>`) reaches here as a bare-ident `Type` — but the name
+/// binds in `consts`, not `types` — so resolve it to a literal `Const` argument;
+/// the specialized call then re-typechecks against a concrete value.
+fn subst_targ<'a>(ga: &GenericArg<'a>, b: &Bindings<'a>) -> GenericArg<'a> {
+    match ga {
+        GenericArg::Type(Type::Struct(n) | Type::Param(n)) if b.consts.contains_key(n) =>
+            GenericArg::Const(ConstVal::Lit(b.consts[n].val)),
+        GenericArg::Type(t) => GenericArg::Type(subst_ty(t, b)),
+        GenericArg::Const(cv) => GenericArg::Const(subst_cv(cv, b)),
+    }
+}
+
 /// encode a concrete type into an identifier-safe fragment for a mangled name.
 /// $, _ and alphanumerics are all fine in unquoted LLVM identifiers.
 ///
@@ -229,10 +242,8 @@ impl<'p, 'a> Mono<'p, 'a> {
                     args.iter().map(|a| self.rebuild_expr(a, b)).collect();
                 // sub type params inside the turbofish (user generic calls +
                 // intrinsics like `sizeof::<T>()`)
-                let subst_targs: Vec<GenericArg<'a>> = type_args.iter().map(|ga| match ga {
-                    GenericArg::Type(t) => GenericArg::Type(subst_ty(t, b)),
-                    GenericArg::Const(n) => GenericArg::Const(*n),
-                }).collect();
+                let subst_targs: Vec<GenericArg<'a>> =
+                    type_args.iter().map(|ga| subst_targ(ga, b)).collect();
 
                 // user generic call: mangle to the concrete instance, drop the
                 // turbofish.
@@ -240,8 +251,8 @@ impl<'p, 'a> Mono<'p, 'a> {
                     if self.templates.contains_key(name) {
                         let concrete: Vec<ConcreteArg<'a>> = subst_targs.iter().map(|ga| match ga {
                             GenericArg::Type(t) => ConcreteArg::Type(t.clone()),
-                            // typecheck already validated const args are non-negative.
-                            GenericArg::Const(n) => ConcreteArg::Const(*n as usize),
+                            // subst_targ resolved every const param to a literal.
+                            GenericArg::Const(cv) => ConcreteArg::Const(cv.expect_lit()),
                         }).collect();
                         let mangled = self.request(name, concrete, expr.span.clone());
                         let new_func = Metadata::new(ExprNode::Var(mangled), func.span.clone());
