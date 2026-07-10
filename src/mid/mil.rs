@@ -153,6 +153,11 @@ pub enum Terminator<'a> {
         then_block: BlockId,
         else_block: BlockId,
     },
+
+    // marks a provably unreachable point (e.g. the merge block after an if/else
+    // whose branches both return). only emitted where the typechecker has already
+    // proven control can't actually reach it.
+    Unreachable,
 }
 
 impl <'a> Display for Terminator<'a> {
@@ -164,6 +169,7 @@ impl <'a> Display for Terminator<'a> {
             Terminator::Branch { cond, then_block, else_block } => {
                 write!(f, "br i1 {}, label {}, label {}", cond, then_block, else_block)
             }
+            Terminator::Unreachable => write!(f, "unreachable"),
         }
     }
 }
@@ -1317,7 +1323,7 @@ fn lower_const_init<'a>(
 fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 -> (Vec<(Register, Type<'a>)>, Option<(Register, &'a str)>) {
     match &func.value {
-        TopLevelNode::Function { name, attributes, params, return_type, body, .. } => {
+        TopLevelNode::Function { attributes, params, return_type, body, .. } => {
             let entry = cx.fresh_block();
             cx.current_block = entry;
             cx.current_return_type = return_type.clone();
@@ -1427,9 +1433,11 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                 if *return_type == Type::Void {
                     cx.terminate(Terminator::Return(None));
                 } else {
-                    // should've been caught by typechecker, so if we reach here
-                    // it's a compiler bug
-                    panic!("non-void function {} missing return statement", name);
+                    // typecheck's all-paths-return analysis guarantees every path
+                    // of a non-void function returns, so a block still open at the
+                    // end of the body is provably dead (e.g. the merge block after
+                    // an if/else whose branches both return). mark it unreachable.
+                    cx.terminate(Terminator::Unreachable);
                 }
             }
 

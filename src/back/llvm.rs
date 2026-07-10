@@ -466,6 +466,7 @@ fn emit_terminator<'a>(cx: &mut EmitCtx<'a>, term: Terminator<'a>) {
         Jump(label) => emitln!(cx, "    br label %{label}"),
         Branch { cond, then_block, else_block } =>
             emitln!(cx, "    br i1 {cond}, label %{then_block}, label %{else_block}"),
+        Unreachable => emitln!(cx, "    unreachable"),
     }
 }
 

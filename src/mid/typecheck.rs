@@ -734,6 +734,30 @@ fn infer<'a>(
     Ok(ty)
 }
 
+/// Whether executing `stmt` guarantees control flow never falls through to the
+/// statement after it — i.e. it returns (or diverges) on every path. Used to
+/// verify that a non-void function cannot reach the end of its body without
+/// returning a value.
+///
+/// Conservative on loops: a `while` is assumed to possibly run zero times, so it
+/// never guarantees a return (not even `while (true)`, since there's no
+/// break analysis), and `break`/`continue` count as fall-through.
+fn always_returns(stmt: &Stmt) -> bool {
+    match &stmt.value {
+        StmtNode::Return(_) => true,
+        // a block returns if any statement in it returns (anything after the
+        // first returning statement is dead, which is fine for this check)
+        StmtNode::Block(stmts) => stmts.iter().any(always_returns),
+        // an `if` guarantees a return only with an `else` where BOTH branches
+        // return; a bare `if` falls through when the condition is false.
+        StmtNode::If { then_branch, else_branch, .. } => match else_branch {
+            Some(else_branch) => always_returns(then_branch) && always_returns(else_branch),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
 fn check_stmt<'a>(
     cx: &mut Context<'a>,
     return_ty: &Type<'a>,
@@ -987,6 +1011,22 @@ fn check_toplevel<'a>(
 
             for stmt in body {
                 check_stmt(cx, &return_ty, stmt)?;
+            }
+
+            // a non-void function must return on every path, or control can fall
+            // off the end with no value. structural over the body, so it also
+            // covers generic templates (return_type may still hold `Param`s).
+            if return_ty != Type::Void && !body.iter().any(always_returns) {
+                cx.pop_scope();
+                cx.generics = Vec::new();
+                cx.const_generics = Vec::new();
+                return Err(Error {
+                    msg: format!(
+                        "function '{}' has return type '{}' but not all paths return a value",
+                        name, return_type
+                    ),
+                    span: node.span.clone(),
+                });
             }
 
             cx.pop_scope();

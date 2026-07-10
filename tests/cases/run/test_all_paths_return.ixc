@@ -1,0 +1,28 @@
+// Regression for the all-paths-return bug: an `if`/`else` where both branches
+// return, as a function's *last* statement, used to crash MIL lowering with
+// "non-void function missing return statement" — the dead merge block after the
+// if/else was left unterminated. It must now compile and run, with that merge
+// block emitted as `unreachable`.
+//@ exit: 42
+
+// flat if/else, both branches return, nothing after it
+proc pick(cond: bool) i32 {
+    if (cond) {
+        return 42;
+    } else {
+        return 7;
+    }
+}
+
+@export
+proc main() i32 {
+    let a: i32 = pick(true);   // 42
+    let b: i32 = pick(false);  // 7
+    // the function-final if/else that used to blow up: both arms return, so
+    // there is no fall-through and no trailing `return`.
+    if (a == b) {
+        return 0;
+    } else {
+        return a;
+    }
+}
