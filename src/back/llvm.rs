@@ -695,6 +695,15 @@ fn emit_const_init(init: &ConstInit) -> String {
                 .join(", ");
             format!("{{ {body} }}")
         }
+        // `[ <ety> e0, <ety> e1, ... ]` — the surrounding `[N x <ety>]` type is
+        // emitted by the caller (top-level global or enclosing struct field).
+        ConstInit::Array(elem_ty, elems) => {
+            let body = elems.iter()
+                .map(|init| format!("{} {}", emit_field_type(elem_ty), emit_const_init(init)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{body}]")
+        }
         // a function's address is written as the bare symbol
         ConstInit::FnAddr(name) => format!("@{name}"),
     }

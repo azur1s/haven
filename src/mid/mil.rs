@@ -210,6 +210,8 @@ pub enum ConstInit<'a> {
     /// A constant struct aggregate: one `(field type, field constant)` per field,
     /// in declaration order. Nested structs recurse.
     Struct(Vec<(Type<'a>, ConstInit<'a>)>),
+    /// A constant array aggregate: the element type plus one constant per element.
+    Array(Type<'a>, Vec<ConstInit<'a>>),
     /// The address of a top-level function, emitted as `@name` — a link-time
     /// constant `ptr`. Used for function-pointer fields (e.g. CLAP's `clap_entry`).
     FnAddr(&'a str),
@@ -1319,11 +1321,12 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(usize, &'a str, Type<'a>)>
 }
 
 /// Lower a global's initializer expression to a constant. Scalar literals
-/// (optionally negated) and struct literals of constants are supported; the
-/// typechecker has already rejected anything else, so the unreachable arms
-/// indicate a compiler bug. `structs` supplies field types for struct literals.
+/// (optionally negated), struct/array literals of constants, and function names
+/// are supported; the typechecker has already rejected anything else, so the
+/// unreachable arms indicate a compiler bug. Struct/array field types are read
+/// from `cx.structs` / `cx.node_types`.
 fn lower_const_init<'a>(
-    structs: &HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
+    cx: &mut LowerCtx<'a>,
     expr: &Expr<'a>,
 ) -> ConstInit<'a> {
     match &expr.value {
@@ -1350,11 +1353,24 @@ fn lower_const_init<'a>(
         // struct literal: pair each field's declared type with its constant.
         // typecheck guarantees the fields match the definition in order.
         ExprNode::Struct { name, fields } => {
-            let defs = &structs[name];
-            let inits = defs.iter().zip(fields.iter())
-                .map(|((_, fty), (_, fexpr))| (fty.clone(), lower_const_init(structs, fexpr)))
-                .collect();
+            let defs = cx.structs[name].clone();
+            let mut inits = Vec::with_capacity(fields.len());
+            for ((_, fty), (_, fexpr)) in defs.iter().zip(fields.iter()) {
+                inits.push((fty.clone(), lower_const_init(cx, fexpr)));
+            }
             ConstInit::Struct(inits)
+        }
+        // array literal: the element type comes from the inferred array type.
+        ExprNode::Slice(elements) => {
+            let elem_ty = match cx.node_types.get(&expr.id) {
+                Some(Type::Array(inner, _)) => (**inner).clone(),
+                other => unreachable!("array const initializer has non-array type: {other:?}"),
+            };
+            let mut inits = Vec::with_capacity(elements.len());
+            for elem in elements {
+                inits.push(lower_const_init(cx, elem));
+            }
+            ConstInit::Array(elem_ty, inits)
         }
         // a bare name in a const initializer is a function (typecheck ensured it);
         // its address @name is the constant.
@@ -1575,11 +1591,12 @@ pub fn lower<'a>(
                 structs.push((*name, fields.clone()));
             }
             TopLevelNode::Global { name, attributes, ty, value } => {
+                let init = lower_const_init(&mut cx, value);
                 globals.push(Global {
                     name,
                     export: attributes.iter().any(|a| a.value.name == "export"),
                     ty: ty.clone(),
-                    init: lower_const_init(&cx.structs, value),
+                    init,
                 });
             }
         }

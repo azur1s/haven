@@ -1,0 +1,11 @@
+// Const array literals: a module-level constant array, indexed at runtime.
+
+const NUMS: [i32; 3] = [10, 20, 30];
+
+@export
+proc main() i32 {
+    print_i32(NUMS[0]);
+    print_i32(NUMS[1]);
+    print_i32(NUMS[2]);
+    return 0;
+}

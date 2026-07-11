@@ -962,8 +962,15 @@ fn check_const_initializer<'a>(cx: &Context<'a>, expr: &Expr<'a>) -> Result<(), 
             }
             Ok(())
         }
+        // an array literal is constant iff every element is.
+        ExprNode::Slice(elements) => {
+            for elem in elements {
+                check_const_initializer(cx, elem)?;
+            }
+            Ok(())
+        }
         _ => Err(Error {
-            msg: "global initializer must be a constant (a literal, a struct literal of constants, or a function name)".into(),
+            msg: "global initializer must be a constant (a literal, a struct/array literal of constants, or a function name)".into(),
             span: expr.span.clone(),
         }),
     }
