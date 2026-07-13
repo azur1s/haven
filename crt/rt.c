@@ -8,19 +8,13 @@ struct Slice {
 };
 
 // Heap allocation, exposed to the language via `std/alloc` (see crt/std/alloc.ixc).
-static void rt_oom(void) {
-    fputs("out of memory\n", stderr);
-    abort();
-}
+// On failure these return NULL rather than aborting: `std/alloc` wraps the result
+// in `Option<*T>`, so out-of-memory surfaces as `none` for the caller to handle.
 void* rt_alloc(uint64_t size) {
-    void* p = malloc((size_t)size);
-    if (!p && size != 0) rt_oom();
-    return p;
+    return malloc((size_t)size);
 }
 void* rt_realloc(void* ptr, uint64_t size) {
-    void* p = realloc(ptr, (size_t)size);
-    if (!p && size != 0) rt_oom();
-    return p;
+    return realloc(ptr, (size_t)size);
 }
 void rt_free(void* ptr) { free(ptr); }
 

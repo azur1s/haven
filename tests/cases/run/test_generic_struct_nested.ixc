@@ -1,0 +1,17 @@
+// Stage 3: a generic struct used as another's type argument. Building
+// `Box<Option<i32>>` must request `Option$i32` too — instances requesting more
+// instances, drained to a fixpoint — and nested field access resolves through
+// both substitutions.
+
+struct Option<T> { present: bool, value: T }
+struct Box<T> { inner: T }
+
+@export
+proc main() i32 {
+    let n: Box<Option<i32>> = Box::<Option<i32>> {
+        inner: Option::<i32> { present: true, value: 8 },
+    };
+    print_i32(n.inner.value);   // 8
+    print_i32(n.inner.value + 1); // 9
+    return 0;
+}

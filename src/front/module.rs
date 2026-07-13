@@ -237,8 +237,11 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                         *name = f;
                     }
                 }
-                // a generic struct's arguments are themselves types to rewrite.
-                for a in args { self.ty(a, gparams); }
+                // a generic struct's type arguments are themselves types to
+                // rewrite; const arguments carry no names to resolve.
+                for a in args {
+                    if let GenericArg::Type(t) = a { self.ty(t, gparams); }
+                }
             }
             Type::Pointer(inner)
             | Type::Array(inner, _)
@@ -288,8 +291,11 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 }
                 for a in args { self.expr(a, gparams); }
             }
-            ExprNode::Struct { name, fields } => {
+            ExprNode::Struct { name, type_args, fields } => {
                 if let Some(&f) = self.scopes.types.get(*name) { *name = f; }
+                for a in type_args {
+                    if let GenericArg::Type(t) = a { self.ty(t, gparams); }
+                }
                 for (_, fe) in fields { self.expr(fe, gparams); }
             }
             ExprNode::Access { base, .. } => self.expr(base, gparams),

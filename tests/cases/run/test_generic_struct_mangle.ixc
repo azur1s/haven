@@ -1,0 +1,20 @@
+// Regression for the mangling non-injectivity FIXME. `*i32` used to mangle to
+// `p_i32`, exactly colliding with a struct literally named `p_i32`; once struct
+// args are mangled, `Wrap<*i32>` and `Wrap<p_i32>` produced the same instance key
+// and silently shared one specialization. Type constructors now carry a `.`-tag
+// (disjoint from any struct name), so the two instances stay distinct.
+
+struct p_i32 { a: i32, b: i32 }
+struct Wrap<T> { inner: T }
+
+@export
+proc main() i32 {
+    let x: i32 = 5;
+    let w1: Wrap<*i32> = Wrap::<*i32> { inner: &x };
+    print_i32(*w1.inner);                // 5
+
+    let s: p_i32 = p_i32 { a: 3, b: 7 };
+    let w2: Wrap<p_i32> = Wrap::<p_i32> { inner: s };
+    print_i32(w2.inner.a + w2.inner.b);  // 10
+    return 0;
+}

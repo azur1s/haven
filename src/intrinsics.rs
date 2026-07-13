@@ -1,5 +1,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Intrinsic {
+    /// `null::<T>() -> *T` (a null pointer of type `*T`)
+    Null,
+
     /// `len(slice) -> usize`
     Len,
     /// Numerical type cast
@@ -35,6 +38,7 @@ pub enum Intrinsic {
 impl Intrinsic {
     pub fn lookup(name: &str) -> Option<Self> {
         match name {
+            "null" => Some(Self::Null),
             "len" => Some(Self::Len),
             "numerical_cast" => Some(Self::NumericalCast),
             "sizeof" => Some(Self::Sizeof),
@@ -53,6 +57,7 @@ impl Intrinsic {
 impl std::fmt::Display for Intrinsic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
+            Self::Null => "null",
             Self::Len => "len",
             Self::NumericalCast => "numerical_cast",
             Self::Sizeof => "sizeof",
@@ -121,6 +126,7 @@ impl Intrinsic {
             &'static [ConstBound],
             usize,
         ) = match self {
+            Self::Null          => (&[Any],     &[],           0),
             Self::Len           => (&[],        &[],           1),
             Self::NumericalCast => (&[Numeric], &[],           1),
             Self::Sizeof        => (&[Any],     &[],           0),

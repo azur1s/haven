@@ -1,0 +1,28 @@
+// Stage 3: a generic *function* constructing a generic *struct* with its own
+// forwarded type param — `some<T>(x: T) Option<T>`. mono must instantiate the fn
+// (T = i32) AND, from inside its body, the struct literal `Option::<T>` at the
+// bound T. This composition (incl. a pointer type arg, the `alloc() Option<*T>`
+// shape) is the whole point of the stage.
+
+struct Option<T> { present: bool, value: T }
+
+proc some<T>(x: T) Option<T> {
+    return Option::<T> { present: true, value: x };
+}
+
+proc get<T>(o: Option<T>) T { return o.value; }
+
+@export
+proc main() i32 {
+    let a: Option<i32> = some::<i32>(11);
+    print_i32(get::<i32>(a));    // 11
+
+    let b: Option<f32> = some::<f32>(2.5f32);
+    print_float(get::<f32>(b));  // 2.500000
+
+    // pointer type arg: Option<*i32>, exactly the alloc<T> -> Option<*T> shape.
+    let n: i32 = 7;
+    let p: Option<*i32> = some::<*i32>(&n);
+    print_i32(*get::<*i32>(p));   // 7
+    return 0;
+}

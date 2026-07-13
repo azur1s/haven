@@ -31,6 +31,7 @@ impl Display for Value {
 
 #[derive(Clone, Debug)]
 pub enum Const {
+    Null,
     Undef, // for uninitialized values (e.g. insertvalue with undef)
     Bool(bool),
     Int8(i8),
@@ -49,6 +50,7 @@ pub enum Const {
 impl Display for Const {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Const::Null => write!(f, "null"),
             Const::Undef => write!(f, "undef"),
             Const::Bool(b) => write!(f, "{}", b),
             Const::Int8(n) => write!(f, "{}", n),
@@ -400,6 +402,7 @@ fn lower_intrinsic<'a>(
     args: &[Expr<'a>],
 ) -> Value {
     match intrinsic {
+        Intrinsic::Null => Value::Const(Const::Null),
         Intrinsic::Len => {
             let slice_val = lower_expr(cx, &args[0]);
             let dst = cx.fresh_reg();
@@ -637,7 +640,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             }
         }
 
-        ExprNode::Struct { name, fields } => {
+        ExprNode::Struct { name, fields, .. } => {
             // reuse a hoisted entry-block slot if the caller provided one;
             // otherwise this literal owns a fresh slot. take() so nested field
             // literals don't inherit the target.
@@ -671,6 +674,19 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                             _ => unreachable!(),
                         };
                         copy_struct(cx, inner, src, field_ptr);
+                    }
+                    // an array field is likewise inlined aggregate storage:
+                    // field_val is the source array's address, so copy the whole
+                    // aggregate in (load+store) rather than storing the pointer as
+                    // if it were the array value.
+                    Type::Array(..) => {
+                        let src = match field_val {
+                            Value::Reg(r) => r,
+                            _ => unreachable!(),
+                        };
+                        let loaded = cx.fresh_reg();
+                        cx.emit(Inst::Load { dst: loaded, ptr: src, ty: field_ty.clone(), align: None });
+                        cx.emit(Inst::Store { ptr: field_ptr, val: Value::Reg(loaded), ty: field_ty, align: None });
                     }
                     _ => {
                         cx.emit(Inst::Store {
@@ -713,9 +729,10 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 field_index,
             });
             match field_ty {
-                // a struct-typed field is inlined: its value is its address,
-                // so hand back the field pointer instead of loading it
-                Type::Struct { .. } => Value::Reg(field_ptr),
+                // a struct- or array-typed field is inlined aggregate storage: its
+                // value is its address (indexing/copying use the pointer), so hand
+                // back the field pointer instead of loading it
+                Type::Struct { .. } | Type::Array(..) => Value::Reg(field_ptr),
                 _ => {
                     let dst = cx.fresh_reg();
                     cx.emit(Inst::Load { dst, ptr: field_ptr, ty: field_ty, align: None });
@@ -1352,7 +1369,7 @@ fn lower_const_init<'a>(
         },
         // struct literal: pair each field's declared type with its constant.
         // typecheck guarantees the fields match the definition in order.
-        ExprNode::Struct { name, fields } => {
+        ExprNode::Struct { name, fields, .. } => {
             let defs = cx.structs[name].clone();
             let mut inits = Vec::with_capacity(fields.len());
             for ((_, fty), (_, fexpr)) in defs.iter().zip(fields.iter()) {

@@ -1,0 +1,26 @@
+// Stage 4: const generic args on struct types. `Buf<T, const N>` uses the const
+// param `N` as an array size `[T; N]`; monomorphization binds it (N = 4) and
+// materializes a concrete `Buf$i32$4` with a `[i32; 4]` field. Distinct N (or T)
+// make distinct instances.
+
+struct Buf<T, const N: u32> {
+    data: [T; N],
+    len: u32,
+}
+
+@export
+proc main() i32 {
+    let b: Buf<i32, 4> = Buf::<i32, 4> { data: [10, 20, 30, 40], len: 4u32 };
+    print_i32(b.data[0]);             // 10
+    print_i32(b.data[3]);             // 40
+    print_i32(b.data[1] + b.data[2]); // 50
+
+    // a distinct instance: same T, different N.
+    let c: Buf<i32, 2> = Buf::<i32, 2> { data: [7, 8], len: 2u32 };
+    print_i32(c.data[0] + c.data[1]); // 15
+
+    // a distinct instance: different T.
+    let d: Buf<f32, 2> = Buf::<f32, 2> { data: [1.5f32, 2.5f32], len: 2u32 };
+    print_float(d.data[0] + d.data[1]); // 4.000000
+    return 0;
+}

@@ -250,19 +250,36 @@ fn parse_expr<'tks, 'src: 'tks>()
                 Token::Str(s)     => ExprNode::Str(*s),
             },
 
-            // Struct init, with optional type params: S or S<T1, T2>{f1: v1, f2: v2}
+            // Struct init, with an optional turbofish for generic structs:
+            // `S { f: v }` or `Option::<i32> { f: v }`. The `::` disambiguates the
+            // `<`/`>` from comparison operators, mirroring the call turbofish.
             var.map(|s| *s)
-                // .then(
-                //     parse_type()
-                //         .separated_by(just(Token::Comma))
-                //         .allow_trailing()
-                //         .collect::<Vec<_>>()
-                //         .delimited_by(
-                //             just(Token::BinaryOp(BinaryOp::Lt)),
-                //             just(Token::BinaryOp(BinaryOp::Gt))
-                //         )
-                //         .or_not()
-                // )
+                .then(
+                    just(Token::ColonColon)
+                        .ignore_then(
+                            choice((
+                                select! { Token::Int32(n) => n }.try_map(|n, span| {
+                                    if n < 0 {
+                                        Err(Rich::custom(span, "const turbofish argument must be non-negative"))
+                                    } else {
+                                        Ok(GenericArg::Const(ConstVal::Lit(n as usize)))
+                                    }
+                                }),
+                                // a bare ident is ambiguous between a type and a
+                                // forwarded const param; parses as a type, reclassified
+                                // downstream once the struct's kinds are known.
+                                parse_type().map(GenericArg::Type),
+                            ))
+                                .separated_by(just(Token::Comma))
+                                .allow_trailing()
+                                .collect::<Vec<_>>()
+                                .delimited_by(
+                                    just(Token::BinaryOp(BinaryOp::Lt)),
+                                    just(Token::BinaryOp(BinaryOp::Gt))),
+                        )
+                        .or_not()
+                        .map(|t| t.unwrap_or_default())
+                )
                 .then(
                     var.map(|s| *s)
                         .then_ignore(just(Token::Colon))
@@ -272,8 +289,9 @@ fn parse_expr<'tks, 'src: 'tks>()
                         .collect::<Vec<_>>()
                         .delimited_by(just(Token::LBrace), just(Token::RBrace))
                 )
-                .map(|(name, fields)| ExprNode::Struct {
+                .map(|((name, type_args), fields)| ExprNode::Struct {
                     name,
+                    type_args,
                     fields,
                 }),
 
@@ -534,17 +552,19 @@ fn parse_type<'tks, 'src: 'tks>()
                         };
                         Ok(Type::Simd(Box::new(elem), size))
                     }
-                    // any other head is a generic struct: every argument is a type.
-                    // const arguments in struct types aren't supported yet.
+                    // any other head is a generic struct. arguments are types or
+                    // const values (`Buf<i32, 8>`); a bare ident stays a type and is
+                    // reclassified downstream if the struct declares it `const`.
                     other => {
-                        let mut tys = Vec::with_capacity(args.len());
+                        let mut gargs = Vec::with_capacity(args.len());
                         for a in args {
-                            match a {
-                                GenArg::Ty(t) => tys.push(t),
-                                GenArg::Size(x) => return Err(Rich::custom(span, format!("const argument '{x}' in generic type '{other}<...>' is not supported yet"))),
-                            }
+                            gargs.push(match a {
+                                GenArg::Ty(t) => GenericArg::Type(t),
+                                GenArg::Size(x) if x >= 0 => GenericArg::Const(ConstVal::Lit(x as usize)),
+                                GenArg::Size(x) => return Err(Rich::custom(span, format!("const argument '{x}' in generic type '{other}<...>' must be non-negative"))),
+                            });
                         }
-                        Ok(Type::Struct { name: other, args: tys })
+                        Ok(Type::Struct { name: other, args: gargs })
                     }
                 }
             })

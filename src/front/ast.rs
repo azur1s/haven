@@ -244,12 +244,13 @@ pub enum Type<'a> {
     Simd(Box<Self>, ConstVal<'a>),
     /// Static string slice (like `&'static str` in Rust)
     Str,
-    /// A named struct type, with any generic type arguments applied, e.g.
-    /// `Vec2` (`args` empty) or `Option<i32>` (`args = [i32]`). `args` is always
-    /// empty after monomorphization: a generic struct type is rewritten to a
-    /// concrete instance with a mangled `name` and no `args` (like generic
-    /// functions). Use [`Type::plain_struct`] to build the common no-args case.
-    Struct { name: &'a str, args: Vec<Type<'a>> },
+    /// A named struct type, with any generic arguments applied, e.g. `Vec2`
+    /// (`args` empty), `Option<i32>` (one type arg) or `Buf<i32, 8>` (a type arg
+    /// and a const arg — hence `GenericArg`, not `Type`). `args` is always empty
+    /// after monomorphization: a generic struct type is rewritten to a concrete
+    /// instance with a mangled `name` and no `args` (like generic functions). Use
+    /// [`Type::plain_struct`] to build the common no-args case.
+    Struct { name: &'a str, args: Vec<GenericArg<'a>> },
     /// A generic type parameter, e.g. `T`.
     /// Produced during typechecking by resolving a `Struct(name)` where the name
     /// matches a type param in scope. It is abstract and must never survive to
@@ -325,6 +326,10 @@ pub enum ExprNode<'a> {
 
     Struct {
         name: &'a str,
+        /// Turbofish generic arguments for a generic struct, e.g. the `i32` in
+        /// `Option::<i32> { ... }` or the `i32, 8` in `Buf::<i32, 8> { ... }`.
+        /// Empty for a non-generic struct literal.
+        type_args: Vec<GenericArg<'a>>,
         fields: Vec<(&'a str, Expr<'a>)>,
     },
     Access {
@@ -378,12 +383,17 @@ impl<'a> Display for ExprNode<'a> {
             },
             ExprNode::Access { base, field } => write!(f, "{}.{}", base.value, field),
 
-            ExprNode::Struct { name, fields } => {
+            ExprNode::Struct { name, type_args, fields } => {
+                let turbofish = if type_args.is_empty() {
+                    String::new()
+                } else {
+                    format!("::<{}>", type_args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "))
+                };
                 let fields_str = fields.iter()
                     .map(|(field_name, field_value)| format!("{}: {}", field_name, field_value.value))
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "{} {{ {} }}", name, fields_str)
+                write!(f, "{}{} {{ {} }}", name, turbofish, fields_str)
             },
 
             ExprNode::Index { slice, index } => write!(f, "{}[{}]", slice.value, index.value),

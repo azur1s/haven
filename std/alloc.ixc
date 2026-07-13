@@ -9,20 +9,30 @@
 // pointer.
 // TODO implement Option<T> so alloc returns Option<*T> instead of aborting on OOM.
 
+import std/option
+
 extern rt_alloc(size: u64) *void;
 extern rt_realloc(ptr: *void, size: u64) *void;
 extern rt_free(ptr: *void) void;
 
 // Allocate room for `count` values of type T, uninitialized. Returns a `*T`.
 @alloc(true)
-proc alloc<T>(count: u64) *T {
-    return ptr_cast::<*T>(rt_alloc(count * sizeof::<T>()));
+proc alloc<T>(count: u64) Option<*T> {
+    let ptr: *void = rt_alloc(count * sizeof::<T>());
+    if (ptr == null::<*void>()) {
+        return none::<T>();
+    }
+    return some::<T>(ptr_cast::<*T>(ptr));
 }
 
 // Resize a prior allocation to hold `count` values of type T.
 @alloc(true)
-proc realloc<T>(ptr: *T, count: u64) *T {
-    return ptr_cast::<*T>(rt_realloc(ptr_cast::<*void>(ptr), count * sizeof::<T>()));
+proc realloc<T>(ptr: *T, count: u64) Option<*T> {
+    let new_ptr: *void = rt_realloc(ptr_cast::<*void>(ptr), count * sizeof::<T>());
+    if (new_ptr == null::<*void>()) {
+        return none::<T>();
+    }
+    return some::<T>(ptr_cast::<*T>(new_ptr));
 }
 
 // Free a prior allocation.

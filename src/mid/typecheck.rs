@@ -29,11 +29,13 @@ pub struct Context<'a> {
     pub resolved: HashMap<usize, Binding<'a>>,
     /// Struct definitions from name to ordered list of (field name, field type)
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
-    /// Names of structs declared with type parameters (`struct Option<T>`). Their
-    /// field types are stored with `Type::Param`s, so they can't be instantiated
-    /// until monomorphization of struct types lands (a later stage); construction
-    /// and concrete use are rejected until then.
-    pub generic_structs: std::collections::HashSet<&'a str>,
+    /// Structs declared with generic parameters (`struct Option<T>`,
+    /// `struct Buf<T, const N: u32>`), mapped to their declared params in order
+    /// (type and const interleaved). Field types are stored with `Type::Param`s
+    /// and `ConstVal::Param`s; a construction/turbofish binds those to concrete
+    /// args positionally (the `len()` gives the declared arity). Monomorphization
+    /// rewrites a concrete use to a flat instance before codegen.
+    pub generic_structs: std::collections::HashMap<&'a str, Vec<GenericParam<'a>>>,
     /// Type-param names in scope for the function being checked, e.g. `["T"]`
     /// inside `proc id<T>(...)`. used to resolve a bare `Type::Struct(name)` into
     /// a `Type::Param(name)`. empty outside generics.
@@ -57,7 +59,7 @@ impl<'a> Context<'a> {
             node_types: HashMap::new(),
             resolved: HashMap::new(),
             structs: HashMap::new(),
-            generic_structs: std::collections::HashSet::new(),
+            generic_structs: std::collections::HashMap::new(),
             generics: Vec::new(),
             const_generics: Vec::new(),
             generic_fns: HashMap::new(),
@@ -241,6 +243,13 @@ fn typecheck_intrinsic<'a>(
     let (tys, consts) = bind_generics(cx, intrinsic, &sig, type_args, args, &span)?;
 
     match intrinsic {
+        Intrinsic::Null => {
+            // null::<*T>() -> *T. turbofish validated as a pointer by bind_generics
+            let target_ty = tys[0].clone();
+            cx.node_types.insert(expr_id, target_ty.clone());
+            Ok(target_ty)
+        }
+
         Intrinsic::Len => {
             let arg_ty = infer(cx, &args[0])?;
             if !matches!(arg_ty, Type::Slice(_) | Type::Array(_, _) | Type::Pointer(_) | Type::Str) {
@@ -650,22 +659,45 @@ fn infer<'a>(
             }
         },
 
-        ExprNode::Struct { name, fields } => {
-            // constructing a generic struct needs monomorphization (a later stage)
-            // to know the concrete field types; reject it clearly for now instead
-            // of checking values against the abstract `Param` field types.
-            if cx.generic_structs.contains(name) {
-                return Err(Error {
-                    msg: format!("constructing generic struct '{}' is not supported yet", name),
-                    span,
-                });
-            }
+        ExprNode::Struct { name, type_args, fields } => {
             let def = match cx.structs.get(name) {
                 Some(d) => d.clone(),
                 None => return Err(Error {
                     msg: format!("Unknown struct '{}'", name),
                     span,
                 }),
+            };
+
+            // Bind the struct's params to the turbofish args so `Param` field types
+            // check against a concrete type (and `[T; N]` sizes against a concrete
+            // count). Non-generic structs take no args; a generic struct requires
+            // them (no context inference yet). `struct_args` are the resolved args
+            // in declaration order.
+            let (type_subst, const_subst, struct_args) = match cx.generic_structs.get(name).cloned() {
+                Some(params) => {
+                    if type_args.is_empty() {
+                        return Err(Error {
+                            msg: format!(
+                                "constructing generic struct '{}' needs type arguments, e.g. `{}::<...> {{ ... }}`",
+                                name, name,
+                            ),
+                            span,
+                        });
+                    }
+                    bind_struct_generics(cx, name, &params, type_args, &span)?
+                }
+                None => {
+                    if !type_args.is_empty() {
+                        return Err(Error {
+                            msg: format!(
+                                "struct '{}' is not generic; no type arguments expected",
+                                name,
+                            ),
+                            span,
+                        });
+                    }
+                    (HashMap::new(), HashMap::new(), Vec::new())
+                }
             };
 
             if fields.len() != def.len() {
@@ -678,7 +710,8 @@ fn infer<'a>(
                 });
             }
 
-            // field order must match definition
+            // field order must match definition; each field checks against its
+            // (param-substituted) declared type.
             for ((def_name, def_ty), (lit_name, lit_value)) in def.iter().zip(fields.iter()) {
                 if def_name != lit_name {
                     return Err(Error {
@@ -689,19 +722,24 @@ fn infer<'a>(
                         span: lit_value.span.clone(),
                     });
                 }
-                check_expr(cx, def_ty, lit_value)?;
+                let expected = subst_param_type(&type_subst, &const_subst, def_ty);
+                check_expr(cx, &expected, lit_value)?;
             }
 
-            Type::plain_struct(name)
+            // The literal's type carries its concrete args (`Option<i32>`,
+            // `Buf<i32, 8>`); monomorphization rewrites both this literal and the
+            // type to the flat instance before codegen. Non-generic structs get the
+            // usual no-args `Struct`.
+            Type::Struct { name, args: struct_args }
         },
 
         ExprNode::Access { base, field } => {
             let base_ty = infer(cx, base)?;
-            let struct_name = match &base_ty {
-                Type::Struct { name, .. } => *name,
+            let (struct_name, struct_args) = match &base_ty {
+                Type::Struct { name, args } => (*name, args.as_slice()),
                 // auto-deref one level of pointer to a struct (like C's `->`)
                 Type::Pointer(inner) => match inner.as_ref() {
-                    Type::Struct { name, .. } => *name,
+                    Type::Struct { name, args } => (*name, args.as_slice()),
                     _ => return Err(Error {
                         msg: format!("Cannot access field '{}' on type {}", field, base_ty),
                         span,
@@ -721,12 +759,32 @@ fn infer<'a>(
                 }),
             };
 
-            match def.iter().find(|(n, _)| n == field) {
+            let field_ty = match def.iter().find(|(n, _)| n == field) {
                 Some((_, ty)) => ty.clone(),
                 None => return Err(Error {
                     msg: format!("Struct '{}' has no field '{}'", struct_name, field),
                     span,
                 }),
+            };
+            // for a generic-struct instance (`Option<i32>`, `Buf<i32, 8>`), the
+            // field type is stored with `Param`s (`value: T`, `[T; N]`); substitute
+            // the struct's args so the access yields the concrete field type. mono
+            // later flattens both.
+            if struct_args.is_empty() {
+                field_ty
+            } else {
+                let mut type_subst: HashMap<&'a str, Type<'a>> = HashMap::new();
+                let mut const_subst: HashMap<&'a str, usize> = HashMap::new();
+                if let Some(params) = cx.generic_structs.get(struct_name) {
+                    for (gp, ga) in params.iter().zip(struct_args.iter()) {
+                        match (gp, ga) {
+                            (GenericParam::Type(n), GenericArg::Type(t)) => { type_subst.insert(*n, t.clone()); }
+                            (GenericParam::Const(n, _), GenericArg::Const(ConstVal::Lit(v))) => { const_subst.insert(*n, *v); }
+                            _ => {}
+                        }
+                    }
+                }
+                subst_param_type(&type_subst, &const_subst, &field_ty)
             }
         },
 
@@ -1139,18 +1197,15 @@ fn check_toplevel<'a>(
         }
 
         TopLevelNode::Struct { name, generics, fields, .. } => {
-            // const generic params on structs aren't wired through layout/mono yet
-            // (only type params are). reject them explicitly rather than silently
-            // mis-handling `[T; N]` fields.
-            if let Some(GenericParam::Const(cn, _)) = generics.iter().find(|g| matches!(g, GenericParam::Const(..))) {
-                return Err(Error {
-                    msg: format!("const generic parameter '{}' on struct '{}' is not supported yet", cn, name),
-                    span: node.span.clone(),
-                });
-            }
+            // the struct's own type and const params are in scope inside its fields:
+            // `T` resolves to `Param`, and a `[T; N]` size names the const param `N`.
             let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
                 GenericParam::Type(n) => Some(*n),
                 GenericParam::Const(_, _) => None,
+            }).collect();
+            let const_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
+                GenericParam::Const(n, _) => Some(*n),
+                GenericParam::Type(_) => None,
             }).collect();
             // ensure no duplicate field names and that referenced struct types exist
             let mut seen = std::collections::HashSet::new();
@@ -1165,6 +1220,14 @@ fn check_toplevel<'a>(
                 // aren't reported as unknown struct names.
                 let resolved = resolve_type(&type_params, field_ty);
                 if let Err(msg) = check_type_resolves(cx, &resolved) {
+                    return Err(Error {
+                        msg: format!("In field '{}' of struct '{}': {}", field_name, name, msg),
+                        span: node.span.clone(),
+                    });
+                }
+                // every `ConstVal::Param` in the field (an `[T; N]` size) must name
+                // one of the struct's declared const params.
+                if let Err(msg) = check_const_scope(&const_params, &resolved) {
                     return Err(Error {
                         msg: format!("In field '{}' of struct '{}': {}", field_name, name, msg),
                         span: node.span.clone(),
@@ -1200,7 +1263,11 @@ fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
         Type::Struct { name, args } if args.is_empty() && generics.contains(name) => Type::Param(name),
         Type::Struct { name, args } => Type::Struct {
             name,
-            args: args.iter().map(|a| resolve_type(generics, a)).collect(),
+            // only type args can name a type param; const args pass through.
+            args: args.iter().map(|a| match a {
+                GenericArg::Type(t) => GenericArg::Type(resolve_type(generics, t)),
+                GenericArg::Const(_) => a.clone(),
+            }).collect(),
         },
         Type::Pointer(inner)  => Type::Pointer(Box::new(resolve_type(generics, inner))),
         Type::Array(inner, n) => Type::Array(Box::new(resolve_type(generics, inner)), n.clone()),
@@ -1232,6 +1299,15 @@ fn subst_param_type<'a>(
     };
     match ty {
         Type::Param(name) => types.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        // a generic struct instance can mention params in its args (`Option<T>`,
+        // `Buf<T, N>`); recurse so both type and const args get substituted.
+        Type::Struct { name, args } => Type::Struct {
+            name,
+            args: args.iter().map(|a| match a {
+                GenericArg::Type(t) => GenericArg::Type(subst_param_type(types, consts, t)),
+                GenericArg::Const(cv) => GenericArg::Const(sub_cv(cv)),
+            }).collect(),
+        },
         Type::Pointer(inner)  => Type::Pointer(Box::new(subst_param_type(types, consts, inner))),
         Type::Array(inner, n) => Type::Array(Box::new(subst_param_type(types, consts, inner)), sub_cv(n)),
         Type::Slice(inner)    => Type::Slice(Box::new(subst_param_type(types, consts, inner))),
@@ -1331,6 +1407,75 @@ fn check_generic_call<'a>(
     Ok(return_type)
 }
 
+/// Bind a generic struct's applied args to its declared params (`Buf<i32, 8>` ->
+/// `{T: i32}`, `{N: 8}`), validating arity and each arg's kind. Type args are
+/// resolved against the enclosing function's own generics and checked to exist;
+/// const args must be concrete literals. Returns the type/const substitutions
+/// plus the resolved args (for the resulting `Type::Struct`). Mirrors
+/// `check_generic_call`'s binding, for the struct case.
+fn bind_struct_generics<'a>(
+    cx: &Context<'a>,
+    name: &str,
+    params: &[GenericParam<'a>],
+    args: &[GenericArg<'a>],
+    span: &Span,
+) -> Result<(HashMap<&'a str, Type<'a>>, HashMap<&'a str, usize>, Vec<GenericArg<'a>>), Error> {
+    if args.len() != params.len() {
+        return Err(Error {
+            msg: format!(
+                "struct '{}' expects {} type argument{}, got {}",
+                name, params.len(),
+                if params.len() == 1 { "" } else { "s" }, args.len(),
+            ),
+            span: span.clone(),
+        });
+    }
+    let mut type_subst: HashMap<&'a str, Type<'a>> = HashMap::new();
+    let mut const_subst: HashMap<&'a str, usize> = HashMap::new();
+    let mut resolved: Vec<GenericArg<'a>> = Vec::with_capacity(params.len());
+    for (gp, ga) in params.iter().zip(args) {
+        match (gp, ga) {
+            (GenericParam::Type(pname), GenericArg::Type(ty)) => {
+                let ty = resolve_type(&cx.generics, ty);
+                if let Err(msg) = check_type_resolves(cx, &ty) {
+                    return Err(Error { msg: format!("struct '{}': {}", name, msg), span: span.clone() });
+                }
+                type_subst.insert(pname, ty.clone());
+                resolved.push(GenericArg::Type(ty));
+            }
+            (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Lit(v))) => {
+                const_subst.insert(pname, *v);
+                resolved.push(GenericArg::Const(ConstVal::Lit(*v)));
+            }
+            (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Param(fwd))) => return Err(Error {
+                msg: format!("struct '{}': forwarding const parameter '{}' to '{}' is not supported yet", name, fwd, pname),
+                span: span.clone(),
+            }),
+            (GenericParam::Type(pname), GenericArg::Const(_)) => return Err(Error {
+                msg: format!("struct '{}': expected a type argument for '{}', got a const value", name, pname),
+                span: span.clone(),
+            }),
+            (GenericParam::Const(pname, _), GenericArg::Type(ty)) => {
+                // a bare-ident arg (`N`) parses as a type; if it names an in-scope
+                // const param it's a (currently unsupported) forward, else it's a
+                // real type wrongly placed in a const slot.
+                if const_param_name(ty).is_some_and(|n| cx.const_generics.contains(&n)) {
+                    return Err(Error {
+                        msg: format!("struct '{}': forwarding const parameter '{}' to '{}' is not supported yet",
+                            name, const_param_name(ty).unwrap(), pname),
+                        span: span.clone(),
+                    });
+                }
+                return Err(Error {
+                    msg: format!("struct '{}': expected a const argument for '{}', got a type", name, pname),
+                    span: span.clone(),
+                });
+            }
+        }
+    }
+    Ok((type_subst, const_subst, resolved))
+}
+
 /// Verifies that every `ConstVal::Param` in `ty` names a const generic parameter
 /// in `in_scope`. Ignores type params/structs entirely — those are handled by
 /// `resolve_type`/`check_type_resolves` — so it can run on raw (unresolved) types.
@@ -1364,20 +1509,48 @@ fn check_type_resolves<'a>(cx: &Context<'a>, ty: &Type<'a>) -> Result<(), String
             if !cx.structs.contains_key(name) {
                 return Err(format!("unknown type '{}'", name));
             }
-            // recurse into generic arguments (`Option<Unknown>` must still error).
-            for a in args { check_type_resolves(cx, a)?; }
-            // Stage 1 can *declare* generic structs but not yet instantiate them:
-            // monomorphization of struct types isn't wired up, so a concrete use
-            // like `Option<i32>` would otherwise panic in layout. Reject it with a
-            // clear message until that stage lands.
-            // TODO(stage 3): instantiate instead of rejecting; also check the
-            // argument count against the struct's declared generic arity.
-            if !args.is_empty() {
-                return Err(format!(
-                    "generic struct instantiation ('{}<...>') is not supported yet",
-                    name,
-                ));
+            // recurse into type arguments (`Option<Unknown>` must still error).
+            for a in args {
+                if let GenericArg::Type(t) = a { check_type_resolves(cx, t)?; }
             }
+            // validate the applied argument count against the struct's declared
+            // arity: 0 for a non-generic struct, `params.len()` for a generic one.
+            let params = cx.generic_structs.get(name);
+            let arity = params.map_or(0, |p| p.len());
+            if args.len() != arity {
+                return Err(if arity == 0 {
+                    format!("struct '{}' is not generic; no type arguments expected", name)
+                } else {
+                    format!(
+                        "struct '{}' expects {} type argument{}, got {}",
+                        name, arity,
+                        if arity == 1 { "" } else { "s" }, args.len(),
+                    )
+                });
+            }
+            // each applied arg's kind must match its param (type vs const);
+            // forwarding a const param into a struct type isn't supported yet.
+            if let Some(params) = params {
+                for (gp, ga) in params.iter().zip(args) {
+                    match (gp, ga) {
+                        (GenericParam::Type(_), GenericArg::Type(_)) => {}
+                        (GenericParam::Const(_, _), GenericArg::Const(ConstVal::Lit(_))) => {}
+                        (GenericParam::Const(pn, _), GenericArg::Const(ConstVal::Param(f))) =>
+                            return Err(format!("struct '{}': forwarding const parameter '{}' to '{}' is not supported yet", name, f, pn)),
+                        (GenericParam::Type(pn), GenericArg::Const(_)) =>
+                            return Err(format!("struct '{}': expected a type argument for '{}', got a const value", name, pn)),
+                        (GenericParam::Const(pn, _), GenericArg::Type(t)) => {
+                            if const_param_name(t).is_some_and(|n| cx.const_generics.contains(&n)) {
+                                return Err(format!("struct '{}': forwarding const parameter '{}' to '{}' is not supported yet", name, const_param_name(t).unwrap(), pn));
+                            }
+                            return Err(format!("struct '{}': expected a const argument for '{}', got a type", name, pn));
+                        }
+                    }
+                }
+            }
+            // A concrete generic-struct use (`Option<i32>`, `Buf<i32, 8>`) is now
+            // valid: monomorphization rewrites it to a flat instance before any
+            // later stage.
             Ok(())
         }
         Type::Pointer(inner)
@@ -1409,7 +1582,8 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
             }
             // resolve field types against the struct's own type params so a field
             // referencing `T` is stored as `Type::Param(T)`, not a bogus struct
-            // name. (Body-level validation happens in the main pass below.)
+            // name. (const params already arrive as `ConstVal::Param` from the
+            // parser. Body-level validation happens in the main pass below.)
             let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
                 GenericParam::Type(n) => Some(*n),
                 GenericParam::Const(_, _) => None,
@@ -1418,8 +1592,8 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 .map(|(fname, fty)| (*fname, resolve_type(&type_params, fty)))
                 .collect();
             cx.structs.insert(name, resolved_fields);
-            if !type_params.is_empty() {
-                cx.generic_structs.insert(name);
+            if !generics.is_empty() {
+                cx.generic_structs.insert(name, generics.clone());
             }
         }
     }

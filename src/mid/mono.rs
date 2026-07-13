@@ -25,6 +25,17 @@ struct Instantiation<'a> {
     span: Span,
 }
 
+/// one requested generic-struct instantiation: `struct Buf<T, const N>` at `args`
+/// (`[i32, 8]`), emitted as the concrete `struct Buf$i32$8`. args are types and/or
+/// const values, matching the struct's declared params. `span` points at the
+/// context that first named the type, for the depth-limit diagnostic.
+struct StructInstantiation<'a> {
+    base: &'a str,
+    args: Vec<ConcreteArg<'a>>,
+    mangled: &'a str,
+    span: Span,
+}
+
 /// cap on distinct instantiations. backstop for combinatorial blowup (not
 /// depth-growing); real programs are nowhere near this.
 const INSTANTIATION_LIMIT: usize = 10_000;
@@ -61,6 +72,17 @@ struct Mono<'p, 'a> {
     /// mangled name per instantiation we've already asked for, keyed by the
     /// mangled string, so repeated call sites reuse one instance (one alloc).
     seen: HashMap<String, &'a str>,
+    /// generic struct templates, by name (`Option` -> `struct Option<T> {...}`).
+    struct_templates: HashMap<&'a str, &'p TopLevel<'a>>,
+    /// generic-struct instantiations still to build.
+    struct_queue: VecDeque<StructInstantiation<'a>>,
+    /// mangled name per struct instance already requested, keyed by the mangled
+    /// string, so every concrete `Option$i32` use shares one emitted struct.
+    struct_seen: HashMap<String, &'a str>,
+    /// best-effort span for the context currently being rebuilt, so a struct
+    /// instance requested deep inside `subst_ty` (which has no span of its own)
+    /// still gets a source location for the depth-limit error.
+    cur_span: Span,
     /// mangled instance name -> its human-readable spelling (`m2_alloc$alloc$Vec2`
     /// -> `alloc::<Vec2>`). handed back to the caller so post-mono passes can
     /// report friendly names instead of mangled ones.
@@ -121,60 +143,17 @@ fn const_literal<'a>(cb: &ConstBind<'a>) -> ExprNode<'a> {
     }
 }
 
-/// Substitute bound type and const params in `ty` with their concrete bindings.
-/// in the raw pre-typecheck AST a type param looks like `Type::Struct(name)`
-/// (parser can't tell it from a real struct), so both Struct and Param get
-/// substituted when bound.
-///
-/// FIXME: a real struct named the same as a bound type param gets wrongly
-/// rewritten inside a generic body (e.g. `struct T` used inside `f<T>`). no
-/// scope check distinguishes them. edge case, but there's no guard.
-fn subst_ty<'a>(ty: &Type<'a>, b: &Bindings<'a>) -> Type<'a> {
-    match ty {
-        Type::Param(n) if b.types.contains_key(n) => b.types[n].clone(),
-        // a bare struct name that's actually a bound type param; substitute it.
-        Type::Struct { name, args } if args.is_empty() && b.types.contains_key(name) =>
-            b.types[name].clone(),
-        // a real (possibly generic) struct: substitute inside its type arguments.
-        Type::Struct { name, args } => Type::Struct {
-            name,
-            args: args.iter().map(|a| subst_ty(a, b)).collect(),
-        },
-        Type::Pointer(inner)  => Type::Pointer(Box::new(subst_ty(inner, b))),
-        Type::Array(inner, n) => Type::Array(Box::new(subst_ty(inner, b)), subst_cv(n, b)),
-        Type::Slice(inner)    => Type::Slice(Box::new(subst_ty(inner, b))),
-        Type::Simd(inner, n)  => Type::Simd(Box::new(subst_ty(inner, b)), subst_cv(n, b)),
-        Type::Function { params, return_type } => Type::Function {
-            params: params.iter().map(|p| subst_ty(p, b)).collect(),
-            return_type: Box::new(subst_ty(return_type, b)),
-        },
-        other => other.clone(),
-    }
-}
-
-/// Substitute bound params in a turbofish argument. A const generic forwarded by
-/// name (`simd_load::<f32, N>`) reaches here as a bare-ident `Type` — but the name
-/// binds in `consts`, not `types` — so resolve it to a literal `Const` argument;
-/// the specialized call then re-typechecks against a concrete value.
-fn subst_targ<'a>(ga: &GenericArg<'a>, b: &Bindings<'a>) -> GenericArg<'a> {
-    match ga {
-        GenericArg::Type(Type::Param(n)) if b.consts.contains_key(n) =>
-            GenericArg::Const(ConstVal::Lit(b.consts[n].val)),
-        GenericArg::Type(Type::Struct { name, args }) if args.is_empty() && b.consts.contains_key(name) =>
-            GenericArg::Const(ConstVal::Lit(b.consts[name].val)),
-        GenericArg::Type(t) => GenericArg::Type(subst_ty(t, b)),
-        GenericArg::Const(cv) => GenericArg::Const(subst_cv(cv, b)),
-    }
-}
-
 /// encode a concrete type into an identifier-safe fragment for a mangled name.
-/// $, _ and alphanumerics are all fine in unquoted LLVM identifiers.
+/// `$`, `.`, `_` and alphanumerics are all fine in unquoted LLVM identifiers.
 ///
-/// FIXME: not injective. a struct named `p_i32` mangles the same as `*i32`, and
-/// all function types collapse to "fn". since `request` keys the instance cache
-/// on this string, two different type args that mangle the same silently share
-/// one instantiation -> wrong specialization. (fn types aren't spellable in a
-/// type position yet, so that half is latent for now.)
+/// Injectivity: every type *constructor* (pointer/array/slice/simd/param/fn/
+/// generic-struct) is encoded with a leading `.tag`. A user struct name is a bare
+/// identifier and can never contain `.`, and the scalar keywords are a fixed set
+/// with no `.` — so a constructor fragment can never collide with a struct name
+/// or a scalar. Struct arguments are wrapped in balanced `.lt`/`.gt` so their
+/// boundaries stay unambiguous under nesting. (Two different types therefore
+/// never mangle alike, which matters because `request*` keys its instance cache
+/// on this string — a collision would silently share one instantiation.)
 fn mangle_ty(ty: &Type) -> String {
     match ty {
         Type::Void => "void".into(),
@@ -188,21 +167,34 @@ fn mangle_ty(ty: &Type) -> String {
         Type::Float32 => "f32".into(),
         Type::Float64 => "f64".into(),
         Type::Str => "str".into(),
-        Type::Pointer(inner) => format!("p_{}", mangle_ty(inner)),
-        Type::Array(inner, n) => format!("arr{}_{}", n.expect_lit(), mangle_ty(inner)),
-        Type::Slice(inner) => format!("slice_{}", mangle_ty(inner)),
-        Type::Simd(inner, n) => format!("simd{}_{}", n.expect_lit(), mangle_ty(inner)),
+        Type::Pointer(inner) => format!(".ptr{}", mangle_ty(inner)),
+        Type::Array(inner, n) => format!(".arr{}.{}", n.expect_lit(), mangle_ty(inner)),
+        Type::Slice(inner) => format!(".slice{}", mangle_ty(inner)),
+        Type::Simd(inner, n) => format!(".simd{}.{}", n.expect_lit(), mangle_ty(inner)),
         Type::Struct { name, args } if args.is_empty() => (*name).into(),
-        // a generic struct instance isn't materialized yet (Stage 3); encode its
-        // args so the name stays distinct if one ever reaches here.
+        // a generic struct instance is normally flattened to a bare name before it
+        // reaches here (subst_ty requests it); encode defensively with balanced
+        // brackets so nested args stay unambiguous.
         Type::Struct { name, args } => {
-            let inner = args.iter().map(mangle_ty).collect::<Vec<_>>().join("$");
-            format!("{}${}", name, inner)
+            let inner = args.iter().map(mangle_garg).collect::<Vec<_>>().join(".");
+            format!("{}.lt{}.gt", name, inner)
         }
         // Neither should appear in a fully-concrete instantiation; encode them
         // defensively rather than panicking so a bug surfaces as a bad symbol.
-        Type::Param(name) => format!("param_{}", name),
-        Type::Function { .. } => "fn".into(),
+        Type::Param(name) => format!(".param.{}", name),
+        Type::Function { params, return_type } => {
+            let ps = params.iter().map(mangle_ty).collect::<Vec<_>>().join(".");
+            format!(".fn{}.{}.ret{}", params.len(), ps, mangle_ty(return_type))
+        }
+    }
+}
+
+/// Mangle a generic argument in a struct type's arg list (a type or a const
+/// value). Only reached on the defensive not-yet-flattened path in `mangle_ty`.
+fn mangle_garg(ga: &GenericArg) -> String {
+    match ga {
+        GenericArg::Type(t) => mangle_ty(t),
+        GenericArg::Const(cv) => cv.to_string(),
     }
 }
 
@@ -251,6 +243,83 @@ impl<'p, 'a> Mono<'p, 'a> {
         mangled
     }
 
+    /// Record a generic-struct instantiation request, return its mangled name
+    /// (`Buf` + `[i32, 8]` -> `Buf$i32$8`). de-dupes so each concrete instance is
+    /// built once. Enqueues onto the struct queue, drained after all functions.
+    fn request_struct(&mut self, base: &'a str, args: Vec<ConcreteArg<'a>>) -> &'a str {
+        let key = mangle_name(base, &args);
+        if let Some(&m) = self.struct_seen.get(&key) {
+            return m;
+        }
+        let mangled: &'a str = self.arena.alloc_str(&key);
+        self.struct_seen.insert(key, mangled);
+        self.display.insert(mangled, display_name(base, &args));
+        self.struct_queue.push_back(StructInstantiation {
+            base, args, mangled, span: self.cur_span.clone(),
+        });
+        mangled
+    }
+
+    /// Substitute bound type and const params in `ty` with their concrete
+    /// bindings. In the raw pre-typecheck AST a type param looks like
+    /// `Type::Struct(name)` (parser can't tell it from a real struct), so both
+    /// Struct and Param get substituted when bound.
+    ///
+    /// A concrete generic-struct type (`Option<i32>`, args non-empty) is
+    /// monomorphized here: its args are substituted, the instance is requested,
+    /// and the mangled flat name (`Option$i32`, no args) is returned. Every
+    /// downstream pass therefore only ever sees ordinary no-arg structs.
+    ///
+    /// FIXME: a real struct named the same as a bound type param gets wrongly
+    /// rewritten inside a generic body (e.g. `struct T` used inside `f<T>`). no
+    /// scope check distinguishes them. edge case, but there's no guard.
+    fn subst_ty(&mut self, ty: &Type<'a>, b: &Bindings<'a>) -> Type<'a> {
+        match ty {
+            Type::Param(n) if b.types.contains_key(n) => b.types[n].clone(),
+            // a bare struct name that's actually a bound type param; substitute it.
+            Type::Struct { name, args } if args.is_empty() && b.types.contains_key(name) =>
+                b.types[name].clone(),
+            // a concrete generic-struct instance: substitute inside its args
+            // (types and const values), then mangle + request it, collapsing to the
+            // flat instance name.
+            Type::Struct { name, args } if !args.is_empty() => {
+                let cargs: Vec<ConcreteArg<'a>> = args.iter().map(|a| match a {
+                    GenericArg::Type(t) => ConcreteArg::Type(self.subst_ty(t, b)),
+                    GenericArg::Const(cv) => ConcreteArg::Const(subst_cv(cv, b).expect_lit()),
+                }).collect();
+                let mangled = self.request_struct(name, cargs);
+                Type::plain_struct(mangled)
+            }
+            // an ordinary (non-generic) struct: copy through.
+            Type::Struct { name, .. } => Type::plain_struct(name),
+            Type::Pointer(inner)  => Type::Pointer(Box::new(self.subst_ty(inner, b))),
+            Type::Array(inner, n) => Type::Array(Box::new(self.subst_ty(inner, b)), subst_cv(n, b)),
+            Type::Slice(inner)    => Type::Slice(Box::new(self.subst_ty(inner, b))),
+            Type::Simd(inner, n)  => Type::Simd(Box::new(self.subst_ty(inner, b)), subst_cv(n, b)),
+            Type::Function { params, return_type } => Type::Function {
+                params: params.iter().map(|p| self.subst_ty(p, b)).collect(),
+                return_type: Box::new(self.subst_ty(return_type, b)),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// Substitute bound params in a turbofish argument. A const generic forwarded
+    /// by name (`simd_load::<f32, N>`) reaches here as a bare-ident `Type` — but
+    /// the name binds in `consts`, not `types` — so resolve it to a literal
+    /// `Const` argument; the specialized call then re-typechecks against a
+    /// concrete value.
+    fn subst_targ(&mut self, ga: &GenericArg<'a>, b: &Bindings<'a>) -> GenericArg<'a> {
+        match ga {
+            GenericArg::Type(Type::Param(n)) if b.consts.contains_key(n) =>
+                GenericArg::Const(ConstVal::Lit(b.consts[n].val)),
+            GenericArg::Type(Type::Struct { name, args }) if args.is_empty() && b.consts.contains_key(name) =>
+                GenericArg::Const(ConstVal::Lit(b.consts[name].val)),
+            GenericArg::Type(t) => GenericArg::Type(self.subst_ty(t, b)),
+            GenericArg::Const(cv) => GenericArg::Const(subst_cv(cv, b)),
+        }
+    }
+
     fn rebuild_expr(&mut self, expr: &Expr<'a>, b: &Bindings<'a>) -> Expr<'a> {
         let node = match &expr.value {
             ExprNode::Call { func, type_args, args } => {
@@ -259,7 +328,7 @@ impl<'p, 'a> Mono<'p, 'a> {
                 // sub type params inside the turbofish (user generic calls +
                 // intrinsics like `sizeof::<T>()`)
                 let subst_targs: Vec<GenericArg<'a>> =
-                    type_args.iter().map(|ga| subst_targ(ga, b)).collect();
+                    type_args.iter().map(|ga| self.subst_targ(ga, b)).collect();
 
                 // user generic call: mangle to the concrete instance, drop the
                 // turbofish.
@@ -289,10 +358,23 @@ impl<'p, 'a> Mono<'p, 'a> {
             }
             ExprNode::Slice(elems) =>
                 ExprNode::Slice(elems.iter().map(|e| self.rebuild_expr(e, b)).collect()),
-            ExprNode::Struct { name, fields } => ExprNode::Struct {
-                name,
-                fields: fields.iter().map(|(f, e)| (*f, self.rebuild_expr(e, b))).collect(),
-            },
+            ExprNode::Struct { name, type_args, fields } => {
+                let new_fields: Vec<(&'a str, Expr<'a>)> =
+                    fields.iter().map(|(f, e)| (*f, self.rebuild_expr(e, b))).collect();
+                if type_args.is_empty() {
+                    ExprNode::Struct { name, type_args: Vec::new(), fields: new_fields }
+                } else {
+                    // a generic struct literal -> its concrete instance. mangle
+                    // exactly like the generic *type* `Option<i32>`: substitute the
+                    // args, request the instance, swap in the flat name and drop the
+                    // turbofish (mil looks the fields up by this name).
+                    let concrete = Type::Struct { name, args: type_args.clone() };
+                    let Type::Struct { name: mangled, .. } = self.subst_ty(&concrete, b) else {
+                        unreachable!("subst_ty of a Struct is always a Struct")
+                    };
+                    ExprNode::Struct { name: mangled, type_args: Vec::new(), fields: new_fields }
+                }
+            }
             ExprNode::Access { base, field } =>
                 ExprNode::Access { base: Box::new(self.rebuild_expr(base, b)), field },
             ExprNode::Index { slice, index } => ExprNode::Index {
@@ -334,7 +416,7 @@ impl<'p, 'a> Mono<'p, 'a> {
                 StmtNode::Block(stmts.iter().map(|s| self.rebuild_stmt(s, b)).collect()),
             StmtNode::Declare { name, ty, value } => StmtNode::Declare {
                 name,
-                ty: subst_ty(ty, b),
+                ty: self.subst_ty(ty, b),
                 value: self.rebuild_expr(value, b),
             },
             StmtNode::Assign { left, value } => StmtNode::Assign {
@@ -369,9 +451,12 @@ impl<'p, 'a> Mono<'p, 'a> {
         let TopLevelNode::Function { name, attributes, params, return_type, body, .. } = &tl.value
         else { unreachable!("rebuild_function called on a non-function") };
 
+        // any struct instance requested while substituting this function's types
+        // reports against the function's span.
+        self.cur_span = tl.span.clone();
         let new_params: Vec<(&'a str, Type<'a>)> =
-            params.iter().map(|(pn, ty)| (*pn, subst_ty(ty, b))).collect();
-        let new_return = subst_ty(return_type, b);
+            params.iter().map(|(pn, ty)| (*pn, self.subst_ty(ty, b))).collect();
+        let new_return = self.subst_ty(return_type, b);
         let new_body: Vec<Stmt<'a>> = body.iter().map(|s| self.rebuild_stmt(s, b)).collect();
 
         Metadata::new(
@@ -406,9 +491,20 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
         })
         .collect();
 
+    let struct_templates: HashMap<&'a str, &TopLevel<'a>> = program.iter()
+        .filter_map(|tl| match &tl.value {
+            TopLevelNode::Struct { name, generics, .. } if !generics.is_empty() =>
+                Some((*name, tl)),
+            _ => None,
+        })
+        .collect();
+
     let mut m = Mono {
-        arena, templates,
-        queue: VecDeque::new(), seen: HashMap::new(), display: HashMap::new(),
+        arena, templates, struct_templates,
+        queue: VecDeque::new(), seen: HashMap::new(),
+        struct_queue: VecDeque::new(), struct_seen: HashMap::new(),
+        cur_span: Span::new(String::new(), 0, 0),
+        display: HashMap::new(),
     };
     let empty = Bindings::empty();
 
@@ -477,6 +573,72 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
         instances.entry(inst.base).or_default().push(f);
     }
 
+    // build each requested generic-struct instance. substituting a field type can
+    // request further instances (`Box<Option<i32>>` needs `Option$i32` too), so
+    // drain to fixpoint. the same depth/count guards backstop growing recursion
+    // (`struct Bad<T> { p: *Bad<*T> }`). fn instances above already seeded this
+    // queue via their param/return/body types.
+    let mut struct_instances: HashMap<&'a str, Vec<TopLevel<'a>>> = HashMap::new();
+    let mut struct_materialized = 0usize;
+    while let Some(inst) = m.struct_queue.pop_front() {
+        struct_materialized += 1;
+        if let Some(deep) = inst.args.iter().find_map(|a| match a {
+            ConcreteArg::Type(t) if type_depth(t) > TYPE_DEPTH_LIMIT => Some(t),
+            _ => None,
+        }) {
+            return Err(Error {
+                msg: format!(
+                    "monomorphization of struct '{}' produced a type argument nested \
+                     deeper than {} (`{}`); this usually means an unbounded generic \
+                     struct (one whose field mentions itself at an ever-growing type)",
+                    inst.base, TYPE_DEPTH_LIMIT, deep,
+                ),
+                span: inst.span,
+            });
+        }
+        if struct_materialized > INSTANTIATION_LIMIT {
+            return Err(Error {
+                msg: format!(
+                    "monomorphization exceeded {} struct instantiations at '{}'",
+                    INSTANTIATION_LIMIT, inst.base,
+                ),
+                span: inst.span,
+            });
+        }
+        let tl = m.struct_templates[inst.base];
+        let TopLevelNode::Struct { generics, fields, attributes, .. } = &tl.value
+        else { unreachable!() };
+        // bind each declared param to its concrete arg (positional): type params to
+        // types, const params to values (so `[T; N]` fields substitute both).
+        let mut bindings = Bindings::empty();
+        for (gp, arg) in generics.iter().zip(&inst.args) {
+            match (gp, arg) {
+                (GenericParam::Type(n), ConcreteArg::Type(t)) => {
+                    bindings.types.insert(n, t.clone());
+                }
+                (GenericParam::Const(n, ty), ConcreteArg::Const(v)) => {
+                    bindings.consts.insert(n, ConstBind { val: *v, ty: ty.clone() });
+                }
+                _ => unreachable!("struct generic param/arg kind mismatch — validated in typecheck"),
+            }
+        }
+        // field types report against this instance's span while being substituted.
+        m.cur_span = inst.span.clone();
+        let new_fields: Vec<(&'a str, Type<'a>)> = fields.iter()
+            .map(|(fname, fty)| (*fname, m.subst_ty(fty, &bindings)))
+            .collect();
+        let s = Metadata::new(
+            TopLevelNode::Struct {
+                name: inst.mangled,
+                attributes: attributes.clone(),
+                generics: Vec::new(),
+                fields: new_fields,
+            },
+            tl.span.clone(),
+        );
+        struct_instances.entry(inst.base).or_default().push(s);
+    }
+
     // reassemble in source order: each template -> its instances (or nothing if
     // it was never instantiated).
     let mut output: Vec<TopLevel<'a>> = Vec::with_capacity(program.len());
@@ -488,6 +650,13 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
                 }
             }
             TopLevelNode::Function { .. } => output.push(concrete.remove(&i).unwrap()),
+            // a generic struct template drops out (its `Param` fields never lay
+            // out), replaced by its concrete instances — emitted here, next to it.
+            TopLevelNode::Struct { name, generics, .. } if !generics.is_empty() => {
+                if let Some(insts) = struct_instances.remove(name) {
+                    output.extend(insts);
+                }
+            }
             TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. }
             | TopLevelNode::Global { .. } => output.push(tl.clone()),
         }
