@@ -51,7 +51,7 @@ pub fn size_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
         // Slices and `str` are `{ ptr, len }` fat pointers.
         Slice(_) | Str => aggregate_layout(fat_pointer_fields().iter(), structs).0,
 
-        Struct(name) => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).0,
+        Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).0,
 
         Param(name) => panic!("type parameter `{name}` survived to layout"),
     }
@@ -80,7 +80,7 @@ pub fn align_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
 
         Slice(_) | Str => aggregate_layout(fat_pointer_fields().iter(), structs).1,
 
-        Struct(name) => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).1,
+        Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).1,
 
         Param(name) => panic!("type parameter `{name}` survived to layout"),
     }
@@ -167,7 +167,7 @@ mod tests {
             "Color",
             vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8), ("a", Type::Uint8)],
         )]);
-        let c = Type::Struct("Color");
+        let c = Type::plain_struct("Color");
         assert_eq!(size_of(&c, &s), 4);
         assert_eq!(align_of(&c, &s), 1);
         assert_eq!(field_offset("Color", 0, &s), 0);
@@ -186,11 +186,11 @@ mod tests {
                 ],
             ),
         ]);
-        let v2 = Type::Struct("Vector2");
+        let v2 = Type::plain_struct("Vector2");
         assert_eq!((size_of(&v2, &s), align_of(&v2, &s)), (8, 4));
         assert_eq!(field_offset("Vector2", 1, &s), 4);
 
-        let rect = Type::Struct("Rectangle");
+        let rect = Type::plain_struct("Rectangle");
         assert_eq!((size_of(&rect, &s), align_of(&rect, &s)), (16, 4));
         assert_eq!(field_offset("Rectangle", 3, &s), 12);
     }
@@ -199,7 +199,7 @@ mod tests {
     fn mixed_fields_get_padded() {
         // struct { a: bool, b: i64 } — b must land at offset 8, size 16 align 8.
         let s = table(&[("Mixed", vec![("a", Type::Bool), ("b", Type::Int64)])]);
-        let m = Type::Struct("Mixed");
+        let m = Type::plain_struct("Mixed");
         assert_eq!(field_offset("Mixed", 0, &s), 0);
         assert_eq!(field_offset("Mixed", 1, &s), 8);
         assert_eq!((size_of(&m, &s), align_of(&m, &s)), (16, 8));
@@ -211,14 +211,14 @@ mod tests {
         // -> inner at offset 4, total 12/4.
         let s = table(&[
             ("Inner", vec![("x", Type::Int32), ("y", Type::Int32)]),
-            ("Outer", vec![("a", Type::Bool), ("inner", Type::Struct("Inner"))]),
+            ("Outer", vec![("a", Type::Bool), ("inner", Type::plain_struct("Inner"))]),
         ]);
-        let outer = Type::Struct("Outer");
+        let outer = Type::plain_struct("Outer");
         assert_eq!(field_offset("Outer", 1, &s), 4);
         assert_eq!((size_of(&outer, &s), align_of(&outer, &s)), (12, 4));
 
         // [Inner; 3] is 24 bytes, align 4.
-        let arr = Type::Array(Box::new(Type::Struct("Inner")), crate::front::ast::ConstVal::Lit(3));
+        let arr = Type::Array(Box::new(Type::plain_struct("Inner")), crate::front::ast::ConstVal::Lit(3));
         assert_eq!((size_of(&arr, &s), align_of(&arr, &s)), (24, 4));
     }
 

@@ -244,7 +244,12 @@ pub enum Type<'a> {
     Simd(Box<Self>, ConstVal<'a>),
     /// Static string slice (like `&'static str` in Rust)
     Str,
-    Struct(&'a str),
+    /// A named struct type, with any generic type arguments applied, e.g.
+    /// `Vec2` (`args` empty) or `Option<i32>` (`args = [i32]`). `args` is always
+    /// empty after monomorphization: a generic struct type is rewritten to a
+    /// concrete instance with a mangled `name` and no `args` (like generic
+    /// functions). Use [`Type::plain_struct`] to build the common no-args case.
+    Struct { name: &'a str, args: Vec<Type<'a>> },
     /// A generic type parameter, e.g. `T`.
     /// Produced during typechecking by resolving a `Struct(name)` where the name
     /// matches a type param in scope. It is abstract and must never survive to
@@ -253,6 +258,12 @@ pub enum Type<'a> {
 }
 
 impl<'a> Type<'a> {
+    /// A non-generic struct type (no type arguments) — the common case, and the
+    /// only shape any stage after monomorphization ever produces.
+    pub fn plain_struct(name: &'a str) -> Self {
+        Type::Struct { name, args: Vec::new() }
+    }
+
     pub fn is_numeric(&self) -> bool {
         matches!(self,
             Type::Int8 | Type::Int32 | Type::Int64
@@ -289,7 +300,11 @@ impl<'a> Display for Type<'a> {
             Slice(inner) => write!(f, "[{}]", inner),
             Simd(inner, size) => write!(f, "simd[{}, {}]", inner, size),
             Str => write!(f, "str"),
-            Struct(name) => write!(f, "{}", name),
+            Struct { name, args } if args.is_empty() => write!(f, "{}", name),
+            Struct { name, args } => {
+                let args_str = args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
+                write!(f, "{}<{}>", name, args_str)
+            },
             Param(name) => write!(f, "{}", name),
         }
     }
@@ -556,6 +571,7 @@ pub enum TopLevelNode<'a> {
     Struct {
         name: &'a str,
         attributes: Vec<Attribute<'a>>,
+        generics: Vec<GenericParam<'a>>,
         fields: Vec<(&'a str, Type<'a>)>,
     },
 
@@ -597,15 +613,16 @@ impl<'a> Display for TopLevelNode<'a> {
 
                 write!(f, "{}extern {}{}({}) {};", attrs_str, name, generics_str, params_str, return_type)
             },
-            TopLevelNode::Struct { name, attributes, fields } => {
+            TopLevelNode::Struct { name, attributes, generics, fields } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
+                let generics_str = fmt_generics(generics);
                 let fields_str = fields.iter().map(|(name, ty)| format!("    {}: {},\n", name, ty)).collect::<String>();
 
-                write!(f, "{}struct {} {{\n{}}}", attrs_str, name, fields_str)
+                write!(f, "{}struct {}{} {{\n{}}}", attrs_str, name, generics_str, fields_str)
             },
             TopLevelNode::Global { name, attributes, ty, value } => {
                 let attrs_str = if attributes.is_empty() {

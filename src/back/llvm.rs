@@ -42,7 +42,7 @@ fn emit_type(ty: &Type) -> String {
         // (see lower_function and lower_expr for ExprNode::Struct)
         // the named LLVM type `%Name` is only used by AllocaStruct and FieldPtr,
         // which emit it directly without going through emit_type
-        Struct(_) => "ptr".to_string(),
+        Struct { .. } => "ptr".to_string(),
         // generic functions are skipped during MIL lowering, so a type param
         // should never reach codegen.
         Param(name) => unreachable!("generic type parameter `{name}` survived to LLVM codegen"),
@@ -54,7 +54,7 @@ fn emit_type(ty: &Type) -> String {
 /// handle, but as a field it is inlined as the named type `%Name`.
 fn emit_field_type(ty: &Type) -> String {
     match ty {
-        Type::Struct(name) => format!("%{name}"),
+        Type::Struct { name, .. } => format!("%{name}"),
         Type::Array(t, n) => format!("[{} x {}]", n.expect_lit(), emit_field_type(t)),
         Type::Simd(t, n) => format!("<{} x {}>", n.expect_lit(), emit_field_type(t)),
         _ => emit_type(ty),
@@ -130,12 +130,12 @@ impl<'a> EmitCtx<'a> {
 
     /// SysV classification of a by-value struct named `name`.
     fn struct_abi(&self, name: &str) -> Abi {
-        abi::classify(&Type::Struct(name), &self.structs)
+        abi::classify(&Type::plain_struct(name), &self.structs)
     }
 
     /// Byte alignment of struct `name`, for `byval`/`sret` attributes.
     fn struct_align(&self, name: &str) -> usize {
-        layout::align_of(&Type::Struct(name), &self.structs)
+        layout::align_of(&Type::plain_struct(name), &self.structs)
     }
 }
 
@@ -266,7 +266,7 @@ fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
             let mut arg_frags: Vec<String> = Vec::new();
             for (val, ty) in args {
                 match &ty {
-                    Type::Struct(name) => match cx.struct_abi(name) {
+                    Type::Struct { name, .. } => match cx.struct_abi(name) {
                         Abi::Direct(regs) => {
                             let ptr = emit_value(val);
                             for (t, v) in emit_struct_to_regs(cx, &ptr, &regs) {
@@ -558,7 +558,7 @@ fn emit_function<'a>(cx: &mut EmitCtx<'a>, func: Function<'a>) {
     let mut param_rebuilds: Vec<(Register, &str, Vec<Reg>, Vec<String>)> = Vec::new();
     for (reg, ty) in &func.params {
         match ty {
-            Type::Struct(name) => match cx.struct_abi(name) {
+            Type::Struct { name, .. } => match cx.struct_abi(name) {
                 Abi::Direct(regs) => {
                     let names: Vec<String> = regs.iter().map(|_| cx.abi_tmp()).collect();
                     for (r, n) in regs.iter().zip(&names) {
@@ -642,7 +642,7 @@ fn emit_extern<'a>(cx: &mut EmitCtx<'a>, ext: ExternDecl<'a>) {
     // A Memory-class struct return uses a hidden leading sret pointer and returns
     // void — the same shape MIL lowers the matching call to.
     let ret_str = match &ext.return_type {
-        Type::Struct(name) => match cx.struct_abi(name) {
+        Type::Struct { name, .. } => match cx.struct_abi(name) {
             Abi::Direct(regs) => coerced_aggregate_ty(&regs),
             Abi::Memory => {
                 params.insert(0, format!("ptr sret(%{name}) align {}", cx.struct_align(name)));
@@ -659,7 +659,7 @@ fn emit_extern<'a>(cx: &mut EmitCtx<'a>, ext: ExternDecl<'a>) {
 /// Memory struct is one `byval` pointer; anything else is one type as usual.
 fn abi_param_types<'a>(cx: &EmitCtx<'a>, ty: &Type<'a>) -> Vec<String> {
     match ty {
-        Type::Struct(name) => match cx.struct_abi(name) {
+        Type::Struct { name, .. } => match cx.struct_abi(name) {
             Abi::Direct(regs) => regs.iter().map(|r| r.to_llvm().to_string()).collect(),
             Abi::Memory => vec![format!("ptr byval(%{name}) align {}", cx.struct_align(name))],
         },

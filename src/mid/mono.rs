@@ -131,7 +131,15 @@ fn const_literal<'a>(cb: &ConstBind<'a>) -> ExprNode<'a> {
 /// scope check distinguishes them. edge case, but there's no guard.
 fn subst_ty<'a>(ty: &Type<'a>, b: &Bindings<'a>) -> Type<'a> {
     match ty {
-        Type::Param(n) | Type::Struct(n) if b.types.contains_key(n) => b.types[n].clone(),
+        Type::Param(n) if b.types.contains_key(n) => b.types[n].clone(),
+        // a bare struct name that's actually a bound type param; substitute it.
+        Type::Struct { name, args } if args.is_empty() && b.types.contains_key(name) =>
+            b.types[name].clone(),
+        // a real (possibly generic) struct: substitute inside its type arguments.
+        Type::Struct { name, args } => Type::Struct {
+            name,
+            args: args.iter().map(|a| subst_ty(a, b)).collect(),
+        },
         Type::Pointer(inner)  => Type::Pointer(Box::new(subst_ty(inner, b))),
         Type::Array(inner, n) => Type::Array(Box::new(subst_ty(inner, b)), subst_cv(n, b)),
         Type::Slice(inner)    => Type::Slice(Box::new(subst_ty(inner, b))),
@@ -150,8 +158,10 @@ fn subst_ty<'a>(ty: &Type<'a>, b: &Bindings<'a>) -> Type<'a> {
 /// the specialized call then re-typechecks against a concrete value.
 fn subst_targ<'a>(ga: &GenericArg<'a>, b: &Bindings<'a>) -> GenericArg<'a> {
     match ga {
-        GenericArg::Type(Type::Struct(n) | Type::Param(n)) if b.consts.contains_key(n) =>
+        GenericArg::Type(Type::Param(n)) if b.consts.contains_key(n) =>
             GenericArg::Const(ConstVal::Lit(b.consts[n].val)),
+        GenericArg::Type(Type::Struct { name, args }) if args.is_empty() && b.consts.contains_key(name) =>
+            GenericArg::Const(ConstVal::Lit(b.consts[name].val)),
         GenericArg::Type(t) => GenericArg::Type(subst_ty(t, b)),
         GenericArg::Const(cv) => GenericArg::Const(subst_cv(cv, b)),
     }
@@ -182,7 +192,13 @@ fn mangle_ty(ty: &Type) -> String {
         Type::Array(inner, n) => format!("arr{}_{}", n.expect_lit(), mangle_ty(inner)),
         Type::Slice(inner) => format!("slice_{}", mangle_ty(inner)),
         Type::Simd(inner, n) => format!("simd{}_{}", n.expect_lit(), mangle_ty(inner)),
-        Type::Struct(name) => (*name).into(),
+        Type::Struct { name, args } if args.is_empty() => (*name).into(),
+        // a generic struct instance isn't materialized yet (Stage 3); encode its
+        // args so the name stays distinct if one ever reaches here.
+        Type::Struct { name, args } => {
+            let inner = args.iter().map(mangle_ty).collect::<Vec<_>>().join("$");
+            format!("{}${}", name, inner)
+        }
         // Neither should appear in a fully-concrete instantiation; encode them
         // defensively rather than panicking so a bug surfaces as a bad symbol.
         Type::Param(name) => format!("param_{}", name),

@@ -172,7 +172,7 @@ pub fn classify_sysv<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
 /// coercing an all-float eightbyte to `i64` needs no other changes.
 pub fn classify_win64<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
     match ty {
-        Type::Struct(_) | Type::Array(..) => match layout::size_of(ty, structs) {
+        Type::Struct { .. } | Type::Array(..) => match layout::size_of(ty, structs) {
             0 => Abi::Direct(vec![]),
             size @ (1 | 2 | 4 | 8) => Abi::Direct(vec![Reg::Int(size)]),
             _ => Abi::Memory,
@@ -216,7 +216,7 @@ impl Eightbyte {
 fn classify_into<'a>(ty: &Type<'a>, offset: usize, structs: &StructTable<'a>, eb: &mut [Eightbyte]) {
     match ty {
         // Aggregates: recurse into members at their real offsets.
-        Type::Struct(name) => {
+        Type::Struct { name, .. } => {
             let fields = structs
                 .get(name)
                 .unwrap_or_else(|| panic!("ABI classify of unknown struct `{name}`"));
@@ -265,7 +265,7 @@ fn leaf_class(ty: &Type) -> Class {
         // Fat pointers are two INTEGER words; FFI bans them, but classify sanely.
         Type::Slice(_) | Type::Str => Class::Integer,
         Type::Void => Class::NoClass,
-        Type::Struct(_) | Type::Array(..) => {
+        Type::Struct { .. } | Type::Array(..) => {
             unreachable!("aggregates are handled by classify_into, not leaf_class")
         }
         Type::Param(n) => panic!("type parameter `{n}` survived to ABI classification"),
@@ -339,14 +339,14 @@ mod tests {
             "Color",
             vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8), ("a", Type::Uint8)],
         )]);
-        assert_eq!(llvm(&Type::Struct("Color"), &s), ["i32"]);
+        assert_eq!(llvm(&Type::plain_struct("Color"), &s), ["i32"]);
     }
 
     #[test]
     fn vector2_is_two_packed_floats() {
         // struct Vector2 { x,y: f32 } -> one SSE eightbyte, two floats.
         let s = table(&[("Vector2", vec![("x", Type::Float32), ("y", Type::Float32)])]);
-        assert_eq!(llvm(&Type::Struct("Vector2"), &s), ["<2 x float>"]);
+        assert_eq!(llvm(&Type::plain_struct("Vector2"), &s), ["<2 x float>"]);
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
             "Vector3",
             vec![("x", Type::Float32), ("y", Type::Float32), ("z", Type::Float32)],
         )]);
-        assert_eq!(llvm(&Type::Struct("Vector3"), &s), ["<2 x float>", "float"]);
+        assert_eq!(llvm(&Type::plain_struct("Vector3"), &s), ["<2 x float>", "float"]);
     }
 
     #[test]
@@ -369,20 +369,20 @@ mod tests {
                 ("w", Type::Float32), ("h", Type::Float32),
             ],
         )]);
-        assert_eq!(llvm(&Type::Struct("Rectangle"), &s), ["<2 x float>", "<2 x float>"]);
+        assert_eq!(llvm(&Type::plain_struct("Rectangle"), &s), ["<2 x float>", "<2 x float>"]);
     }
 
     #[test]
     fn mixed_int_and_float_in_one_eightbyte_is_integer() {
         // struct { i: i32, f: f32 } -> both share eightbyte 0; INTEGER wins -> i64.
         let s = table(&[("Mix", vec![("i", Type::Int32), ("f", Type::Float32)])]);
-        assert_eq!(llvm(&Type::Struct("Mix"), &s), ["i64"]);
+        assert_eq!(llvm(&Type::plain_struct("Mix"), &s), ["i64"]);
     }
 
     #[test]
     fn two_ints_coalesce_to_i64() {
         let s = table(&[("Pair", vec![("a", Type::Int32), ("b", Type::Int32)])]);
-        assert_eq!(llvm(&Type::Struct("Pair"), &s), ["i64"]);
+        assert_eq!(llvm(&Type::plain_struct("Pair"), &s), ["i64"]);
     }
 
     #[test]
@@ -390,20 +390,20 @@ mod tests {
         // struct { a: i64, b: i8 } -> 16 bytes; eightbyte 1 holds only 1 byte.
         // Coercion must be { i64, i8 }, matching Clang — not { i64, i64 }.
         let s = table(&[("Tail", vec![("a", Type::Int64), ("b", Type::Int8)])]);
-        assert_eq!(llvm(&Type::Struct("Tail"), &s), ["i64", "i8"]);
+        assert_eq!(llvm(&Type::plain_struct("Tail"), &s), ["i64", "i8"]);
     }
 
     #[test]
     fn float_then_double_stays_split() {
         // { f: f32, d: f64 } -> f32 in eb0 (float), f64 in eb1 (double).
         let s = table(&[("FD", vec![("f", Type::Float32), ("d", Type::Float64)])]);
-        assert_eq!(llvm(&Type::Struct("FD"), &s), ["float", "double"]);
+        assert_eq!(llvm(&Type::plain_struct("FD"), &s), ["float", "double"]);
     }
 
     #[test]
     fn lone_pointer_field_stays_ptr() {
         let s = table(&[("Ref", vec![("p", Type::Pointer(Box::new(Type::Float32)))])]);
-        assert_eq!(llvm(&Type::Struct("Ref"), &s), ["ptr"]);
+        assert_eq!(llvm(&Type::plain_struct("Ref"), &s), ["ptr"]);
     }
 
     #[test]
@@ -413,7 +413,7 @@ mod tests {
             "IntPtr",
             vec![("i", Type::Int32), ("p", Type::Pointer(Box::new(Type::Int8)))],
         )]);
-        assert_eq!(llvm(&Type::Struct("IntPtr"), &s), ["i32", "ptr"]);
+        assert_eq!(llvm(&Type::plain_struct("IntPtr"), &s), ["i32", "ptr"]);
 
         // { p: ptr, q: ptr } -> two pointer eightbytes.
         let s2 = table(&[(
@@ -423,7 +423,7 @@ mod tests {
                 ("q", Type::Pointer(Box::new(Type::Int8))),
             ],
         )]);
-        assert_eq!(llvm(&Type::Struct("TwoPtr"), &s2), ["ptr", "ptr"]);
+        assert_eq!(llvm(&Type::plain_struct("TwoPtr"), &s2), ["ptr", "ptr"]);
     }
 
     #[test]
@@ -435,7 +435,7 @@ mod tests {
             "BoolPtr",
             vec![("b", Type::Bool), ("p", Type::Pointer(Box::new(Type::Int8)))],
         )]);
-        assert_eq!(llvm(&Type::Struct("BoolPtr"), &s), ["i8", "ptr"]);
+        assert_eq!(llvm(&Type::plain_struct("BoolPtr"), &s), ["i8", "ptr"]);
     }
 
     #[test]
@@ -448,7 +448,7 @@ mod tests {
                 ("c", Type::Float64), ("d", Type::Float64),
             ],
         )]);
-        assert!(classify(&Type::Struct("Big"), &s).is_memory());
+        assert!(classify(&Type::plain_struct("Big"), &s).is_memory());
     }
 
     #[test]
@@ -457,9 +457,9 @@ mod tests {
         // eb0 = the two floats -> <2 x float>; eb1 = the i32 -> i32.
         let s = table(&[
             ("Inner", vec![("x", Type::Float32), ("y", Type::Float32)]),
-            ("Outer", vec![("a", Type::Struct("Inner")), ("b", Type::Int32)]),
+            ("Outer", vec![("a", Type::plain_struct("Inner")), ("b", Type::Int32)]),
         ]);
-        assert_eq!(llvm(&Type::Struct("Outer"), &s), ["<2 x float>", "i32"]);
+        assert_eq!(llvm(&Type::plain_struct("Outer"), &s), ["<2 x float>", "i32"]);
     }
 
     #[test]
@@ -469,7 +469,7 @@ mod tests {
             "Arr",
             vec![("xs", Type::Array(Box::new(Type::Float32), ConstVal::Lit(3)))],
         )]);
-        assert_eq!(llvm(&Type::Struct("Arr"), &s), ["<2 x float>", "float"]);
+        assert_eq!(llvm(&Type::plain_struct("Arr"), &s), ["<2 x float>", "float"]);
     }
 
     // --- Microsoft x64 (Windows) ------------------------------------------
@@ -494,7 +494,7 @@ mod tests {
             "Color",
             vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8), ("a", Type::Uint8)],
         )]);
-        assert_eq!(llvm_win64(&Type::Struct("Color"), &s), ["i32"]);
+        assert_eq!(llvm_win64(&Type::plain_struct("Color"), &s), ["i32"]);
     }
 
     #[test]
@@ -502,15 +502,15 @@ mod tests {
         // The regression: an 8-byte all-float struct goes in a *GP* register on
         // Win64 (i64), not an SSE `<2 x float>` as under SysV.
         let s = table(&[("Vector2", vec![("x", Type::Float32), ("y", Type::Float32)])]);
-        assert_eq!(llvm_win64(&Type::Struct("Vector2"), &s), ["i64"]);
-        assert_eq!(llvm(&Type::Struct("Vector2"), &s), ["<2 x float>"]); // SysV, for contrast
+        assert_eq!(llvm_win64(&Type::plain_struct("Vector2"), &s), ["i64"]);
+        assert_eq!(llvm(&Type::plain_struct("Vector2"), &s), ["<2 x float>"]); // SysV, for contrast
     }
 
     #[test]
     fn win64_pointer_wrapper_is_one_integer_register() {
         // An 8-byte struct wrapping a pointer also passes as a single i64.
         let s = table(&[("Ref", vec![("p", Type::Pointer(Box::new(Type::Float32)))])]);
-        assert_eq!(llvm_win64(&Type::Struct("Ref"), &s), ["i64"]);
+        assert_eq!(llvm_win64(&Type::plain_struct("Ref"), &s), ["i64"]);
     }
 
     #[test]
@@ -521,7 +521,7 @@ mod tests {
             "Rgb",
             vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8)],
         )]);
-        assert!(classify_win64(&Type::Struct("Rgb"), &s).is_memory());
+        assert!(classify_win64(&Type::plain_struct("Rgb"), &s).is_memory());
     }
 
     #[test]
@@ -535,9 +535,9 @@ mod tests {
                 ("w", Type::Float32), ("h", Type::Float32),
             ]),
         ]);
-        assert!(classify_win64(&Type::Struct("Vector3"), &s).is_memory());
-        assert!(classify_win64(&Type::Struct("Rectangle"), &s).is_memory());
+        assert!(classify_win64(&Type::plain_struct("Vector3"), &s).is_memory());
+        assert!(classify_win64(&Type::plain_struct("Rectangle"), &s).is_memory());
         // SysV keeps them in registers.
-        assert_eq!(llvm(&Type::Struct("Vector3"), &s), ["<2 x float>", "float"]);
+        assert_eq!(llvm(&Type::plain_struct("Vector3"), &s), ["<2 x float>", "float"]);
     }
 }

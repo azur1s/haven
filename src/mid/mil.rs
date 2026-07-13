@@ -604,7 +604,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                     // fixed arrays are stored in env as the alloca register itself, not a pointer
                     // to one, so loading would yield the array value — we want the pointer
                     Type::Array(_, _) => Value::Reg(reg),
-                    Type::Struct(_) => Value::Reg(reg),
+                    Type::Struct { .. } => Value::Reg(reg),
                     _ => {
                         let dst = cx.fresh_reg();
                         cx.emit(Inst::Load { dst, ptr: reg, ty, align: None });
@@ -619,7 +619,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 let addr = cx.fresh_reg();
                 cx.emit(Inst::GlobalPtr { dst: addr, name });
                 match ty {
-                    Type::Array(_, _) | Type::Struct(_) => Value::Reg(addr),
+                    Type::Array(_, _) | Type::Struct { .. } => Value::Reg(addr),
                     _ => {
                         let dst = cx.fresh_reg();
                         cx.emit(Inst::Load { dst, ptr: addr, ty, align: None });
@@ -665,7 +665,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                     // a nested struct field is inlined storage, so copy the
                     // source struct's contents into it rather than storing a
                     // pointer (field_val is the source struct's address)
-                    Type::Struct(inner) => {
+                    Type::Struct { name: inner, .. } => {
                         let src = match field_val {
                             Value::Reg(r) => r,
                             _ => unreachable!(),
@@ -689,9 +689,9 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             let base_ty = cx.node_types[&base.id].clone();
             // matches the typechecker's one-level auto-deref for `ptr.field`
             let struct_name = match base_ty {
-                Type::Struct(name) => name,
+                Type::Struct { name, .. } => name,
                 Type::Pointer(inner) => match *inner {
-                    Type::Struct(name) => name,
+                    Type::Struct { name, .. } => name,
                     _ => unreachable!(),
                 },
                 _ => unreachable!(),
@@ -715,7 +715,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             match field_ty {
                 // a struct-typed field is inlined: its value is its address,
                 // so hand back the field pointer instead of loading it
-                Type::Struct(_) => Value::Reg(field_ptr),
+                Type::Struct { .. } => Value::Reg(field_ptr),
                 _ => {
                     let dst = cx.fresh_reg();
                     cx.emit(Inst::Load { dst, ptr: field_ptr, ty: field_ty, align: None });
@@ -809,7 +809,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             // dereferencing to a struct keeps it in memory
             // the pointer already points at the struct's storage, so it is the
             // struct value
-            if matches!(ty, Type::Struct(_)) {
+            if matches!(ty, Type::Struct { .. }) {
                 return Value::Reg(ptr_reg);
             }
             let dst = cx.fresh_reg();
@@ -926,7 +926,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             }).collect();
 
             let return_type = cx.node_types[&expr.id].clone();
-            let struct_ret = if let Type::Struct(s) = &return_type { Some(*s) } else { None };
+            let struct_ret = if let Type::Struct { name, .. } = &return_type { Some(*name) } else { None };
             if let Some(sname) = struct_ret {
                 // if sret, allocate the result slot here and hand the callee a
                 // pointer to it. The call returns void & the slot is the value
@@ -995,9 +995,9 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
             let base_ty = cx.node_types[&base.id].clone();
             // matches the typechecker's one-level auto-deref for `ptr.field`
             let struct_name = match base_ty {
-                Type::Struct(name) => name,
+                Type::Struct { name, .. } => name,
                 Type::Pointer(inner) => match *inner {
-                    Type::Struct(name) => name,
+                    Type::Struct { name, .. } => name,
                     _ => unreachable!(),
                 },
                 _ => unreachable!(),
@@ -1078,7 +1078,7 @@ fn copy_struct<'a>(cx: &mut LowerCtx<'a>, struct_name: &'a str, src: Register, d
         match fty {
             // for nested struct, both field pointers point at inlined sub-struct
             // storage, so recurse to deep-copy it
-            Type::Struct(inner_name) => {
+            Type::Struct { name: inner_name, .. } => {
                 copy_struct(cx, inner_name, src_field, dst_field);
             }
             // everything else (scalars, arrays, slices, simd) is a single
@@ -1112,7 +1112,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             // (collect_locals pre-allocated it into env); point the literal at that
             // slot so it fills it in place instead of alloca'ing at the literal
             // site — which, inside a loop, would grow the stack every iteration.
-            if matches!(ty, Type::Array(_, _) | Type::Struct(_))
+            if matches!(ty, Type::Array(_, _) | Type::Struct { .. })
                 && matches!(value.value, ExprNode::Struct { .. } | ExprNode::Slice(_))
             {
                 let (slot, _) = cx.env[&binding]; // pre-allocated in the entry block
@@ -1132,7 +1132,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                     };
                     cx.env.insert(binding, (arr_reg, ty.clone()));
                 }
-                Type::Struct(struct_name) => {
+                Type::Struct { name: struct_name, .. } => {
                     let src_reg = match val {
                         Value::Reg(r) => r,
                         _ => unreachable!(),
@@ -1265,7 +1265,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             let val = lower_expr(cx, expr);
             let value_ty = cx.node_types[&expr.id].clone();
             let ret_ty = cx.current_return_type.clone();
-            let struct_ret = if let Type::Struct(s) = &ret_ty { Some(*s) } else { None };
+            let struct_ret = if let Type::Struct { name, .. } = &ret_ty { Some(*name) } else { None };
             if let Some(name) = struct_ret {
                 // copy the struct into the caller-provided sret slot, ret void
                 let src = match val {
@@ -1297,7 +1297,7 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(usize, &'a str, Type<'a>)>
                 // fills it in place via store_target. Non-literal struct/array
                 // declares (a struct-returning call, or a var copy) still adopt
                 // or copy in lower_stmt and are not pre-allocated here.
-                Type::Array(_, _) | Type::Struct(_) => {
+                Type::Array(_, _) | Type::Struct { .. } => {
                     if matches!(value.value, ExprNode::Struct { .. } | ExprNode::Slice(_)) {
                         out.push((stmt.id, name, ty.clone()));
                     }
@@ -1389,10 +1389,10 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 
             // struct returns are lowered with an sret out-pointer
             // allocate its register up front so `return` can copy into it
-            let sret = if let Type::Struct(s) = return_type {
+            let sret = if let Type::Struct { name, .. } = return_type {
                 let r = cx.fresh_reg();
                 cx.sret_param = Some(r);
-                Some((r, *s))
+                Some((r, *name))
             } else {
                 cx.sret_param = None;
                 None
@@ -1439,7 +1439,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                     // push BOTH as incoming params
                     param_regs.push((ptr_reg, Type::Pointer(Box::new(inner_ty.clone()))));
                     param_regs.push((len_reg, Type::Int32));
-                } else if let Type::Struct(struct_name) = ty {
+                } else if let Type::Struct { name: struct_name, .. } = ty {
                     // pass-by-value: caller still hands us a `ptr` to its
                     // struct, but we copy into our own local slot on entry so
                     // mutations don't leak back. For pass-by-reference the
@@ -1481,7 +1481,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                 match &ty {
                     // struct/array literal locals are hoisted here (collect_locals)
                     // so the slot is allocated once, not per loop iteration.
-                    Type::Struct(struct_name) => {
+                    Type::Struct { name: struct_name, .. } => {
                         cx.emit(Inst::AllocaStruct { dst: local_reg, name: struct_name, align: None });
                     }
                     Type::Array(inner, length) => {
@@ -1587,6 +1587,10 @@ pub fn lower<'a>(
                     return_type: return_type.clone(),
                 });
             }
+            // generic struct templates carry `Param` fields and are never laid out
+            // directly; monomorphization emits concrete instances. skip them here,
+            // mirroring how generic functions are skipped above.
+            TopLevelNode::Struct { generics, .. } if !generics.is_empty() => {}
             TopLevelNode::Struct { name, fields, .. } => {
                 structs.push((*name, fields.clone()));
             }

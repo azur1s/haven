@@ -230,13 +230,15 @@ impl<'x, 'a> Rewriter<'x, 'a> {
     /// — see the v1 limitation at the top of the file.
     fn ty(&mut self, ty: &mut Type<'a>, gparams: &HashSet<&str>) {
         match ty {
-            Type::Struct(n) => {
-                let nm: &str = *n;
+            Type::Struct { name, args } => {
+                let nm: &str = *name;
                 if !gparams.contains(nm) {
                     if let Some(&f) = self.scopes.types.get(nm) {
-                        *n = f;
+                        *name = f;
                     }
                 }
+                // a generic struct's arguments are themselves types to rewrite.
+                for a in args { self.ty(a, gparams); }
             }
             Type::Pointer(inner)
             | Type::Array(inner, _)
@@ -373,10 +375,15 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 for (_, ty) in params { self.ty(ty, &gparams); }
                 self.ty(return_type, &gparams);
             }
-            TopLevelNode::Struct { name, fields, .. } => {
-                let empty = HashSet::new();
+            TopLevelNode::Struct { name, generics, fields, .. } => {
+                // the struct's own type params shadow struct names when rewriting
+                // field types (a field `T` is a param, not a module type).
+                let gparams: HashSet<&str> = generics.iter().filter_map(|g| match g {
+                    GenericParam::Type(n) => Some(*n),
+                    GenericParam::Const(..) => None,
+                }).collect();
                 *name = self.scopes.types.get(*name).copied().unwrap_or(*name);
-                for (_, ty) in fields { self.ty(ty, &empty); }
+                for (_, ty) in fields { self.ty(ty, &gparams); }
             }
             TopLevelNode::Global { name, ty, value, .. } => {
                 let empty = HashSet::new();

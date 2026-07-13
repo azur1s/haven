@@ -418,6 +418,16 @@ enum SizeArg<'a> {
     Param(&'a str),
 }
 
+/// One argument inside an angle-bracket list in type position, e.g. the parts of
+/// `simd<f32, 4>` or `Option<i32>`. The parser can't yet tell a size from a type
+/// param (both are bare idents), so a bare int is a [`GenArg::Size`] and anything
+/// else parses as a [`GenArg::Ty`]; the dispatch in `parse_type` reinterprets
+/// them per the head name (`simd` wants `<type, size>`; a struct wants types).
+enum GenArg<'a> {
+    Size(i32),
+    Ty(Type<'a>),
+}
+
 // TODO: no fn-type production yet (fn-as-value), and no user generic-type
 // production either, only the hardcoded `simd<T,N>` handles `name<...>`. so a
 // generic type in type position (`x: List<T>`, nested turbofish `f::<Vec<i32>>`)
@@ -468,20 +478,27 @@ fn parse_type<'tks, 'src: 'tks>()
                 .ignore_then(ty.clone())
                 .then_ignore(just(Token::RBracket))
                 .map(|inner| Type::Slice(Box::new(inner))),
-            // T or simd<T, N>
-            var.then(ty.clone()
-                .then_ignore(just(Token::Comma))
-                .then(select! {
-                    Token::Int32(x) => SizeArg::Lit(x),
-                    Token::Var(n) => SizeArg::Param(n),
-                })
+            // a named type, optionally with angle-bracket arguments:
+            //   scalar/struct: `i32`, `Vec2`
+            //   simd:          `simd<f32, 4>`  (element type + lane count)
+            //   generic struct: `Option<i32>`, `Pair<K, V>`
+            // `<` is unambiguous here — type position has no comparison operators.
+            var.then(
+                choice((
+                    select! { Token::Int32(x) => GenArg::Size(x) },
+                    ty.clone().map(GenArg::Ty),
+                ))
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .at_least(1)
+                .collect::<Vec<_>>()
                 .delimited_by(
                     just(Token::BinaryOp(BinaryOp::Lt)),
                     just(Token::BinaryOp(BinaryOp::Gt)))
                 .or_not())
-            .try_map(|(name, size), span| {
-                if let None = size {
-                    Ok(match *name {
+            .try_map(|(name, args), span| {
+                let Some(args) = args else {
+                    return Ok(match *name {
                         "void" => Type::Void,
                         "bool" => Type::Bool,
                         "i8"   => Type::Int8,
@@ -493,19 +510,41 @@ fn parse_type<'tks, 'src: 'tks>()
                         "f32"  => Type::Float32,
                         "f64"  => Type::Float64,
                         "str"  => Type::Str,
-                        other  => Type::Struct(other),
-                    })
-                } else {
-                    // probably could reuse this when we have generic types
-                    // hope we reach that point lmao
-                    let (ty, size) = size.unwrap();
-                    match *name {
-                        "simd" => match size {
-                            SizeArg::Lit(x) if x > 0 && x <= 64 => Ok(Type::Simd(Box::new(ty), ConstVal::Lit(x as usize))),
-                            SizeArg::Lit(x) => Err(Rich::custom(span, format!("invalid SIMD size parameter: {x} (must be between 1 and 64)"))),
-                            SizeArg::Param(n) => Ok(Type::Simd(Box::new(ty), ConstVal::Param(n))),
-                        },
-                        other => Err(Rich::custom(span, format!("unexpected type '{other}' with size parameter"))),
+                        other  => Type::Struct { name: other, args: Vec::new() },
+                    });
+                };
+                match *name {
+                    // `simd<element, lanes>`: exactly a type then a size.
+                    "simd" => {
+                        if args.len() != 2 {
+                            return Err(Rich::custom(span, format!("simd<...> takes 2 arguments (element type, lane count), got {}", args.len())));
+                        }
+                        let mut it = args.into_iter();
+                        let elem = match it.next().unwrap() {
+                            GenArg::Ty(t) => t,
+                            GenArg::Size(_) => return Err(Rich::custom(span, "simd<...> element (first argument) must be a type")),
+                        };
+                        // the lane count is a literal, or a bare ident naming a
+                        // const generic param (parsed as a no-arg struct type).
+                        let size = match it.next().unwrap() {
+                            GenArg::Size(x) if x > 0 && x <= 64 => ConstVal::Lit(x as usize),
+                            GenArg::Size(x) => return Err(Rich::custom(span, format!("invalid SIMD size parameter: {x} (must be between 1 and 64)"))),
+                            GenArg::Ty(Type::Struct { name, args }) if args.is_empty() => ConstVal::Param(name),
+                            GenArg::Ty(_) => return Err(Rich::custom(span, "simd<...> lane count (second argument) must be an integer or a const parameter")),
+                        };
+                        Ok(Type::Simd(Box::new(elem), size))
+                    }
+                    // any other head is a generic struct: every argument is a type.
+                    // const arguments in struct types aren't supported yet.
+                    other => {
+                        let mut tys = Vec::with_capacity(args.len());
+                        for a in args {
+                            match a {
+                                GenArg::Ty(t) => tys.push(t),
+                                GenArg::Size(x) => return Err(Rich::custom(span, format!("const argument '{x}' in generic type '{other}<...>' is not supported yet"))),
+                            }
+                        }
+                        Ok(Type::Struct { name: other, args: tys })
                     }
                 }
             })
@@ -740,6 +779,7 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         .repeated().collect::<Vec<_>>()
         .then_ignore(just(Token::Struct))
         .then(var)
+        .then(generics.clone())
         .then(
             var.map(|s| *s)
                 .then_ignore(just(Token::Colon))
@@ -749,9 +789,10 @@ fn parse_toplevel<'tks, 'src: 'tks>()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace))
         )
-        .map(|((attributes, name), fields)| TopLevelNode::Struct {
+        .map(|(((attributes, name), generics), fields)| TopLevelNode::Struct {
             name,
             attributes,
+            generics,
             fields,
         });
 
