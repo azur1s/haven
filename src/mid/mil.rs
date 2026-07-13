@@ -106,7 +106,7 @@ pub enum Inst<'a> {
 
     // %dst = getelemptr %slice, %index (for slice indexing)
     // using Register here because slice will be { ptr, len } fat pointer struct
-    Index { dst: Register, slice: Register, index: Value, element_ty: Type<'a> },
+    Index { dst: Register, slice: Register, index: Value, index_ty: Type<'a>, element_ty: Type<'a> },
     // %dst = insertvalue {{ ptr, i32 }} %elem, ty %val, %index
     InsertValue { dst: Register, elem: Value, ty: Type<'a>, val: Value, index: usize },
     // %dst = extractvalue %val, index (for extracting from fat pointer struct, e.g. data pointer or length)
@@ -475,7 +475,7 @@ fn lower_intrinsic<'a>(
             };
             // get the element pointer with the offset
             let elem_ptr = cx.fresh_reg();
-            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, element_ty: ty.clone() });
+            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, index_ty: cx.node_types[&args[1].id].clone(), element_ty: ty.clone() });
             // load the SIMD vector from the element pointer
             let dst = cx.fresh_reg();
             cx.emit(Inst::Load { dst, ptr: elem_ptr, ty: Type::Simd(Box::new(ty), ConstVal::Lit(size)), align: None });
@@ -507,7 +507,7 @@ fn lower_intrinsic<'a>(
             // get the element pointer with the offset
             let elem_ptr = cx.fresh_reg();
             cx.emit(Inst::Comment(format!("simd_store")));
-            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, element_ty: ty.clone() });
+            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: offset_val, index_ty: cx.node_types[&args[1].id].clone(), element_ty: ty.clone() });
             // store the SIMD vector to the element pointer
             cx.emit(Inst::Store { ptr: elem_ptr, val: value_val, ty: Type::Simd(Box::new(ty), ConstVal::Lit(size)), align: None });
             Value::Const(Const::Undef) // placeholder since void return
@@ -993,7 +993,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 _ => unreachable!(),
             };
             let elem_ptr = cx.fresh_reg();
-            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: index_val, element_ty: element_ty.clone() });
+            cx.emit(Inst::Index { dst: elem_ptr, slice: data_ptr, index: index_val, index_ty: cx.node_types[&index.id].clone(), element_ty: element_ty.clone() });
 
             let dst = cx.fresh_reg();
             cx.emit(Inst::Load { dst, ptr: elem_ptr, ty: element_ty, align: None });
@@ -1072,7 +1072,7 @@ fn lower_lvalue<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Register {
             };
             // return the address of the element instead of loading
             let dst = cx.fresh_reg();
-            cx.emit(Inst::Index { dst, slice: data_ptr, index: index_val, element_ty });
+            cx.emit(Inst::Index { dst, slice: data_ptr, index: index_val, index_ty: cx.node_types[&index.id].clone(), element_ty });
             dst
         }
 
@@ -1203,7 +1203,11 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             cx.current_block = then_block;
             cx.emit(Inst::Comment("if-then".to_string()));
             lower_stmt(cx, then_branch);
-            if cx.blocks.iter().find(|b| b.id == then_block).unwrap().terminator.is_none() {
+            // Check the *current* block, not `then_block`: if the branch body
+            // contained nested control flow (a `while`/`if`), `current_block`
+            // has advanced to that construct's merge block, and it — not the
+            // already-terminated `then_block` — is what still needs a jump.
+            if cx.blocks.iter().find(|b| b.id == cx.current_block).unwrap().terminator.is_none() {
                 cx.terminate(Terminator::Jump(merge_block));
             }
 
@@ -1213,7 +1217,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                 cx.emit(Inst::Comment("if-else".to_string()));
                 lower_stmt(cx, else_branch);
             }
-            if cx.blocks.iter().find(|b| b.id == else_block).unwrap().terminator.is_none() {
+            if cx.blocks.iter().find(|b| b.id == cx.current_block).unwrap().terminator.is_none() {
                 cx.terminate(Terminator::Jump(merge_block));
             }
 

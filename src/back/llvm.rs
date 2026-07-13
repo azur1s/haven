@@ -319,9 +319,11 @@ fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
                 }
             }
         }
-        Index { dst, slice, index, element_ty } =>
+        Index { dst, slice, index, index_ty, element_ty } =>
             // %result = getelementptr <PointeeTy>, ptr <BasePtr> {, <IdxTy> <Idx> }*
-            emitln!(cx, "    {dst} = getelementptr {}, ptr {slice}, i32 {index}", emit_type(&element_ty)),
+            // The index type must match the operand's real width (e.g. a u64
+            // index emits an i64 operand), not a hardcoded i32.
+            emitln!(cx, "    {dst} = getelementptr {}, ptr {slice}, {} {index}", emit_type(&element_ty), emit_type(&index_ty)),
         InsertValue { dst, elem, ty, val, index } =>
             emitln!(cx, "    {dst} = insertvalue {{ ptr, i32 }} {elem}, {} {}, {index}", emit_type(&ty), emit_value(val)),
         ExtractValue { dst, val, index } => emitln!(cx, "    {dst} = extractvalue {{ ptr, i32 }} {}, {index}", emit_value(val)),
