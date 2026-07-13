@@ -810,6 +810,23 @@ fn infer<'a>(
                 }
             }
             if !type_args.is_empty() {
+                // a turbofished name that reached here is neither a generic fn (the
+                // `generic_fns` check above) nor an intrinsic (its own arm). Before
+                // blaming the turbofish syntax, check whether the name resolves at
+                // all: an unresolved one is almost always an undefined or, more
+                // often, un-imported symbol (imports aren't re-exported), which the
+                // syntax message hides
+                if let ExprNode::Var(name) = &func.value {
+                    if cx.lookup(name).is_none() {
+                        return Err(Error {
+                            msg: format!(
+                                "unknown function '{}', is it defined and imported into this module?",
+                                name,
+                            ),
+                            span,
+                        });
+                    }
+                }
                 return Err(Error {
                     msg: "type arguments (`::<...>`) are only valid on generic or intrinsic calls".into(),
                     span,

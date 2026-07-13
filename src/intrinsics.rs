@@ -126,7 +126,7 @@ impl Intrinsic {
             &'static [ConstBound],
             usize,
         ) = match self {
-            Self::Null          => (&[Any],     &[],           0),
+            Self::Null          => (&[Pointer], &[],           0),
             Self::Len           => (&[],        &[],           1),
             Self::NumericalCast => (&[Numeric], &[],           1),
             Self::Sizeof        => (&[Any],     &[],           0),
