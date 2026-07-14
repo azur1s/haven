@@ -250,10 +250,22 @@ fn parse_expr<'tks, 'src: 'tks>()
                 Token::Str(s)     => ExprNode::Str(*s),
             },
 
-            // Struct init, with an optional turbofish for generic structs:
-            // `S { f: v }` or `Option::<i32> { f: v }`. The `::` disambiguates the
-            // `<`/`>` from comparison operators, mirroring the call turbofish.
+            // Struct init, with an optional qualifier and an optional turbofish
+            // for generic structs: `S { f: v }`, `geo::Point { f: v }`,
+            // `Option::<i32> { f: v }`, or `mod::Option::<i32> { f: v }`. A first
+            // `::Name` is the module qualifier (folded into `"qual::Name"`); a
+            // `::<...>` is the generic turbofish, disambiguating `<`/`>` from
+            // comparison operators as the call turbofish does. The qualifier
+            // alternative rejects `::<` (not an ident) and backtracks, so the
+            // turbofish still sees it.
             var.map(|s| *s)
+                .then(just(Token::ColonColon).ignore_then(var.map(|s| *s)).or_not())
+                .map(|(a, b)| -> &str {
+                    match b {
+                        Some(sym) => leak(format!("{}::{}", a, sym)),
+                        None => a,
+                    }
+                })
                 .then(
                     just(Token::ColonColon)
                         .ignore_then(
@@ -498,10 +510,21 @@ fn parse_type<'tks, 'src: 'tks>()
                 .map(|inner| Type::Slice(Box::new(inner))),
             // a named type, optionally with angle-bracket arguments:
             //   scalar/struct: `i32`, `Vec2`
+            //   qualified struct: `geo::Point` (from a whole-module import)
             //   simd:          `simd<f32, 4>`  (element type + lane count)
             //   generic struct: `Option<i32>`, `Pair<K, V>`
             // `<` is unambiguous here — type position has no comparison operators.
-            var.then(
+            // a leading `qualifier::` is folded into the joined `"qual::Name"`
+            // name, split + resolved by the module resolver.
+            var.map(|s| *s)
+                .then(just(Token::ColonColon).ignore_then(var.map(|s| *s)).or_not())
+                .map(|(a, b)| -> &str {
+                    match b {
+                        Some(sym) => leak(format!("{}::{}", a, sym)),
+                        None => a,
+                    }
+                })
+            .then(
                 choice((
                     select! { Token::Int32(x) => GenArg::Size(x) },
                     ty.clone().map(GenArg::Ty),
@@ -516,7 +539,7 @@ fn parse_type<'tks, 'src: 'tks>()
                 .or_not())
             .try_map(|(name, args), span| {
                 let Some(args) = args else {
-                    return Ok(match *name {
+                    return Ok(match name {
                         "void" => Type::Void,
                         "bool" => Type::Bool,
                         "i8"   => Type::Int8,
@@ -531,7 +554,7 @@ fn parse_type<'tks, 'src: 'tks>()
                         other  => Type::Struct { name: other, args: Vec::new() },
                     });
                 };
-                match *name {
+                match name {
                     // `simd<element, lanes>`: exactly a type then a size.
                     "simd" => {
                         if args.len() != 2 {

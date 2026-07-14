@@ -3,7 +3,7 @@
 // merge (module.rs). before local-scope tracking landed, only call-position
 // names were rewritten, so this failed with "Undefined variable 'square'".
 
-import std/math
+import std/math { square }
 
 proc apply(f: proc(f64) f64, x: f64) f64 {
     return f(x);

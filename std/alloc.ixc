@@ -9,7 +9,7 @@
 // pointer.
 // TODO implement Option<T> so alloc returns Option<*T> instead of aborting on OOM.
 
-import std/option
+import std/option { Option, none, some }
 
 extern rt_alloc(size: u64) *void;
 extern rt_realloc(ptr: *void, size: u64) *void;

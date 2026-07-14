@@ -9,8 +9,8 @@
 // Because rt_realloc(null, n) behaves like malloc(n), the first push allocates
 // lazily. Call `vec_free` when done, a Vec does not free itself.
 
-import std/alloc  // realloc, dealloc
-import std/option // Option, unwrap
+import std/alloc { alloc, realloc, dealloc }
+import std/option { Option, unwrap, none, some }
 
 struct Vec<T> {
     data: *T,  // heap buffer, or null when cap == 0

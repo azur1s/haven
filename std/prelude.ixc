@@ -5,6 +5,9 @@ extern strlen(s: str) u64;
 // TODO macros? like Rust's format!
 extern printf<T>(fmt: str, arg: T) void;
 
+extern rt_slice_len<T>(slice: *[T]) u64;
+extern rt_slice_from_raw_parts<T>(ptr: *T, len: u64) *[T];
+
 proc print(s: str) void { printf::<str>("%s", s); }
 proc println(s: str) void { printf::<str>("%s\n", s); }
 
@@ -13,3 +16,5 @@ proc println(s: str) void { printf::<str>("%s\n", s); }
 proc printf32(fmt: str, arg: f32) void {
     printf::<f64>(fmt, numerical_cast::<f64>(arg));
 }
+
+proc slice_len<T>(slice: *[T]) u64 { return rt_slice_len::<T>(slice); }

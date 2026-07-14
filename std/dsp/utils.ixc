@@ -1,4 +1,4 @@
-import std/math
+import std/math { powf, log10f, log2f }
 
 // compiler should be able to infer that these is `@alloc(false)`
 proc db_to_lin(db: f32) f32 { return powf(10.0, db / 20.0); }

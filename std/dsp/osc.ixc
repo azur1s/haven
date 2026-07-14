@@ -1,4 +1,4 @@
-import std/math // sinf, fabsf, tau_f32
+import std/math { sinf, fabsf, fmodf, tau_f32 }
 
 // --- Phasor ---------------------------------------------------------------
 // A bare ramp generator: outputs a rising phase in [0, 1) that wraps each cycle.

@@ -1,5 +1,5 @@
-import std/alloc
-import std/option
+import std/alloc { alloc }
+import std/option { unwrap }
 
 struct Vec2 {
     x: f32,

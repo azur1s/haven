@@ -19,10 +19,13 @@
 //!
 //! ## import forms
 //!
-//! * `import std/math`            — whole module, symbols visible unqualified.
-//! * `import std/math { sinf }`   — selective, visible only as `math::sinf`.
+//! * `import std/math`            — whole module, symbols visible only as
+//!   `math::sinf` (qualified under the last path segment).
+//! * `import std/math { sinf }`   — selective, the named symbols visible
+//!   unqualified as `sinf`.
 //!
-//! the prelude is an implicit whole-module import into every user module.
+//! the prelude is an implicit import into every user module, with its symbols
+//! visible unqualified (it has no qualifier spelling).
 //!
 //! ## known v1 limitations
 //!
@@ -30,10 +33,6 @@
 //!   top-level function used as a first-class value (not called directly) isn't
 //!   rewritten across modules — same limitation the monomorphizer has.
 //! * no `pub`; every top-level item is public.
-//! * types have no qualified spelling, so a *selectively* imported struct can't
-//!   be named in a type position (import the whole module to use its structs).
-//!   see `Rewriter::ty`: `geo::Point` in type position just falls through
-//!   unrewritten and later reads as an unknown struct.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -224,16 +223,20 @@ impl<'x, 'a> Rewriter<'x, 'a> {
     }
 
     /// Rewrite struct type names in `ty`, skipping names bound as generic params
-    /// of the enclosing function (those are type params, not structs).
-    /// NOTE: only consults `scopes.types` (unqualified). a selectively-imported
-    /// `geo::Point` in type position never matches and falls through unrewritten
-    /// — see the v1 limitation at the top of the file.
+    /// of the enclosing function (those are type params, not structs). a
+    /// `geo::Point` written for a whole-module import is resolved through the
+    /// qualifier map; a bare name through the unqualified type scope. names that
+    /// resolve to neither fall through and later read as an unknown struct.
     fn ty(&mut self, ty: &mut Type<'a>, gparams: &HashSet<&str>) {
         match ty {
             Type::Struct { name, args } => {
                 let nm: &str = *name;
                 if !gparams.contains(nm) {
-                    if let Some(&f) = self.scopes.types.get(nm) {
+                    if let Some((qual, sym)) = nm.split_once("::") {
+                        if let Some(&f) = self.scopes.quals.get(qual).and_then(|m| m.get(sym)) {
+                            *name = f;
+                        }
+                    } else if let Some(&f) = self.scopes.types.get(nm) {
                         *name = f;
                     }
                 }
@@ -292,7 +295,14 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 for a in args { self.expr(a, gparams); }
             }
             ExprNode::Struct { name, type_args, fields } => {
-                if let Some(&f) = self.scopes.types.get(*name) { *name = f; }
+                let nm: &str = *name;
+                if let Some((qual, sym)) = nm.split_once("::") {
+                    if let Some(&f) = self.scopes.quals.get(qual).and_then(|m| m.get(sym)) {
+                        *name = f;
+                    }
+                } else if let Some(&f) = self.scopes.types.get(nm) {
+                    *name = f;
+                }
                 for a in type_args {
                     if let GenericArg::Type(t) = a { self.ty(t, gparams); }
                 }
@@ -576,32 +586,8 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
 
             match &imp.symbols {
                 None => {
-                    // whole module: everything visible unqualified
-                    // FIXME: the collision check below only looks at
-                    // from_import_calls, which never contains prelude-origin
-                    // names. so a whole-module import that redefines a prelude
-                    // symbol (e.g. `print`) silently shadows it with no
-                    // "imported from more than one module" error.
-                    for (&k, &v) in &target.fns {
-                        if from_import_calls.contains(k) && scopes.calls.get(k).copied() != Some(v) {
-                            errs.push(Error::new(imp.span.clone(), format!(
-                                "'{}' is imported from more than one module; use a selective \
-                                 `{{ {} }}` import to disambiguate", k, k)));
-                        }
-                        scopes.calls.insert(k, v);
-                        from_import_calls.insert(k);
-                    }
-                    for (&k, &v) in &target.structs {
-                        if from_import_types.contains(k) && scopes.types.get(k).copied() != Some(v) {
-                            errs.push(Error::new(imp.span.clone(), format!(
-                                "struct '{}' is imported from more than one module", k)));
-                        }
-                        scopes.types.insert(k, v);
-                        from_import_types.insert(k);
-                    }
-                }
-                Some(syms) => {
-                    // selective: visible only as `qualifier::sym`
+                    // whole module: every symbol visible only as `qualifier::sym`,
+                    // qualified under the module's last path segment.
                     let qualifier = *imp.path.last().unwrap();
                     if let Some(&prev) = qual_owner.get(qualifier) {
                         if prev != target_id {
@@ -611,10 +597,35 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                     }
                     qual_owner.insert(qualifier, target_id);
                     let map = scopes.quals.entry(qualifier).or_default();
+                    for (&k, &v) in &target.fns { map.insert(k, v); }
+                    for (&k, &v) in &target.structs { map.insert(k, v); }
+                }
+                Some(syms) => {
+                    // selective: the named symbols visible unqualified. a name that
+                    // is both a callable and a struct exists in both namespaces, so
+                    // it lands in whichever the reference position asks for.
                     for sym in syms {
-                        if let Some(&f) = target.fns.get(sym).or_else(|| target.structs.get(sym)) {
-                            map.insert(sym, f);
-                        } else {
+                        let mut found = false;
+                        if let Some(&f) = target.fns.get(sym) {
+                            found = true;
+                            if from_import_calls.contains(sym) && scopes.calls.get(sym).copied() != Some(f) {
+                                errs.push(Error::new(imp.span.clone(), format!(
+                                    "'{}' is imported from more than one module; qualify it with a \
+                                     whole-module `import` instead", sym)));
+                            }
+                            scopes.calls.insert(sym, f);
+                            from_import_calls.insert(sym);
+                        }
+                        if let Some(&f) = target.structs.get(sym) {
+                            found = true;
+                            if from_import_types.contains(sym) && scopes.types.get(sym).copied() != Some(f) {
+                                errs.push(Error::new(imp.span.clone(), format!(
+                                    "struct '{}' is imported from more than one module", sym)));
+                            }
+                            scopes.types.insert(sym, f);
+                            from_import_types.insert(sym);
+                        }
+                        if !found {
                             errs.push(Error::new(imp.span.clone(), format!(
                                 "module '{}' has no exported symbol '{}'", imp.path.join("/"), sym)));
                         }

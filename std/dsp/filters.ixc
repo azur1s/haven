@@ -1,4 +1,4 @@
-import std/math // expf, cosf, sinf, tanf, sqrtf, powf, pi_f32, tau_f32
+import std/math { expf, cosf, sinf, tanf, sqrtf, powf, pi_f32, tau_f32 }
 
 // --- OnePole --------------------------------------------------------------
 // A one-pole lowpass, y = a0*x + b1*y[-1].
