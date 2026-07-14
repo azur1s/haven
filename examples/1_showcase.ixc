@@ -47,9 +47,9 @@ proc main() i32 {
     let i: i32 = 0;
     while (i < len(left)) {
         print("L channel: ");
-        print_float(left[i]);
+        printf32("%f\n", left[i]);
         print("R channel: ");
-        print_float(right[i]);
+        printf32("%f\n", right[i]);
         print("\n");
         i = i + 1;
     }

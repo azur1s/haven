@@ -40,12 +40,12 @@ proc main() i32 {
     let v: Vec2 = Vec2 { x: 1.0f32, y: 2.0f32 };
     let w: Vec2 = pick::<Vec2>(v, v);
 
-    print_i32(a);          // 7
-    print_float(b);        // 1.5
-    print_i32(c);          // 7
-    print_i32(d);          // 99
-    print_float(w.x);      // 1.0
-    print_i32(pick::<i32>(3, 4)); // 3
+    printf::<i32>("%d\n", a);          // 7
+    printf32("%f\n", b);        // 1.5
+    printf::<i32>("%d\n", c);          // 7
+    printf::<i32>("%d\n", d);          // 99
+    printf32("%f\n", w.x);      // 1.0
+    printf::<i32>("%d\n", pick::<i32>(3, 4)); // 3
 
     return 0;
 }

@@ -27,8 +27,8 @@ proc main() i32 {
 
     let w: *Vec2 = vec2_add(v, u);
 
-    print_float(w.x);
-    print_float(w.y);
+    printf32("%f\n", w.x);
+    printf32("%f\n", w.y);
 
     return 0;
 }

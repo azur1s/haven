@@ -3,8 +3,6 @@ pub enum Intrinsic {
     /// `null::<T>() -> *T` (a null pointer of type `*T`)
     Null,
 
-    /// `len(slice) -> usize`
-    Len,
     /// Numerical type cast
     /// `numerical_cast(0, iN, uN, fN) -> iN/uN/fN`
     NumericalCast,
@@ -39,7 +37,6 @@ impl Intrinsic {
     pub fn lookup(name: &str) -> Option<Self> {
         match name {
             "null" => Some(Self::Null),
-            "len" => Some(Self::Len),
             "numerical_cast" => Some(Self::NumericalCast),
             "sizeof" => Some(Self::Sizeof),
             "ptr_cast" => Some(Self::PtrCast),
@@ -58,7 +55,6 @@ impl std::fmt::Display for Intrinsic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
             Self::Null => "null",
-            Self::Len => "len",
             Self::NumericalCast => "numerical_cast",
             Self::Sizeof => "sizeof",
             Self::PtrCast => "ptr_cast",
@@ -127,7 +123,6 @@ impl Intrinsic {
             usize,
         ) = match self {
             Self::Null          => (&[Pointer], &[],           0),
-            Self::Len           => (&[],        &[],           1),
             Self::NumericalCast => (&[Numeric], &[],           1),
             Self::Sizeof        => (&[Any],     &[],           0),
             Self::PtrCast       => (&[Pointer], &[],           1),

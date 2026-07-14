@@ -32,8 +32,8 @@ fn emit_type(ty: &Type) -> String {
 
         Array(t, n) => format!("[{} x {}]", n.expect_lit(), emit_type(t)),
         Slice(_) => "{ ptr, i32 }".to_string(), // struct { ptr, len }
-        // `str` is a { ptr, len } fat pointer as a slice
-        Str => "{ ptr, i32 }".to_string(),
+        // `str` is a raw NUL-terminated `*const u8` (a C string), so a bare `ptr`
+        Str => "ptr".to_string(),
         // <size x element_type>
         Simd(ty, size) => format!("<{} x {}>", size.expect_lit(), emit_type(ty)),
         // a function pointer is a plain opaque pointer

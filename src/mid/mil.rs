@@ -42,8 +42,9 @@ pub enum Const {
     Uint64(u64),
     Float32(f32),
     Float64(f64),
-    /// Address of a module-level string blob, emitted as `@.str.{0}`.
-    /// The index refers into `Module::strings`.
+    /// Address of a module-level, NUL-terminated string blob, emitted as
+    /// `@.str.{0}` — the raw `*const u8` value of a `str`. The index refers into
+    /// `Module::strings`.
     GlobalStr(usize),
 }
 
@@ -296,18 +297,20 @@ impl<'a> LowerCtx<'a> {
         b
     }
 
-    /// Intern a string literal's raw source text, resolving escape sequences,
-    /// and return `(index_into_strings, byte_length)`. Identical blobs are
-    /// deduplicated so repeated literals share one global.
-    pub fn intern_string(&mut self, raw: &str) -> (usize, usize) {
-        let bytes = resolve_escapes(raw);
-        let len = bytes.len();
+    /// Intern a string literal's raw source text, resolving escape sequences and
+    /// appending a NUL terminator, and return its index into `strings`. `str` is
+    /// a raw `*const u8` C string, so the stored blob carries the trailing `\0`;
+    /// callers get a bare pointer to it. Identical blobs are deduplicated so
+    /// repeated literals share one global.
+    pub fn intern_string(&mut self, raw: &str) -> usize {
+        let mut bytes = resolve_escapes(raw);
+        bytes.push(0); // NUL terminator, so the raw pointer is a valid C string
         if let Some(i) = self.strings.iter().position(|b| *b == bytes) {
-            return (i, len);
+            return i;
         }
         let idx = self.strings.len();
         self.strings.push(bytes);
-        (idx, len)
+        idx
     }
 
     pub fn emit(&mut self, inst: Inst<'a>) {
@@ -403,12 +406,35 @@ fn lower_intrinsic<'a>(
 ) -> Value {
     match intrinsic {
         Intrinsic::Null => Value::Const(Const::Null),
-        Intrinsic::Len => {
-            let slice_val = lower_expr(cx, &args[0]);
-            let dst = cx.fresh_reg();
-            cx.emit(Inst::ExtractValue { dst, val: slice_val, index: 1 });
-            Value::Reg(dst)
-        }
+        // Intrinsic::Len => {
+        //     let arg_val = lower_expr(cx, &args[0]);
+        //     if matches!(cx.node_types[&args[0].id], Type::Str) {
+        //         // `str` is a raw NUL-terminated C string with no carried length,
+        //         // so recover it at runtime with libc `strlen` (returns i64) and
+        //         // narrow to the i32 that `len()` is typed as.
+        //         let raw = cx.fresh_reg();
+        //         cx.emit(Inst::Call {
+        //             dst: Some(raw),
+        //             callee: Callee::Direct("strlen"),
+        //             args: vec![(arg_val, Type::Pointer(Box::new(Type::Uint8)))],
+        //             return_type: Type::Uint64,
+        //             sret: None,
+        //         });
+        //         let dst = cx.fresh_reg();
+        //         cx.emit(Inst::Extend {
+        //             dst,
+        //             val: Value::Reg(raw),
+        //             from_ty: Type::Uint64,
+        //             to_ty: Type::Int32,
+        //         });
+        //         Value::Reg(dst)
+        //     } else {
+        //         // slices/arrays carry an explicit i32 length in field 1.
+        //         let dst = cx.fresh_reg();
+        //         cx.emit(Inst::ExtractValue { dst, val: arg_val, index: 1 });
+        //         Value::Reg(dst)
+        //     }
+        // }
         Intrinsic::NumericalCast => {
             // numerical_cast::<T>(value)
             let val = lower_expr(cx, &args[0]);
@@ -575,28 +601,12 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
         ExprNode::Float32(n) => Value::Const(Const::Float32(*n)),
         ExprNode::Float64(n) => Value::Const(Const::Float64(*n)),
 
-        // a string literal is a { ptr, i32 } fat pointer where data field is
-        // the address of a read-only global blob and where length is the byte
-        // count like how slices are, so len()/extractvalue (should) work uniformly
+        // a string literal is a raw `*const u8`: the bare address of a
+        // read-only, NUL-terminated global blob. No length is carried; `len()`
+        // recovers it with `strlen` (see lower_intrinsic).
         ExprNode::Str(s) => {
-            let (idx, len) = cx.intern_string(s);
-            let fat0 = cx.fresh_reg();
-            cx.emit(Inst::InsertValue {
-                dst: fat0,
-                elem: Value::Const(Const::Undef),
-                ty: Type::Pointer(Box::new(Type::Int32)), // emits as `ptr`
-                val: Value::Const(Const::GlobalStr(idx)),
-                index: 0,
-            });
-            let fat1 = cx.fresh_reg();
-            cx.emit(Inst::InsertValue {
-                dst: fat1,
-                elem: Value::Reg(fat0),
-                ty: Type::Int32,
-                val: Value::Const(Const::Int32(len as i32)),
-                index: 1,
-            });
-            Value::Reg(fat1)
+            let idx = cx.intern_string(s);
+            Value::Const(Const::GlobalStr(idx))
         }
 
         ExprNode::Var(name) => {
@@ -1541,6 +1551,13 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
     }
 }
 
+/// Whether `ty` is a bare reference to one of `type_params` (an unresolved
+/// generic slot like `T`, which parses as `Type::Struct { name: "T", args: [] }`).
+/// Used to erase a generic extern's type-param params into a variadic `...`.
+fn is_generic_type(type_params: &[&str], ty: &Type<'_>) -> bool {
+    matches!(ty, Type::Struct { name, args } if args.is_empty() && type_params.contains(name))
+}
+
 pub fn lower<'a>(
     program: &[TopLevel<'a>],
     typecheck_context: &crate::mid::typecheck::Context<'a>,
@@ -1600,11 +1617,23 @@ pub fn lower<'a>(
                 cx.blocks.clear();
                 cx.env.clear();
             }
-            TopLevelNode::Extern { name, attributes, params, return_type, .. } => {
+            TopLevelNode::Extern { name, attributes, generics, params, return_type, .. } => {
+                // a generic extern's type-param slots (`arg: T`) have no concrete
+                // layout, so drop them from the declaration and keep only the
+                // concrete leading params. the call site still passes the concrete
+                // args; the underlying C symbol (e.g. printf) accepts them.
+                let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
+                    GenericParam::Type(n) => Some(*n),
+                    GenericParam::Const(_, _) => None,
+                }).collect();
+                let concrete_params = params.iter()
+                    .filter(|(_, ty)| !is_generic_type(&type_params, ty))
+                    .map(|(_, ty)| ty.clone())
+                    .collect();
                 externs.push(ExternDecl {
                     name,
                     attributes: attributes.clone(),
-                    params: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                    params: concrete_params,
                     return_type: return_type.clone(),
                 });
             }

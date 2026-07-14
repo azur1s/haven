@@ -48,8 +48,10 @@ pub fn size_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
         // A SIMD vector is `n` packed elements with no interior padding.
         Simd(elem, n) => size_of(elem, structs) * n.expect_lit(),
 
-        // Slices and `str` are `{ ptr, len }` fat pointers.
-        Slice(_) | Str => aggregate_layout(fat_pointer_fields().iter(), structs).0,
+        // A slice is a `{ ptr, len }` fat pointer.
+        Slice(_) => aggregate_layout(fat_pointer_fields().iter(), structs).0,
+        // `str` is a raw `*const u8` — a single machine pointer.
+        Str => POINTER_SIZE,
 
         Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).0,
 
@@ -78,7 +80,8 @@ pub fn align_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
             .next_power_of_two()
             .max(align_of(elem, structs)),
 
-        Slice(_) | Str => aggregate_layout(fat_pointer_fields().iter(), structs).1,
+        Slice(_) => aggregate_layout(fat_pointer_fields().iter(), structs).1,
+        Str => POINTER_ALIGN,
 
         Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).1,
 
@@ -135,8 +138,9 @@ where
     (round_up(offset, align), align)
 }
 
-/// The `{ ptr, i32 }` field list shared by slices and `str`. The pointer's
-/// pointee is irrelevant to layout, so `*void` stands in.
+/// The `{ ptr, i32 }` field list backing a slice fat pointer. The pointer's
+/// pointee is irrelevant to layout, so `*void` stands in. (`str` no longer uses
+/// this — it is a bare `*const u8`.)
 fn fat_pointer_fields<'a>() -> [Type<'a>; 2] {
     [Type::Pointer(Box::new(Type::Void)), Type::Int32]
 }
@@ -231,9 +235,10 @@ mod tests {
         let v4 = Type::Simd(Box::new(Type::Float32), crate::front::ast::ConstVal::Lit(4));
         assert_eq!((size_of(&v4, &s), align_of(&v4, &s)), (16, 16));
 
-        // slice / str fat pointer: { ptr@0, i32@8 } -> 16 bytes, align 8.
+        // slice fat pointer: { ptr@0, i32@8 } -> 16 bytes, align 8.
         let sl = Type::Slice(Box::new(Type::Float32));
         assert_eq!((size_of(&sl, &s), align_of(&sl, &s)), (16, 8));
-        assert_eq!((size_of(&Type::Str, &s), align_of(&Type::Str, &s)), (16, 8));
+        // `str` is a raw `*const u8` -> one pointer, 8 bytes, align 8.
+        assert_eq!((size_of(&Type::Str, &s), align_of(&Type::Str, &s)), (8, 8));
     }
 }

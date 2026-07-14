@@ -250,17 +250,17 @@ fn typecheck_intrinsic<'a>(
             Ok(target_ty)
         }
 
-        Intrinsic::Len => {
-            let arg_ty = infer(cx, &args[0])?;
-            if !matches!(arg_ty, Type::Slice(_) | Type::Array(_, _) | Type::Pointer(_) | Type::Str) {
-                return Err(Error {
-                    msg: format!("len() expects a slice, array, pointer or str, got {}", arg_ty),
-                    span,
-                });
-            }
-            cx.node_types.insert(expr_id, Type::Int32);
-            Ok(Type::Int32)
-        }
+        // Intrinsic::Len => {
+        //     let arg_ty = infer(cx, &args[0])?;
+        //     if !matches!(arg_ty, Type::Slice(_) | Type::Array(_, _) | Type::Pointer(_) | Type::Str) {
+        //         return Err(Error {
+        //             msg: format!("len() expects a slice, array, pointer or str, got {}", arg_ty),
+        //             span,
+        //         });
+        //     }
+        //     cx.node_types.insert(expr_id, Type::Int32);
+        //     Ok(Type::Int32)
+        // }
         Intrinsic::NumericalCast => {
             // numerical_cast::<T>(value) -> T
             let target_ty = tys[0].clone();
@@ -983,21 +983,24 @@ fn check_export_type<'a>(
             Err(format!("fixed-size array type '[{}; N]' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", inner, inner)),
         Type::Slice(inner) =>
             Err(format!("slice type '{}' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", ty, inner)),
-        Type::Str =>
-            Err("str type is not allowed in @export functions (its fat-pointer layout is not stable across FFI), pass a raw '*u8' pointer and an explicit length parameter instead".into()),
+        // `str` is a raw `*const u8` (a C string) — a single machine pointer,
+        // so it is ABI-stable and maps directly to C's `const char*`.
+        Type::Str => Ok(()),
         // A pointer is a single machine word regardless of what it points to, so
         // it is ABI-stable as an opaque handle even when the pointee's layout is
         // opaque to C (e.g. `*State`, `*u8`, `**u8`). We still reject pointers to
-        // the genuinely fat / target-specific pointees (slice/str/simd/array),
-        // whose *value* representation isn't a plain pointer.
+        // the genuinely fat / target-specific pointees (slice/simd/array), whose
+        // *value* representation isn't a plain pointer. `*str` is fine — it is a
+        // pointer to a pointer (`char**`).
         Type::Pointer(inner) => match &**inner {
             Type::Struct { .. }
             | Type::Void | Type::Bool
             | Type::Int8 | Type::Int32 | Type::Int64
             | Type::Uint8 | Type::Uint32 | Type::Uint64
             | Type::Float32 | Type::Float64
+            | Type::Str
             | Type::Pointer(_) => Ok(()),
-            _ => check_export_type(inner, structs), // *[]f32, *str, *simd<...> stay banned
+            _ => check_export_type(inner, structs), // *[]f32, *simd<...> stay banned
         },
         Type::Simd(_, _) =>
             Err(format!("SIMD type '{}' is not allowed in @export functions because its calling convention is target-specific and not guaranteed to match the expected caller, or that's what I'm told", ty)),
@@ -1628,6 +1631,27 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 }).collect();
                 // only type params get reclassified `Struct`->`Param`; const params
                 // already arrive as `ConstVal::Param` from the parser.
+                let resolved_params = params.iter()
+                    .map(|(_, ty)| resolve_type(&type_params, ty))
+                    .collect();
+                let resolved_return = resolve_type(&type_params, return_type);
+                cx.generic_fns.insert(name, GenericFnSig {
+                    generics: generics.clone(),
+                    params: resolved_params,
+                    return_type: resolved_return,
+                });
+            }
+            // generic externs (`extern printf<T>(...)`) are the same story as
+            // generic functions: they live in `generic_fns` and are only reachable
+            // through turbofish, never via the ordinary function-type path. codegen
+            // still emits the single underlying C symbol (mono keeps the name, drops
+            // the turbofish), so there's nothing to monomorphize.
+            TopLevelNode::Extern { name, generics, params, return_type, .. }
+                if !generics.is_empty() => {
+                let type_params: Vec<&'a str> = generics.iter().filter_map(|g| match g {
+                    GenericParam::Type(n) => Some(*n),
+                    GenericParam::Const(_, _) => None,
+                }).collect();
                 let resolved_params = params.iter()
                     .map(|(_, ty)| resolve_type(&type_params, ty))
                     .collect();

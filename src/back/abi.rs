@@ -262,7 +262,8 @@ fn leaf_class(ty: &Type) -> Class {
         | Type::Int8 | Type::Int32 | Type::Int64
         | Type::Uint8 | Type::Uint32 | Type::Uint64
         | Type::Pointer(_) | Type::Function { .. } => Class::Integer,
-        // Fat pointers are two INTEGER words; FFI bans them, but classify sanely.
+        // A slice is a two-INTEGER-word fat pointer; FFI bans it, but classify
+        // sanely. `str` is a single `*const u8`, handled as a pointer leaf below.
         Type::Slice(_) | Type::Str => Class::Integer,
         Type::Void => Class::NoClass,
         Type::Struct { .. } | Type::Array(..) => {
@@ -280,10 +281,11 @@ fn leaf_is_double(ty: &Type) -> bool {
 }
 
 /// Whether a leaf is a bare pointer (data or function). These fill exactly one
-/// eightbyte and, when alone in it, coerce to `ptr`. Fat pointers (slice/`str`)
-/// are deliberately excluded — they are two words, not a single `ptr`.
+/// eightbyte and, when alone in it, coerce to `ptr`. `str` is a raw `*const u8`,
+/// so it counts too. A slice fat pointer is deliberately excluded — it is two
+/// words, not a single `ptr`.
 fn leaf_is_pointer(ty: &Type) -> bool {
-    matches!(ty, Type::Pointer(_) | Type::Function { .. })
+    matches!(ty, Type::Pointer(_) | Type::Function { .. } | Type::Str)
 }
 
 /// Smallest power-of-two integer width (in bytes) covering `used_bytes`.
