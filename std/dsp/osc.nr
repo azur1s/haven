@@ -1,8 +1,8 @@
 import std/math { sinf, fabsf, fmodf, tau_f32 }
 
 // --- Phasor ---------------------------------------------------------------
-// A bare ramp generator: outputs a rising phase in [0, 1) that wraps each cycle.
-// The building block every oscillator shape is derived from.
+/// A bare ramp generator: outputs a rising phase in [0, 1) that wraps each cycle.
+/// The building block every oscillator shape is derived from.
 
 struct Phasor {
     phase: f32, // current phase, in [0, 1)
@@ -27,8 +27,8 @@ proc phasor_next(p: *Phasor) f32 {
 }
 
 // --- Osc ------------------------------------------------------------------
-// A phase-accumulating oscillator with the usual naive (non-bandlimited)
-// waveform shapers. All outputs are in [-1, 1].
+/// A phase-accumulating oscillator with the usual naive (non-bandlimited)
+/// waveform shapers. All outputs are in [-1, 1].
 
 struct Osc {
     phase: f32, // in [0, 1)

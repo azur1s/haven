@@ -1,5 +1,5 @@
 [package]
-name = "ixc"
+name = "noirc"
 version = "0.1.0"
 edition = "2024"
 
@@ -17,7 +17,7 @@ tempfile = "3.27.0"
 [dev-dependencies]
 libtest-mimic = "0.8"
 
-# Custom test harness (tests/harness.rs): discovers .ixc fixtures under
+# Custom test harness (tests/harness.rs): discovers .nr fixtures under
 # tests/cases/ and reports one named case per file.
 [[test]]
 name = "harness"

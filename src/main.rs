@@ -24,7 +24,7 @@ const RUNTIME_ARCHIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/librunt
 
 /// Prelude source, embedded at compile time. Parsed and injected ahead of every
 /// user program (see `main`). Backed by the C runtime in `crt/rt.c`.
-const PRELUDE_SRC: &str = include_str!("../std/prelude.ixc");
+const PRELUDE_SRC: &str = include_str!("../std/prelude.nr");
 
 fn main() {
     let args = args::Args::parse();

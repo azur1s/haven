@@ -1,29 +1,29 @@
-// std/vec: a growable, heap-backed array.
-//
-// Layout is a three-word triple: a raw `*T` buffer plus the number of live
-// elements (`len`) and the number the buffer can hold (`cap`). Growth is
-// amortized O(1): when `len` would exceed `cap` we double the capacity via
-// `realloc`, so N pushes cost O(N) total.
-//
-// A freshly `vec_new`'d Vec allocates nothing. `data` is null and `cap` is 0.
-// Because rt_realloc(null, n) behaves like malloc(n), the first push allocates
-// lazily. Call `vec_free` when done, a Vec does not free itself.
+/// std/vec: a growable, heap-backed array.
+///
+/// Layout is a three-word triple: a raw `*T` buffer plus the number of live
+/// elements (`len`) and the number the buffer can hold (`cap`). Growth is
+/// amortized O(1): when `len` would exceed `cap` we double the capacity via
+/// `realloc`, so N pushes cost O(N) total.
+///
+/// A freshly `vec_new`'d Vec allocates nothing. `data` is null and `cap` is 0.
+/// Because rt_realloc(null, n) behaves like malloc(n), the first push allocates
+/// lazily. Call `vec_free` when done, a Vec does not free itself.
 
 import std/alloc { alloc, realloc, dealloc }
 import std/option { Option, unwrap, none, some }
 
 struct Vec<T> {
-    data: *T,  // heap buffer, or null when cap == 0
-    len: u64,  // number of initialized elements
-    cap: u64,  // number of elements the buffer can hold
+    data: *T,  /// heap buffer, or null when cap == 0
+    len: u64,  /// number of initialized elements
+    cap: u64,  /// number of elements the buffer can hold
 }
 
-// An empty Vec that owns no allocation yet.
+/// An empty Vec that owns no allocation yet.
 proc vec_new<T>() Vec<T> {
     return Vec::<T> { data: null::<*T>(), len: 0u64, cap: 0u64 };
 }
 
-// An empty Vec with room for `cap` elements already reserved.
+/// An empty Vec with room for `cap` elements already reserved.
 proc vec_with_capacity<T>(cap: u64) Vec<T> {
     let v: Vec<T> = vec_new::<T>();
     vec_reserve::<T>(&v, cap);
@@ -34,8 +34,8 @@ proc vec_len<T>(v: *Vec<T>) u64 { return v.len; }
 proc vec_cap<T>(v: *Vec<T>) u64 { return v.cap; }
 proc vec_is_empty<T>(v: *Vec<T>) bool { return v.len == 0u64; }
 
-// Ensure the buffer can hold at least `needed` elements, reallocating (and
-// doubling) if it currently cannot. Does nothing when there is already room.
+/// Ensure the buffer can hold at least `needed` elements, reallocating (and
+/// doubling) if it currently cannot. Does nothing when there is already room.
 proc vec_reserve<T>(v: *Vec<T>, needed: u64) {
     if (v.cap < needed) {
         let new_cap: u64 = v.cap;
@@ -47,31 +47,31 @@ proc vec_reserve<T>(v: *Vec<T>, needed: u64) {
     }
 }
 
-// Append `value` to the end, growing the buffer if it is full.
+/// Append `value` to the end, growing the buffer if it is full.
 proc vec_push<T>(v: *Vec<T>, value: T) {
     vec_reserve::<T>(v, v.len + 1u64);
     v.data[v.len] = value;
     v.len = v.len + 1u64;
 }
 
-// Read the element at `i` by value. Out-of-bounds is undefined; guard with len.
+/// Read the element at `i` by value. Out-of-bounds is undefined; guard with len.
 proc vec_get<T>(v: *Vec<T>, i: u64) T {
     return v.data[i];
 }
 
-// A pointer to the element at `i`, for in-place mutation of the slot.
+/// A pointer to the element at `i`, for in-place mutation of the slot.
 proc vec_get_ptr<T>(v: *Vec<T>, i: u64) *T {
     return &v.data[i];
 }
 
-// Overwrite the element at `i`. Out-of-bounds is undefined; guard with len.
+/// Overwrite the element at `i`. Out-of-bounds is undefined; guard with len.
 proc vec_set<T>(v: *Vec<T>, i: u64, value: T) {
     v.data[i] = value;
 }
 
-// Remove and return the last element. Returns `Option<*T>`: `some` pointing at
-// the (now logically dead but still resident) slot, or `none` when empty.
-// The pointer is valid until the next push or free.
+/// Remove and return the last element. Returns `Option<*T>`: `some` pointing at
+/// the (now logically dead but still resident) slot, or `none` when empty.
+/// The pointer is valid until the next push or free.
 proc vec_pop<T>(v: *Vec<T>) Option<*T> {
     if (v.len == 0u64) {
         return none::<T>();
@@ -80,12 +80,12 @@ proc vec_pop<T>(v: *Vec<T>) Option<*T> {
     return some::<T>(&v.data[v.len]);
 }
 
-// Logically empty the Vec without touching its capacity or freeing memory.
+/// Logically empty the Vec without touching its capacity or freeing memory.
 proc vec_clear<T>(v: *Vec<T>) {
     v.len = 0u64;
 }
 
-// Release the backing allocation and reset to the empty, unallocated state.
+/// Release the backing allocation and reset to the empty, unallocated state.
 proc vec_free<T>(v: *Vec<T>) {
     if (v.cap != 0u64) {
         dealloc::<T>(v.data);
@@ -95,7 +95,7 @@ proc vec_free<T>(v: *Vec<T>) {
     v.cap = 0u64;
 }
 
-// Iterate over the Vec, calling `f` on each element by pointer.
+/// Iterate over the Vec, calling `f` on each element by pointer.
 proc vec_for_each<T>(v: *Vec<T>, f: proc(*T) void) {
     let i: u64 = 0u64;
     while (i < v.len) {
@@ -104,7 +104,7 @@ proc vec_for_each<T>(v: *Vec<T>, f: proc(*T) void) {
     }
 }
 
-// Map each element of the Vec to a new Vec by calling `f` on each element by pointer.
+/// Map each element of the Vec to a new Vec by calling `f` on each element by pointer.
 proc vec_map<T, U>(v: *Vec<T>, f: proc(*T) U) Vec<U> {
     let result: Vec<U> = vec_with_capacity::<U>(v.len);
     let i: u64 = 0u64;

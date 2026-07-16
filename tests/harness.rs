@@ -1,6 +1,6 @@
 //! End-to-end test harness for the compiler.
 //!
-//! Each fixture is a single `.ixc` file; the whole compiler pipeline (parse ->
+//! Each fixture is a single `.nr` file; the whole compiler pipeline (parse ->
 //! typecheck -> safecheck -> mono -> mil -> llvm -> clang link) is exercised by
 //! actually compiling and running it. Tests are discovered from disk and run in
 //! parallel via `libtest-mimic`, so each one shows up as its own named case
@@ -29,7 +29,7 @@ use libtest_mimic::{Arguments, Failed, Trial};
 
 /// Path to the freshly-built compiler binary. Cargo sets this for integration
 /// tests so we always test the current build, no matter the target dir.
-const COMPILER_BIN: &str = env!("CARGO_BIN_EXE_ixc");
+const COMPILER_BIN: &str = env!("CARGO_BIN_EXE_noirc");
 
 fn main() {
     let args = Arguments::from_args();
@@ -48,7 +48,7 @@ enum Mode {
     Fail,
 }
 
-/// Turn every `.ixc` file in `dir` into a `Trial`. The test name is
+/// Turn every `.nr` file in `dir` into a `Trial`. The test name is
 /// `run/<stem>` or `fail/<stem>` so failures point straight at the fixture.
 fn collect(dir: &Path, mode: Mode, trials: &mut Vec<Trial>) {
     let kind = match mode {
@@ -58,7 +58,7 @@ fn collect(dir: &Path, mode: Mode, trials: &mut Vec<Trial>) {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("cannot read fixtures in {}: {e}", dir.display()))
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|x| x == "ixc"))
+        .filter(|p| p.extension().is_some_and(|x| x == "nr"))
         .collect();
     entries.sort();
 

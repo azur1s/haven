@@ -4,7 +4,7 @@ proc tau() f64 { return 6.28318530717958647692f64; }
 proc pi_f32() f32 { return 3.14159265358979323846f32; }
 proc tau_f32() f32 { return 6.28318530717958647692f32; }
 
-// clamp `x` into the inclusive range [lo, hi].
+/// Clamp `x` into the inclusive range [lo, hi].
 proc clampf(x: f64, lo: f64, hi: f64) f64 {
     if (x < lo) { return lo; }
     if (x > hi) { return hi; }

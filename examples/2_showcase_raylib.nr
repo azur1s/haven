@@ -2,10 +2,10 @@
 //
 // Tested with:
 // Linux
-// > ixc examples/1_1_showcase_raylib.ixc -o showcase -F"-O3 -Wno-override-module $(pkg-config --libs raylib) -lm"
+// > noirc examples/1_1_showcase_raylib.nr -o showcase -F"-O3 -Wno-override-module $(pkg-config --libs raylib) -lm"
 // > ./showcase
 // Windows, MSVC toolchain (raylib-6.0-win64-msvc16)
-// > ixc examples/2_showcase_raylib.ixc -o showcase -F"-O3 -Wno-override-module ./path_to_raylib/raylib.lib\
+// > noirc examples/2_showcase_raylib.nr -o showcase -F"-O3 -Wno-override-module ./path_to_raylib/raylib.lib\
 //     -lwinmm -lgdi32 -lopengl32 -lshell32 -luser32 -lkernel32"
 // > ./showcase.exe
 

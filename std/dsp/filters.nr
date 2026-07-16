@@ -1,8 +1,8 @@
 import std/math { expf, cosf, sinf, tanf, sqrtf, powf, pi_f32, tau_f32 }
 
 // --- OnePole --------------------------------------------------------------
-// A one-pole lowpass, y = a0*x + b1*y[-1].
-// b1 = exp(-2*pi*fc/sr) places the pole; a0 = 1 - b1 keeps unity DC gain.
+/// A one-pole lowpass, y = a0*x + b1*y[-1].
+/// b1 = exp(-2*pi*fc/sr) places the pole; a0 = 1 - b1 keeps unity DC gain.
 
 struct OnePole {
     a0: f32,
@@ -27,9 +27,9 @@ proc onepole_process(f: *OnePole, x: f32) f32 {
 }
 
 // --- Biquad ---------------------------------------------------------------
-// A second-order (biquad) section in transposed direct-form II, with the RBJ
-// audio-EQ cookbook coefficient sets. Coefficients are stored a0-normalized;
-// `biquad_from` does that normalization and clears the state.
+/// A second-order (biquad) section in transposed direct-form II, with the RBJ
+/// audio-EQ cookbook coefficient sets. Coefficients are stored a0-normalized;
+/// `biquad_from` does that normalization and clears the state.
 
 struct Biquad {
     b0: f32, b1: f32, b2: f32,
@@ -37,7 +37,7 @@ struct Biquad {
     s1: f32, s2: f32, // transposed DF-II state
 }
 
-// normalize raw (b0..a2) by a0 and return a zero-state section.
+/// Normalize raw (b0..a2) by a0 and return a zero-state section.
 proc biquad_from(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) Biquad {
     return Biquad {
         b0: b0 / a0, b1: b1 / a0, b2: b2 / a0,
@@ -64,7 +64,7 @@ proc biquad_highpass(cutoff: f32, q: f32, sr: f32) Biquad {
         1.0 + alpha, -2.0 * cs, 1.0 - alpha);
 }
 
-// constant 0 dB peak-gain bandpass.
+/// Constant 0 dB peak-gain bandpass.
 proc biquad_bandpass(cutoff: f32, q: f32, sr: f32) Biquad {
     let w: f32 = tau_f32() * cutoff / sr;
     let cs: f32 = cosf(w);
@@ -83,7 +83,7 @@ proc biquad_notch(cutoff: f32, q: f32, sr: f32) Biquad {
         1.0 + alpha, -2.0 * cs, 1.0 - alpha);
 }
 
-// peaking EQ: `gain_db` boost/cut at `cutoff`, bandwidth set by `q`.
+/// Peaking EQ: `gain_db` boost/cut at `cutoff`, bandwidth set by `q`.
 proc biquad_peak(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad {
     let a: f32 = powf(10.0, gain_db / 40.0);
     let w: f32 = tau_f32() * cutoff / sr;
@@ -133,10 +133,10 @@ proc biquad_process(f: *Biquad, x: f32) f32 {
 }
 
 // --- StateVariable --------------------------------------------------------
-// A topology-preserving-transform (Zavalishin) state-variable filter. One pass
-// yields lowpass, highpass, bandpass and notch outputs simultaneously, and it
-// stays well-behaved when the cutoff is modulated - unlike the classic
-// Chamberlin SVF, which goes unstable near Nyquist.
+/// A topology-preserving-transform (Zavalishin) state-variable filter. One pass
+/// yields lowpass, highpass, bandpass and notch outputs simultaneously, and it
+/// stays well-behaved when the cutoff is modulated - unlike the classic
+/// Chamberlin SVF, which goes unstable near Nyquist.
 
 struct SvfOut {
     lp: f32,

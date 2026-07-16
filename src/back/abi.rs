@@ -102,7 +102,7 @@ fn merge(a: Class, b: Class) -> Class {
 }
 
 /// Classify how `ty` is passed/returned across the C ABI, picking the flavor for
-/// the target we compile to. ixc currently emits code for the host, so the
+/// the target we compile to. noir currently emits code for the host, so the
 /// choice is made by `cfg!` - a Windows-hosted compiler uses the Microsoft x64
 /// convention, everything else x86-64 System V. When a real `--target` flag
 /// lands, thread the selector through here instead.

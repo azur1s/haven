@@ -8,15 +8,15 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 
-echo "building ixc..."
+echo "building noirc..."
 cargo build --manifest-path "$root/Cargo.toml"
-bin="$root/target/debug/ixc"
+bin="$root/target/debug/noirc"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-for f in "$here/run"/*.ixc; do
-    n="$(basename "$f" .ixc)"
+for f in "$here/run"/*.nr; do
+    n="$(basename "$f" .nr)"
     if ! "$bin" "$f" -o "$tmp/$n" >"$tmp/$n.log" 2>&1; then
         echo "SKIP $n (does not compile):"
         sed 's/\x1b\[[0-9;]*m//g' "$tmp/$n.log" | head -3

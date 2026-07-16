@@ -3,7 +3,7 @@
 //! sits between parsing and typechecking. given an entry file it:
 //!
 //!   1. transitively loads every imported module (`import std/...` -> an embedded
-//!      stdlib source; any other path -> an `.ixc` file relative to the
+//!      stdlib source; any other path -> an `.nr` file relative to the
 //!      *importing* file's dir);
 //!   2. gives each module a unique mangling prefix and renames its top-level defs
 //!      (`foo` in module `m1` -> `m1_...$foo`), leaving `extern` link names,
@@ -43,18 +43,18 @@ use crate::front::{ast::*, parse};
 use crate::diag::{self, Sources};
 
 /// The whole `crt/std` tree, embedded into the binary at build time. Nested
-/// modules just work: `std/dsp/osc` -> `crt/std/dsp/osc.ixc`, no per-file wiring.
+/// modules just work: `std/dsp/osc` -> `crt/std/dsp/osc.nr`, no per-file wiring.
 static STD_DIR: include_dir::Dir<'static> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/std");
 
 /// Source of an embedded stdlib module, by its `std/...` import path. The key is
 /// `imp.path.join("/")` (always forward slashes), so `std/<rel>` maps to the
-/// embedded file `<rel>.ixc`.
+/// embedded file `<rel>.nr`.
 fn std_source(key: &str) -> Option<&'static str> {
     let rel = key.strip_prefix("std/")?;
     // include_dir keys files by forward-slash path relative to the embedded root,
     // on every host platform.
-    let file = format!("{rel}.ixc");
+    let file = format!("{rel}.nr");
     STD_DIR.get_file(&file)?.contents_utf8()
 }
 
@@ -138,7 +138,7 @@ fn resolve_key(imp: &Import, dir: Option<&Path>) -> Result<String, String> {
             "cannot resolve a relative import from this module (std/prelude modules may only import `std/...`)".to_string())?;
         let mut p = dir.to_path_buf();
         for seg in &imp.path { p.push(seg); }
-        p.set_extension("ixc");
+        p.set_extension("nr");
         let canon = std::fs::canonicalize(&p)
             .map_err(|_| format!("cannot find module file '{}'", p.display()))?;
         Ok(canon.to_string_lossy().into_owned())
@@ -501,7 +501,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
         // reproducible IR diffs. want a stable (content/path-based) key instead.
         let prefix = format!("m{}_{}", id, p.key
             .rsplit(['/', '\\']).next().unwrap_or("mod")
-            .trim_end_matches(".ixc")
+            .trim_end_matches(".nr")
             .replace(|c: char| !c.is_alphanumeric(), "_"));
 
         // resolve + enqueue each import. errors point at the import statement in
