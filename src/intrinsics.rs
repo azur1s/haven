@@ -15,21 +15,21 @@ pub enum Intrinsic {
     /// turn the untyped `*void` from the allocator into a typed `*T`.
     PtrCast,
 
-    /// `simd_splat(T, N, value) -> T where T = simd[T, N]`
-    /// e.g. `value = simd_splat(f32, 4, 1.0) -> simd[f32, 4] (1.0, 1.0, 1.0, 1.0)`
+    /// `simd_splat::<T, N>(value) -> T where T = simd<T, N>`
+    /// e.g. `value = simd_splat::<f32, 4>(1.0) -> simd<f32, 4> (1.0, 1.0, 1.0, 1.0)`
     SimdSplat,
-    /// `simd_load(T, N, slice, offset: iN/uN) -> T where T = simd[T, N]`
-    /// e.g. `value = simd_load(f32, 4, buf, i) -> simd[f32, 4]`
+    /// `simd_load::<T, N>(slice, offset: iN/uN) -> T where T = simd<T, N>`
+    /// e.g. `value = simd_load::<f32, 4>(buf, i) -> simd<f32, 4>`
     SimdLoad,
-    /// `simd_store(T, N, slice, offset: iN/uN, value: T) -> () where T = simd[T, N]`
-    /// e.g. `simd_store(f32, 4, buf, i, value * 0.5) -> ()`
+    /// `simd_store::<T, N>(slice, offset: iN/uN, value: T) -> () where T = simd<T, N>`
+    /// e.g. `simd_store::<f32, 4>(buf, i, value * 0.5) -> ()`
     SimdStore,
-    /// `simd_concat(T, N, value1, value2) -> T where T = simd[T, 2N]`
+    /// `simd_concat::<T, N>(value1, value2) -> T where T = simd<T, 2N>`
     SimdConcat,
-    /// `simd_low(T, N, value: simd[T, M]) -> simd[T, N] where N < M`
-    /// e.g. `value = simd_low(f32, 2, simd[f32, 4]) -> simd[f32, 2] (value[0], value[1])`
+    /// `simd_low::<T, N>(value: simd<T, M>) -> simd<T, N> where N < M`
+    /// e.g. `value = simd_low::<f32, 2>(simd::<f32, 4>) -> simd<f32, 2> (value[0], value[1])`
     SimdLow,
-    /// `simd_high(T, N, value: simd[T, M]) -> simd[T, N] where N < M`
+    /// `simd_high::<T, N>(value: simd<T, M>) -> simd<T, N> where N < M`
     SimdHigh,
 }
 
@@ -74,7 +74,7 @@ impl std::fmt::Display for Intrinsic {
 pub enum TyConstraint {
     /// Any sized type: a scalar (including `bool`) or a struct. Used by `sizeof`.
     Any,
-    /// A numeric scalar (`iN`/`uN`/`fN`) — also exactly the set of valid SIMD
+    /// A numeric scalar (`iN`/`uN`/`fN`) - also exactly the set of valid SIMD
     /// element types.
     Numeric,
     /// Any pointer type (`*T`). Used by `ptr_cast`.
@@ -83,8 +83,8 @@ pub enum TyConstraint {
 
 /// Bound on an intrinsic's const (compile-time integer) parameter: an inclusive
 /// numeric range plus a divisibility requirement. Const constraints don't form a
-/// clean taxonomy (unlike type kinds) — they're parameterized numeric predicates
-/// — so this is a value, not an enum. `multiple_of == 1` means no divisibility
+/// clean taxonomy (unlike type kinds) - they're parameterized numeric predicates
+/// - so this is a value, not an enum. `multiple_of == 1` means no divisibility
 /// constraint.
 #[derive(Clone, Copy, Debug)]
 pub struct ConstBound {

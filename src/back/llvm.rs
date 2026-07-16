@@ -111,7 +111,7 @@ struct EmitCtx<'a> {
     abi_ctr: usize,
     /// When the function currently being emitted returns a struct in registers
     /// (SysV Direct class), this holds the local slot the body writes the result
-    /// into, plus its coerced register pieces — so `ret void` becomes a
+    /// into, plus its coerced register pieces - so `ret void` becomes a
     /// load-and-return of the coerced value. `None` for void/scalar/sret returns.
     sret_direct: Option<(Register, Vec<Reg>)>,
 }
@@ -504,7 +504,7 @@ fn emit_struct_to_regs<'a>(cx: &mut EmitCtx<'a>, struct_ptr: &str, regs: &[Reg])
 }
 
 /// Emit stores writing each coerced `value` into the struct storage at
-/// `struct_ptr`, at its eightbyte offset — the inverse of `emit_struct_to_regs`.
+/// `struct_ptr`, at its eightbyte offset - the inverse of `emit_struct_to_regs`.
 fn emit_regs_to_struct<'a>(cx: &mut EmitCtx<'a>, struct_ptr: &str, regs: &[Reg], values: &[String]) {
     for (i, (r, v)) in regs.iter().zip(values).enumerate() {
         let ty = r.to_llvm();
@@ -554,7 +554,7 @@ fn emit_function<'a>(cx: &mut EmitCtx<'a>, func: Function<'a>) {
 
     // Build the parameter list, coercing by-value Direct structs into their
     // eightbyte registers. Each such struct also needs entry glue that rebuilds
-    // it into the `ptr` register the MIL body expects — recorded here, emitted
+    // it into the `ptr` register the MIL body expects - recorded here, emitted
     // once inside the entry block below.
     let mut sig_params: Vec<String> = Vec::new();
     let mut param_rebuilds: Vec<(Register, &str, Vec<Reg>, Vec<String>)> = Vec::new();
@@ -568,7 +568,7 @@ fn emit_function<'a>(cx: &mut EmitCtx<'a>, func: Function<'a>) {
                     }
                     param_rebuilds.push((*reg, name, regs, names));
                 }
-                // Memory struct: received as a `byval` pointer — the caller's
+                // Memory struct: received as a `byval` pointer - the caller's
                 // copy, which this frame owns. (The MIL body still copies it into
                 // a local on entry; harmless, just a second copy.)
                 Abi::Memory => sig_params.push(format!(
@@ -642,7 +642,7 @@ fn emit_extern<'a>(cx: &mut EmitCtx<'a>, ext: ExternDecl<'a>) {
         .flat_map(|ty| abi_param_types(cx, ty))
         .collect();
     // A Memory-class struct return uses a hidden leading sret pointer and returns
-    // void — the same shape MIL lowers the matching call to.
+    // void - the same shape MIL lowers the matching call to.
     let ret_str = match &ext.return_type {
         Type::Struct { name, .. } => match cx.struct_abi(name) {
             Abi::Direct(regs) => coerced_aggregate_ty(&regs),
@@ -688,7 +688,7 @@ fn emit_string_blob(bytes: &[u8]) -> String {
 fn emit_const_init(init: &ConstInit) -> String {
     match init {
         ConstInit::Scalar(c) => emit_value(Value::Const(c.clone())),
-        // `{ <fty> <finit>, ... }` — the surrounding type (`%Name`) is emitted by
+        // `{ <fty> <finit>, ... }` - the surrounding type (`%Name`) is emitted by
         // the caller, and each field carries its own inline type.
         ConstInit::Struct(fields) => {
             let body = fields.iter()
@@ -697,7 +697,7 @@ fn emit_const_init(init: &ConstInit) -> String {
                 .join(", ");
             format!("{{ {body} }}")
         }
-        // `[ <ety> e0, <ety> e1, ... ]` — the surrounding `[N x <ety>]` type is
+        // `[ <ety> e0, <ety> e1, ... ]` - the surrounding `[N x <ety>]` type is
         // emitted by the caller (top-level global or enclosing struct field).
         ConstInit::Array(elem_ty, elems) => {
             let body = elems.iter()

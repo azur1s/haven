@@ -61,7 +61,7 @@ impl<T> Metadata<T> {
 /// A resolved value binding: which specific declaration a `Var` use refers to.
 /// Produced by name resolution (in the typechecker) and consumed by MIL lowering
 /// to key each variable's storage slot. Locals are identified by their `Declare`
-/// statement's node id — globally unique, so two same-named locals in different
+/// statement's node id - globally unique, so two same-named locals in different
 /// scopes (shadowing) never collide. Params are identified by name, which is
 /// unique within a single function's parameter list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -192,7 +192,7 @@ impl Display for BinaryOp {
     }
 }
 
-/// A compile-time constant appearing in a type position — the `N` in `[T; N]` or
+/// A compile-time constant appearing in a type position - the `N` in `[T; N]` or
 /// `simd<T, N>`. Either a concrete literal or an unresolved const generic
 /// parameter. Like [`Type::Param`], a `Param` is abstract and must never survive
 /// to codegen; monomorphization substitutes it away. Use [`ConstVal::expect_lit`]
@@ -207,7 +207,7 @@ pub enum ConstVal<'a> {
 
 impl<'a> ConstVal<'a> {
     /// The concrete literal value. Panics if a const param survived past
-    /// monomorphization — mirrors the `Type::Param` "must not reach codegen"
+    /// monomorphization - mirrors the `Type::Param` "must not reach codegen"
     /// contract, so a bug surfaces loudly rather than miscompiling.
     pub fn expect_lit(&self) -> usize {
         match self {
@@ -246,7 +246,7 @@ pub enum Type<'a> {
     Str,
     /// A named struct type, with any generic arguments applied, e.g. `Vec2`
     /// (`args` empty), `Option<i32>` (one type arg) or `Buf<i32, 8>` (a type arg
-    /// and a const arg — hence `GenericArg`, not `Type`). `args` is always empty
+    /// and a const arg - hence `GenericArg`, not `Type`). `args` is always empty
     /// after monomorphization: a generic struct type is rewritten to a concrete
     /// instance with a mangled `name` and no `args` (like generic functions). Use
     /// [`Type::plain_struct`] to build the common no-args case.
@@ -259,7 +259,7 @@ pub enum Type<'a> {
 }
 
 impl<'a> Type<'a> {
-    /// A non-generic struct type (no type arguments) — the common case, and the
+    /// A non-generic struct type (no type arguments) - the common case, and the
     /// only shape any stage after monomorphization ever produces.
     pub fn plain_struct(name: &'a str) -> Self {
         Type::Struct { name, args: Vec::new() }
@@ -444,8 +444,8 @@ pub enum GenericArg<'a> {
     Type(Type<'a>),
     /// A compile-time constant argument: either a literal (`4`) or a const
     /// generic parameter forwarded by name (the `N` in `simd_load::<f32, N>`).
-    /// Note the parser can't tell a forwarded const param from a type — both are
-    /// bare idents — so it emits those as `Type(Struct(name))`; typecheck and
+    /// Note the parser can't tell a forwarded const param from a type - both are
+    /// bare idents - so it emits those as `Type(Struct(name))`; typecheck and
     /// monomorphization reclassify them once the callee's kinds are known.
     Const(ConstVal<'a>),
 }

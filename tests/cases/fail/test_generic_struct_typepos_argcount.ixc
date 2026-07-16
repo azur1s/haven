@@ -1,6 +1,6 @@
 //@ error: struct 'Option' expects 1 type argument, got 2
 // A generic struct used in type position must apply the right number of type
-// arguments — checked before the (stage 3) instantiation rejection.
+// arguments - checked before the (stage 3) instantiation rejection.
 
 struct Option<T> { present: bool, value: T }
 

@@ -16,7 +16,7 @@ proc shadow_param(a: i32) i32 {
         print("\n");
     }
     print("after a=");
-    printf::<i32>("%d\n", a);         // 7 — param slot untouched
+    printf::<i32>("%d\n", a);         // 7 - param slot untouched
     print("\n");
     return a;
 }

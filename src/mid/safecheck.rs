@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 type CleanMap<'a> = HashMap<&'a str, bool>;
 
 /// Sentinel "callee" for an indirect call through a function pointer. Its target
-/// isn't statically known, so we can't prove it clean — it never appears in the
+/// isn't statically known, so we can't prove it clean - it never appears in the
 /// clean map, so any function that makes one is forced dirty. Not a valid
 /// identifier, so it can't collide with a real callable's name.
 const INDIRECT_CALLEE: &str = "<indirect call>";

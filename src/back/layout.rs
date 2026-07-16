@@ -50,7 +50,7 @@ pub fn size_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
 
         // A slice is a `{ ptr, len }` fat pointer.
         Slice(_) => aggregate_layout(fat_pointer_fields().iter(), structs).0,
-        // `str` is a raw `*const u8` — a single machine pointer.
+        // `str` is a raw `*const u8` - a single machine pointer.
         Str => POINTER_SIZE,
 
         Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).0,
@@ -140,7 +140,7 @@ where
 
 /// The `{ ptr, i32 }` field list backing a slice fat pointer. The pointer's
 /// pointee is irrelevant to layout, so `*void` stands in. (`str` no longer uses
-/// this — it is a bare `*const u8`.)
+/// this - it is a bare `*const u8`.)
 fn fat_pointer_fields<'a>() -> [Type<'a>; 2] {
     [Type::Pointer(Box::new(Type::Void)), Type::Int32]
 }
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn color_is_four_bytes_align_one() {
-        // struct Color { r,g,b,a: u8 } — four packed bytes, no padding.
+        // struct Color { r,g,b,a: u8 } - four packed bytes, no padding.
         let s = table(&[(
             "Color",
             vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8), ("a", Type::Uint8)],
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn mixed_fields_get_padded() {
-        // struct { a: bool, b: i64 } — b must land at offset 8, size 16 align 8.
+        // struct { a: bool, b: i64 } - b must land at offset 8, size 16 align 8.
         let s = table(&[("Mixed", vec![("a", Type::Bool), ("b", Type::Int64)])]);
         let m = Type::plain_struct("Mixed");
         assert_eq!(field_offset("Mixed", 0, &s), 0);

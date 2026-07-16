@@ -1,6 +1,6 @@
 // Stage 1 of generic structs: a generic struct can be *declared* (with type
 // parameters, and fields referencing them). Such a template carries `Param`
-// fields and is not laid out directly — it must be dropped from codegen, exactly
+// fields and is not laid out directly - it must be dropped from codegen, exactly
 // like an uninstantiated generic function, and must not disturb ordinary structs.
 
 // generic struct with a field of its type parameter

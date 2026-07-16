@@ -19,9 +19,9 @@
 //!
 //! ## import forms
 //!
-//! * `import std/math`            — whole module, symbols visible only as
+//! * `import std/math`            - whole module, symbols visible only as
 //!   `math::sinf` (qualified under the last path segment).
-//! * `import std/math { sinf }`   — selective, the named symbols visible
+//! * `import std/math { sinf }`   - selective, the named symbols visible
 //!   unqualified as `sinf`.
 //!
 //! the prelude is an implicit import into every user module, with its symbols
@@ -31,7 +31,7 @@
 //!
 //! * only call targets, struct literals and struct *types* get rewritten. a
 //!   top-level function used as a first-class value (not called directly) isn't
-//!   rewritten across modules — same limitation the monomorphizer has.
+//!   rewritten across modules - same limitation the monomorphizer has.
 //! * no `pub`; every top-level item is public.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -658,7 +658,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
     // merge: concatenate all modules into one flat program, reconciling the
     // global callable namespace (functions + externs, keyed by final emitted
     // name) as we go. two identical `extern` declarations of the same C symbol
-    // are the legit duplicate — de-duped silently. everything else that collides
+    // are the legit duplicate - de-duped silently. everything else that collides
     // on a final name would become a duplicate LLVM symbol at link time, so we
     // turn it into a source diagnostic here instead:
     //   * two externs, same name, different signature -> mismatched-ABI error

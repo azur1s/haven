@@ -25,7 +25,7 @@ pub struct Context<'a> {
     /// Name resolution: maps each `Var` use's node id to the specific param/local
     /// binding it refers to. Globals are absent (they fall back to the global
     /// namespace). Consumed by MIL lowering to key variable storage, which makes
-    /// shadowing correct — two same-named locals get distinct `Binding::Local`s.
+    /// shadowing correct - two same-named locals get distinct `Binding::Local`s.
     pub resolved: HashMap<usize, Binding<'a>>,
     /// Struct definitions from name to ordered list of (field name, field type)
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
@@ -87,7 +87,7 @@ impl<'a> Context<'a> {
 
 /// Resolves a turbofish type argument (generic params → `Type::Param`), checks
 /// any referenced structs exist, then checks it against the parameter's kind
-/// constraint. Type params pass kind checks optimistically — their kind is only
+/// constraint. Type params pass kind checks optimistically - their kind is only
 /// known once a generic function is monomorphized (not yet implemented), and
 /// such bodies never reach codegen.
 fn check_type_arg<'a>(
@@ -217,7 +217,7 @@ fn bind_generics<'a>(
 }
 
 /// If `ty` is a bare identifier (`Type::Struct` before resolution, or `Type::Param`
-/// after), returns that name — the two shapes a forwarded const generic parameter
+/// after), returns that name - the two shapes a forwarded const generic parameter
 /// can take in a turbofish argument. Compound types are never const params.
 fn const_param_name<'a>(ty: &Type<'a>) -> Option<&'a str> {
     match ty {
@@ -869,7 +869,7 @@ fn infer<'a>(
 }
 
 /// Whether executing `stmt` guarantees control flow never falls through to the
-/// statement after it — i.e. it returns (or diverges) on every path. Used to
+/// statement after it - i.e. it returns (or diverges) on every path. Used to
 /// verify that a non-void function cannot reach the end of its body without
 /// returning a value.
 ///
@@ -917,7 +917,7 @@ fn check_stmt<'a>(
             let ty = resolve_type(&cx.generics, ty);
             check_expr(cx, &ty, value)?;
             // the local's binding identity is this Declare stmt's node id, which
-            // is globally unique — so shadowed same-named locals stay distinct.
+            // is globally unique - so shadowed same-named locals stay distinct.
             cx.insert(name, Some(Binding::Local(stmt.id)), ty);
         },
 
@@ -983,14 +983,14 @@ fn check_export_type<'a>(
             Err(format!("fixed-size array type '[{}; N]' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", inner, inner)),
         Type::Slice(inner) =>
             Err(format!("slice type '{}' is not allowed in @export functions, use a raw pointer '*{}' and an explicit length parameter instead", ty, inner)),
-        // `str` is a raw `*const u8` (a C string) — a single machine pointer,
+        // `str` is a raw `*const u8` (a C string) - a single machine pointer,
         // so it is ABI-stable and maps directly to C's `const char*`.
         Type::Str => Ok(()),
         // A pointer is a single machine word regardless of what it points to, so
         // it is ABI-stable as an opaque handle even when the pointee's layout is
         // opaque to C (e.g. `*State`, `*u8`, `**u8`). We still reject pointers to
         // the genuinely fat / target-specific pointees (slice/simd/array), whose
-        // *value* representation isn't a plain pointer. `*str` is fine — it is a
+        // *value* representation isn't a plain pointer. `*str` is fine - it is a
         // pointer to a pointer (`char**`).
         Type::Pointer(inner) => match &**inner {
             Type::Struct { .. }
@@ -1031,8 +1031,8 @@ fn check_export_type<'a>(
 /// Verify that a global's initializer is a compile-time constant we can emit as
 /// an LLVM `constant` aggregate: literals (optionally negated), struct literals of
 /// constants, and bare function names (a function's address is a link-time
-/// constant). Anything that would need to run code — a call, a load of another
-/// global's value, indexing — is rejected.
+/// constant). Anything that would need to run code - a call, a load of another
+/// global's value, indexing - is rejected.
 fn check_const_initializer<'a>(cx: &Context<'a>, expr: &Expr<'a>) -> Result<(), Error> {
     match &expr.value {
         ExprNode::Bool(_)
@@ -1046,7 +1046,7 @@ fn check_const_initializer<'a>(cx: &Context<'a>, expr: &Expr<'a>) -> Result<(), 
                 | ExprNode::Uint8(_) | ExprNode::Uint32(_) | ExprNode::Uint64(_)
                 | ExprNode::Float32(_) | ExprNode::Float64(_)) => Ok(()),
         // a bare top-level function name: its address is a link-time constant.
-        // a *global* of function type is excluded — reading its value isn't const.
+        // a *global* of function type is excluded - reading its value isn't const.
         ExprNode::Var(name)
             if matches!(cx.lookup(name), Some((_, Type::Function { .. })))
                 && !cx.global_consts.contains(name) => Ok(()),
@@ -1497,8 +1497,8 @@ fn bind_struct_generics<'a>(
 }
 
 /// Verifies that every `ConstVal::Param` in `ty` names a const generic parameter
-/// in `in_scope`. Ignores type params/structs entirely — those are handled by
-/// `resolve_type`/`check_type_resolves` — so it can run on raw (unresolved) types.
+/// in `in_scope`. Ignores type params/structs entirely - those are handled by
+/// `resolve_type`/`check_type_resolves` - so it can run on raw (unresolved) types.
 fn check_const_scope<'a>(in_scope: &[&'a str], ty: &Type<'a>) -> Result<(), String> {
     fn check_cv<'a>(in_scope: &[&'a str], cv: &ConstVal<'a>) -> Result<(), String> {
         match cv {

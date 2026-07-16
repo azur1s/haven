@@ -40,7 +40,7 @@ fn main() {
     // imports resolved away. see `crate::module`
     // let prelude = if args.no_prelude { None } else { Some(PRELUDE_SRC) };
     // `sources` is (file-key, src) for every loaded module, so diagnostics below
-    // quote the span's owning module — not just the entry file.
+    // quote the span's owning module - not just the entry file.
     let (ast, sources) = match front::module::load_and_merge(&args.input, Some(PRELUDE_SRC), &arena) {
         Ok(pair) => pair,
         Err(()) => std::process::exit(1),
@@ -109,10 +109,6 @@ fn main() {
 
             std::fs::write(&llvm_ir_output_path, llvm_ir)
                 .expect("Failed to write LLVM IR to file");
-
-            if args.emit_ir {
-                std::process::exit(0);
-            }
 
             // Dump the embedded runtime archive into a temporary file
             let mut temp_runtime = tempfile::NamedTempFile::new().expect("Failed to create temp file");
@@ -268,7 +264,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            if !args.keep_ir {
+            if !args.emit_ir {
                 std::fs::remove_file(llvm_ir_output_path).expect("Failed to remove LLVM IR file");
             }
         }

@@ -94,3 +94,24 @@ proc vec_free<T>(v: *Vec<T>) {
     v.len = 0u64;
     v.cap = 0u64;
 }
+
+// Iterate over the Vec, calling `f` on each element by pointer.
+proc vec_for_each<T>(v: *Vec<T>, f: proc(*T) void) {
+    let i: u64 = 0u64;
+    while (i < v.len) {
+        f(vec_get_ptr::<T>(v, i));
+        i = i + 1u64;
+    }
+}
+
+// Map each element of the Vec to a new Vec by calling `f` on each element by pointer.
+proc vec_map<T, U>(v: *Vec<T>, f: proc(*T) U) Vec<U> {
+    let result: Vec<U> = vec_with_capacity::<U>(v.len);
+    let i: u64 = 0u64;
+    while (i < v.len) {
+        let value: U = f(vec_get_ptr::<T>(v, i));
+        vec_push::<U>(&result, value);
+        i = i + 1u64;
+    }
+    return result;
+}

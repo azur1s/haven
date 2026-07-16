@@ -8,13 +8,13 @@
 //!
 //! Two kinds of fixtures, by directory:
 //!
-//! * `tests/cases/run/`  — must compile, link, and run. If a sibling `<name>.out`
+//! * `tests/cases/run/`  - must compile, link, and run. If a sibling `<name>.out`
 //!   file exists, the program's stdout must match it exactly. The process must
 //!   exit 0 unless the file opts out with `//@ exit: any` (used for `proc main`
 //!   with no return type, whose exit code is whatever's left in the register).
 //!   `//@ exit: N` asserts a specific code.
 //!
-//! * `tests/cases/fail/` — must FAIL to compile (non-zero exit). Every
+//! * `tests/cases/fail/` - must FAIL to compile (non-zero exit). Every
 //!   `//@ error: <substr>` line in the fixture must appear somewhere in the
 //!   compiler's stderr. Match short, stable phrases, not whole diagnostics.
 //!

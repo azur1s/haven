@@ -29,24 +29,18 @@ pub struct Args {
     #[arg(long, conflicts_with = "shared")]
     pub static_lib: bool,
 
-    /// Stop compilation after generating LLVM IR (.ll)
-    #[arg(long, conflicts_with = "keep_ir", conflicts_with = "emit_optimized_ir")]
-    pub emit_ir: bool,
-
     /// Keep the generated LLVM IR file instead of cleaning it up after compilation
-    #[arg(long, conflicts_with = "emit_ir")]
-    pub keep_ir: bool,
+    #[arg(long)]
+    pub emit_ir: bool,
 
     /// Emit back the optimized LLVM IR from the LLVM IR compiler (.opt.ll)
     /// Will follow the optimization flags passed to the LLVM IR compiler
-    #[arg(long, conflicts_with = "emit_ir")]
+    #[arg(long)]
     pub emit_optimized_ir: bool,
 
     /// Emit assembly via the LLVM IR compiler (.s)
     #[arg(
         long,
-        conflicts_with = "emit_ir",
-        conflicts_with = "emit_optimized_ir",
         conflicts_with = "shared",
         conflicts_with = "static_lib"
     )]

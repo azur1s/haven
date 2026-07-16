@@ -43,7 +43,7 @@ pub enum Const {
     Float32(f32),
     Float64(f64),
     /// Address of a module-level, NUL-terminated string blob, emitted as
-    /// `@.str.{0}` — the raw `*const u8` value of a `str`. The index refers into
+    /// `@.str.{0}` - the raw `*const u8` value of a `str`. The index refers into
     /// `Module::strings`.
     GlobalStr(usize),
 }
@@ -205,7 +205,7 @@ pub struct Function<'a> {
 }
 
 /// The constant value initializing a module-level global. A restricted subset of
-/// expressions that map onto an LLVM constant aggregate — no code runs to produce
+/// expressions that map onto an LLVM constant aggregate - no code runs to produce
 /// it.
 #[derive(Clone, Debug)]
 pub enum ConstInit<'a> {
@@ -215,7 +215,7 @@ pub enum ConstInit<'a> {
     Struct(Vec<(Type<'a>, ConstInit<'a>)>),
     /// A constant array aggregate: the element type plus one constant per element.
     Array(Type<'a>, Vec<ConstInit<'a>>),
-    /// The address of a top-level function, emitted as `@name` — a link-time
+    /// The address of a top-level function, emitted as `@name` - a link-time
     /// constant `ptr`. Used for function-pointer fields (e.g. CLAP's `clap_entry`).
     FnAddr(&'a str),
 }
@@ -615,7 +615,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             if let Some((reg, ty)) = cx.resolved.get(&expr.id).and_then(|b| cx.env.get(b)).cloned() {
                 match ty {
                     // fixed arrays are stored in env as the alloca register itself, not a pointer
-                    // to one, so loading would yield the array value — we want the pointer
+                    // to one, so loading would yield the array value - we want the pointer
                     Type::Array(_, _) => Value::Reg(reg),
                     Type::Struct { .. } => Value::Reg(reg),
                     _ => {
@@ -627,7 +627,7 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
             } else if let Some(ty) = cx.globals.get(name).cloned() {
                 // reference to a module-level global: its symbol @name is already
                 // a pointer to the constant. Materialize that address, then treat
-                // it like an env entry — hand back the pointer for aggregates,
+                // it like an env entry - hand back the pointer for aggregates,
                 // load the value for scalars.
                 let addr = cx.fresh_reg();
                 cx.emit(Inst::GlobalPtr { dst: addr, name });
@@ -1138,7 +1138,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             // A struct/array literal local has a slot hoisted to the entry block
             // (collect_locals pre-allocated it into env); point the literal at that
             // slot so it fills it in place instead of alloca'ing at the literal
-            // site — which, inside a loop, would grow the stack every iteration.
+            // site - which, inside a loop, would grow the stack every iteration.
             if matches!(ty, Type::Array(_, _) | Type::Struct { .. })
                 && matches!(value.value, ExprNode::Struct { .. } | ExprNode::Slice(_))
             {
@@ -1215,8 +1215,8 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             lower_stmt(cx, then_branch);
             // Check the *current* block, not `then_block`: if the branch body
             // contained nested control flow (a `while`/`if`), `current_block`
-            // has advanced to that construct's merge block, and it — not the
-            // already-terminated `then_block` — is what still needs a jump.
+            // has advanced to that construct's merge block, and it - not the
+            // already-terminated `then_block` - is what still needs a jump.
             if cx.blocks.iter().find(|b| b.id == cx.current_block).unwrap().terminator.is_none() {
                 cx.terminate(Terminator::Jump(merge_block));
             }
@@ -1474,7 +1474,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
                     // pass-by-value: caller still hands us a `ptr` to its
                     // struct, but we copy into our own local slot on entry so
                     // mutations don't leak back. For pass-by-reference the
-                    // user writes `*Stereo` explicitly — that falls through
+                    // user writes `*Stereo` explicitly - that falls through
                     // to the `_` arm and stays a plain pointer.
                     let param_reg = cx.fresh_reg();
                     cx.emit(Inst::Comment(format!("params {}: {} (by value, copied on entry)", name, ty)));

@@ -313,7 +313,7 @@ fn parse_expr<'tks, 'src: 'tks>()
             // rewrites it before any later stage. the `::symbol` is optional and
             // only taken when followed by an ident, so a turbofish `::<...>` is
             // left for the call postfix.
-            // TODO: only one `::` segment — `a::b::c` leaves `::c` dangling.
+            // TODO: only one `::` segment - `a::b::c` leaves `::c` dangling.
             var.then(just(Token::ColonColon).ignore_then(var).or_not())
                 .map(|(a, b)| match b {
                     Some(sym) => ExprNode::Var(leak(format!("{}::{}", a, sym))),
@@ -513,7 +513,7 @@ fn parse_type<'tks, 'src: 'tks>()
             //   qualified struct: `geo::Point` (from a whole-module import)
             //   simd:          `simd<f32, 4>`  (element type + lane count)
             //   generic struct: `Option<i32>`, `Pair<K, V>`
-            // `<` is unambiguous here — type position has no comparison operators.
+            // `<` is unambiguous here - type position has no comparison operators.
             // a leading `qualifier::` is folded into the joined `"qual::Name"`
             // name, split + resolved by the module resolver.
             var.map(|s| *s)

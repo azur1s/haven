@@ -1,6 +1,6 @@
 // Regression for the all-paths-return bug: an `if`/`else` where both branches
 // return, as a function's *last* statement, used to crash MIL lowering with
-// "non-void function missing return statement" — the dead merge block after the
+// "non-void function missing return statement" - the dead merge block after the
 // if/else was left unterminated. It must now compile and run, with that merge
 // block emitted as `unreachable`.
 //@ exit: 42

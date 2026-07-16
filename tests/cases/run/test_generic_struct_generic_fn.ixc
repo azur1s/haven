@@ -1,5 +1,5 @@
 // Stage 3: a generic *function* constructing a generic *struct* with its own
-// forwarded type param — `some<T>(x: T) Option<T>`. mono must instantiate the fn
+// forwarded type param - `some<T>(x: T) Option<T>`. mono must instantiate the fn
 // (T = i32) AND, from inside its body, the struct literal `Option::<T>` at the
 // bound T. This composition (incl. a pointer type arg, the `alloc() Option<*T>`
 // shape) is the whole point of the stage.

@@ -135,7 +135,7 @@ proc biquad_process(f: *Biquad, x: f32) f32 {
 // --- StateVariable --------------------------------------------------------
 // A topology-preserving-transform (Zavalishin) state-variable filter. One pass
 // yields lowpass, highpass, bandpass and notch outputs simultaneously, and it
-// stays well-behaved when the cutoff is modulated — unlike the classic
+// stays well-behaved when the cutoff is modulated - unlike the classic
 // Chamberlin SVF, which goes unstable near Nyquist.
 
 struct SvfOut {

@@ -1,6 +1,6 @@
 // Stage 3: a generic struct used as another's type argument. Building
-// `Box<Option<i32>>` must request `Option$i32` too — instances requesting more
-// instances, drained to a fixpoint — and nested field access resolves through
+// `Box<Option<i32>>` must request `Option$i32` too - instances requesting more
+// instances, drained to a fixpoint - and nested field access resolves through
 // both substitutions.
 
 struct Option<T> { present: bool, value: T }

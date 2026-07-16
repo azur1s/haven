@@ -1,5 +1,5 @@
 //! x86-64 System V ABI classification: decides how a value crosses the C FFI
-//! boundary — passed/returned in registers as coerced "eightbyte" pieces, or via
+//! boundary - passed/returned in registers as coerced "eightbyte" pieces, or via
 //! memory (a `byval` pointer argument / `sret` return slot).
 //!
 //! This is step 2 of by-value struct FFI. It only *classifies*; emitting the
@@ -103,7 +103,7 @@ fn merge(a: Class, b: Class) -> Class {
 
 /// Classify how `ty` is passed/returned across the C ABI, picking the flavor for
 /// the target we compile to. ixc currently emits code for the host, so the
-/// choice is made by `cfg!` — a Windows-hosted compiler uses the Microsoft x64
+/// choice is made by `cfg!` - a Windows-hosted compiler uses the Microsoft x64
 /// convention, everything else x86-64 System V. When a real `--target` flag
 /// lands, thread the selector through here instead.
 pub fn classify<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
@@ -160,13 +160,13 @@ pub fn classify_sysv<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
 /// The rules only diverge from SysV for aggregates:
 ///
 ///   * A struct/array whose size is exactly 1/2/4/8 bytes rides in a single
-///     *integer* register of that width — even an all-float one like `Vector2`,
+///     *integer* register of that width - even an all-float one like `Vector2`,
 ///     which SysV would hand to an SSE register as `<2 x float>`. This is why
 ///     by-value struct FFI to raylib silently misdrew on Windows before.
 ///   * Any other aggregate (sizes 3/5/6/7, or larger than 8 bytes) is passed by
 ///     reference: a `byval` pointer argument / `sret` return slot.
 ///
-/// Scalars — including pointers and SIMD vector types — keep their natural
+/// Scalars - including pointers and SIMD vector types - keep their natural
 /// register, exactly as under SysV, so we delegate anything that isn't a struct
 /// or array to [`classify_sysv`]. The downstream pack/unpack glue is bytewise, so
 /// coercing an all-float eightbyte to `i64` needs no other changes.
@@ -205,7 +205,7 @@ impl Default for Eightbyte {
 
 impl Eightbyte {
     /// True when this eightbyte is filled by exactly one pointer and nothing
-    /// else — the case where `ptr` is the right coercion rather than `i64`.
+    /// else - the case where `ptr` is the right coercion rather than `i64`.
     fn is_sole_pointer(&self) -> bool {
         self.has_ptr && !self.has_nonptr && self.used == EIGHTBYTE
     }
@@ -282,7 +282,7 @@ fn leaf_is_double(ty: &Type) -> bool {
 
 /// Whether a leaf is a bare pointer (data or function). These fill exactly one
 /// eightbyte and, when alone in it, coerce to `ptr`. `str` is a raw `*const u8`,
-/// so it counts too. A slice fat pointer is deliberately excluded — it is two
+/// so it counts too. A slice fat pointer is deliberately excluded - it is two
 /// words, not a single `ptr`.
 fn leaf_is_pointer(ty: &Type) -> bool {
     matches!(ty, Type::Pointer(_) | Type::Function { .. } | Type::Str)
@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn tail_byte_uses_narrow_integer_not_i64() {
         // struct { a: i64, b: i8 } -> 16 bytes; eightbyte 1 holds only 1 byte.
-        // Coercion must be { i64, i8 }, matching Clang — not { i64, i64 }.
+        // Coercion must be { i64, i8 }, matching Clang - not { i64, i64 }.
         let s = table(&[("Tail", vec![("a", Type::Int64), ("b", Type::Int8)])]);
         assert_eq!(llvm(&Type::plain_struct("Tail"), &s), ["i64", "i8"]);
     }
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn pointer_sharing_an_eightbyte_falls_back_to_integer() {
         // A pointer can only sit at an 8-aligned offset, so it never truly shares
-        // an eightbyte — but guard the merge anyway: a bool then a pointer would
+        // an eightbyte - but guard the merge anyway: a bool then a pointer would
         // require the pointer at offset 8, leaving eb0 as the bool (i8).
         let s = table(&[(
             "BoolPtr",
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn win64_odd_sized_aggregate_goes_to_memory() {
-        // 3 bytes is not 1/2/4/8, so it is passed by reference — unlike SysV,
+        // 3 bytes is not 1/2/4/8, so it is passed by reference - unlike SysV,
         // which would coalesce it into one small integer eightbyte.
         let s = table(&[(
             "Rgb",

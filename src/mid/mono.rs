@@ -149,11 +149,11 @@ fn const_literal<'a>(cb: &ConstBind<'a>) -> ExprNode<'a> {
 /// Injectivity: every type *constructor* (pointer/array/slice/simd/param/fn/
 /// generic-struct) is encoded with a leading `.tag`. A user struct name is a bare
 /// identifier and can never contain `.`, and the scalar keywords are a fixed set
-/// with no `.` — so a constructor fragment can never collide with a struct name
+/// with no `.` - so a constructor fragment can never collide with a struct name
 /// or a scalar. Struct arguments are wrapped in balanced `.lt`/`.gt` so their
 /// boundaries stay unambiguous under nesting. (Two different types therefore
 /// never mangle alike, which matters because `request*` keys its instance cache
-/// on this string — a collision would silently share one instantiation.)
+/// on this string - a collision would silently share one instantiation.)
 fn mangle_ty(ty: &Type) -> String {
     match ty {
         Type::Void => "void".into(),
@@ -176,8 +176,8 @@ fn mangle_ty(ty: &Type) -> String {
         // reaches here (subst_ty requests it); encode defensively with balanced
         // brackets so nested args stay unambiguous.
         Type::Struct { name, args } => {
-            let inner = args.iter().map(mangle_garg).collect::<Vec<_>>().join(".");
-            format!("{}.lt{}.gt", name, inner)
+            let inner = args.iter().map(mangle_generic_arg).collect::<Vec<_>>().join(".");
+            format!(".struct.{}.{}", name, inner)
         }
         // Neither should appear in a fully-concrete instantiation; encode them
         // defensively rather than panicking so a bug surfaces as a bad symbol.
@@ -191,7 +191,7 @@ fn mangle_ty(ty: &Type) -> String {
 
 /// Mangle a generic argument in a struct type's arg list (a type or a const
 /// value). Only reached on the defensive not-yet-flattened path in `mangle_ty`.
-fn mangle_garg(ga: &GenericArg) -> String {
+fn mangle_generic_arg(ga: &GenericArg) -> String {
     match ga {
         GenericArg::Type(t) => mangle_ty(t),
         GenericArg::Const(cv) => cv.to_string(),
@@ -305,8 +305,8 @@ impl<'p, 'a> Mono<'p, 'a> {
     }
 
     /// Substitute bound params in a turbofish argument. A const generic forwarded
-    /// by name (`simd_load::<f32, N>`) reaches here as a bare-ident `Type` — but
-    /// the name binds in `consts`, not `types` — so resolve it to a literal
+    /// by name (`simd_load::<f32, N>`) reaches here as a bare-ident `Type` - but
+    /// the name binds in `consts`, not `types` - so resolve it to a literal
     /// `Const` argument; the specialized call then re-typechecks against a
     /// concrete value.
     fn subst_targ(&mut self, ga: &GenericArg<'a>, b: &Bindings<'a>) -> GenericArg<'a> {
@@ -525,7 +525,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
     // build each requested instantiation. instances can request more, so drain
     // till the queue is empty. group by template so they emit next to it.
     // NOTE: the depth/count guards below fire after pop, i.e. after this item was
-    // already built+queued — so we overshoot the cutoff by one instance. fine as
+    // already built+queued - so we overshoot the cutoff by one instance. fine as
     // a backstop, just not a tight bound.
     let mut instances: HashMap<&'a str, Vec<TopLevel<'a>>> = HashMap::new();
     let mut materialized = 0usize;
@@ -566,7 +566,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
                 (GenericParam::Const(n, ty), ConcreteArg::Const(v)) => {
                     bindings.consts.insert(n, ConstBind { val: *v, ty: ty.clone() });
                 }
-                _ => unreachable!("generic param/arg kind mismatch — validated in typecheck"),
+                _ => unreachable!("generic param/arg kind mismatch - validated in typecheck"),
             }
         }
         let f = m.rebuild_function(tl, &bindings, Some(inst.mangled));
@@ -619,7 +619,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
                 (GenericParam::Const(n, ty), ConcreteArg::Const(v)) => {
                     bindings.consts.insert(n, ConstBind { val: *v, ty: ty.clone() });
                 }
-                _ => unreachable!("struct generic param/arg kind mismatch — validated in typecheck"),
+                _ => unreachable!("struct generic param/arg kind mismatch - validated in typecheck"),
             }
         }
         // field types report against this instance's span while being substituted.
@@ -651,7 +651,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
             }
             TopLevelNode::Function { .. } => output.push(concrete.remove(&i).unwrap()),
             // a generic struct template drops out (its `Param` fields never lay
-            // out), replaced by its concrete instances — emitted here, next to it.
+            // out), replaced by its concrete instances - emitted here, next to it.
             TopLevelNode::Struct { name, generics, .. } if !generics.is_empty() => {
                 if let Some(insts) = struct_instances.remove(name) {
                     output.extend(insts);
