@@ -1,8 +1,0 @@
-[book]
-title = "haven std"
-language = "en"
-src = "src"
-
-[output.html]
-default-theme = "navy"
-preferred-dark-theme = "navy"

@@ -18,6 +18,7 @@
 //!     ...
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
@@ -80,10 +81,14 @@ pub fn generate(args: &DocArgs) -> Result<(), ()> {
     // Stable, human-friendly ordering in the sidebar.
     pages.sort_by(|a, b| a.0.cmp(&b.0));
 
-    write_summary(&src_dir, &pages)?;
+    // Build a directory tree from the `a/b/c` page titles so nested modules
+    // (`dsp/osc`) render as collapsible subsections instead of a flat list.
+    let tree = build_tree(&pages);
+    write_landing(&src_dir, "haven std", &pages)?;
+    write_module_indexes(&src_dir, &tree)?;
+    write_summary(&src_dir, &tree)?;
     write_book_toml(&args.out, "haven std")?;
     write_theme(&args.out)?;
-    write_file(&args.out.join(".gitignore"), GITIGNORE.as_bytes())?;
 
     println!(
         "havendoc: wrote {} page(s) to {}",
@@ -459,15 +464,120 @@ fn doc_body(line: &str) -> Option<&str> {
 // Book scaffolding
 // ---------------------------------------------------------------------------
 
-fn write_summary(src_dir: &Path, pages: &[(String, PathBuf)]) -> Result<(), ()> {
-    let mut summary = String::from("# Summary\n\n");
+/// Write the book's landing page (`src/index.md`). mdBook renders the *first*
+/// chapter to the book root's `index.html`, and `write_summary` lists this as a
+/// prefix chapter ahead of everything else, so this becomes the home page a
+/// bare visit to the book lands on (à la `doc.rust-lang.org/std/`). It's a title,
+/// a blurb, and an auto-generated index of every documented module.
+fn write_landing(src_dir: &Path, title: &str, pages: &[(String, PathBuf)]) -> Result<(), ()> {
+    let mut md = format!(
+        "# {}\n\nThe `haven` standard library.\n\n## Modules\n\n",
+        title
+    );
     for (title, path) in pages {
-        summary.push_str(&format!("- [{}]({})\n", title, path.to_string_lossy().replace('\\', "/")));
+        md.push_str(&format!("- [{}]({})\n", title, path.to_string_lossy().replace('\\', "/")));
+    }
+    let path = src_dir.join("index.md");
+    std::fs::write(&path, md).map_err(|e| {
+        eprintln!("havendoc: cannot write {}: {}", path.display(), e);
+    })
+}
+
+/// A node in the module tree built from page titles: `std/dsp/osc` descends
+/// `std` -> `dsp` -> `osc`. A node carries its own page when a `.hv` file sits
+/// at exactly that path; pure directories (`dsp`) have `page == None` and get a
+/// generated index page so they can still be a clickable parent chapter.
+#[derive(Default)]
+struct TreeNode {
+    /// Rel-to-`src/` `.md` path of this node's own documented page, if any.
+    page: Option<PathBuf>,
+    /// Child modules/directories, keyed by their last path component. `BTreeMap`
+    /// keeps the sidebar order stable and alphabetical.
+    children: BTreeMap<String, TreeNode>,
+}
+
+/// Fold the flat `(title, rel_md)` page list into a directory tree keyed on the
+/// `/`-separated title components.
+fn build_tree(pages: &[(String, PathBuf)]) -> TreeNode {
+    let mut root = TreeNode::default();
+    for (title, rel) in pages {
+        let mut node = &mut root;
+        for comp in title.split('/') {
+            node = node.children.entry(comp.to_string()).or_default();
+        }
+        node.page = Some(rel.clone());
+    }
+    root
+}
+
+/// Write an index page for every directory node that lacks its own `.hv` page,
+/// so it can serve as a clickable parent chapter (à la a Rust module page that
+/// lists its submodules). Real module pages are left untouched.
+fn write_module_indexes(src_dir: &Path, tree: &TreeNode) -> Result<(), ()> {
+    for (name, node) in &tree.children {
+        write_index_rec(src_dir, name, node)?;
+    }
+    Ok(())
+}
+
+fn write_index_rec(src_dir: &Path, path: &str, node: &TreeNode) -> Result<(), ()> {
+    if node.page.is_none() && !node.children.is_empty() {
+        let mut md = format!("# `{}`\n\n## Modules\n\n", path);
+        for (child, child_node) in &node.children {
+            // Links are relative to this index page's own directory
+            // (`src/<path>/index.md`), so a child is just its last component.
+            let link = if child_node.page.is_some() {
+                format!("{}.md", child)
+            } else {
+                format!("{}/index.md", child)
+            };
+            md.push_str(&format!("- [{}]({})\n", child, link));
+        }
+        let page_path = src_dir.join(path).join("index.md");
+        if let Some(parent) = page_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("havendoc: cannot create {}: {}", parent.display(), e);
+                return Err(());
+            }
+        }
+        write_file(&page_path, md.as_bytes())?;
+    }
+    for (child, child_node) in &node.children {
+        write_index_rec(src_dir, &format!("{}/{}", path, child), child_node)?;
+    }
+    Ok(())
+}
+
+fn write_summary(src_dir: &Path, tree: &TreeNode) -> Result<(), ()> {
+    // The landing page (`index.md`) goes first as a prefix chapter (no list
+    // marker), so mdBook renders it to the book root's `index.html`. The rest is
+    // an indented tree: nesting depth = directory depth, which mdBook turns into
+    // collapsible subsections.
+    let mut summary = String::from("# Summary\n\n[Overview](index.md)\n\n");
+    for (name, node) in &tree.children {
+        emit_summary_node(&mut summary, name, name, node, 0);
     }
     let path = src_dir.join("SUMMARY.md");
     std::fs::write(&path, summary).map_err(|e| {
         eprintln!("havendoc: cannot write {}: {}", path.display(), e);
     })
+}
+
+/// Append one chapter line (4-space indent per level, as mdBook requires for
+/// nesting) plus its descendants. `path` is the full title path used for link
+/// resolution; `name` is just the displayed last component.
+fn emit_summary_node(out: &mut String, path: &str, name: &str, node: &TreeNode, depth: usize) {
+    let indent = "    ".repeat(depth);
+    // Summary links resolve from `src/`, so use the full path. A directory
+    // without its own page links to the index we generated for it.
+    let link = match &node.page {
+        Some(rel) => rel.to_string_lossy().replace('\\', "/"),
+        None => format!("{}/index.md", path),
+    };
+    out.push_str(&format!("{}- [{}]({})\n", indent, name, link));
+    for (child, child_node) in &node.children {
+        emit_summary_node(out, &format!("{}/{}", path, child), child, child_node, depth + 1);
+    }
 }
 
 fn write_book_toml(out: &Path, title: &str) -> Result<(), ()> {
@@ -501,12 +611,6 @@ const THEME_VARIABLES_CSS: &str = include_str!("../assets/variables.css");
 /// Pro `@font-face` set with Geist / Geist Mono. Uses mdBook's `{{ resource }}`
 /// helper, so it is rendered as a template at book-build time.
 const THEME_FONTS_CSS: &str = include_str!("../assets/fonts.css");
-
-/// `.gitignore` written into the generated output root, so the throwaway build
-/// artifacts (mdBook's `book/` dir) aren't accidentally committed. Stored as
-/// `.gitignore.txt` in the source tree so it isn't itself treated as a real
-/// ignore file there.
-const GITIGNORE: &str = include_str!("../assets/.gitignore.txt");
 
 /// The Geist family (variable, weight axis 100-900) plus its SIL OFL license,
 /// embedded so a plain `havendoc` run ships self-contained fonts. `(filename,
