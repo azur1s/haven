@@ -1,0 +1,39 @@
+// Stage 3: generic structs are monomorphized. Constructing `Option::<i32>`
+// materializes a concrete `Option$i32` struct; distinct type args make distinct
+// instances; repeated args reuse one; and a non-generic function can hand back a
+// concrete instance (the `alloc() Option<*T>` shape this stage exists to enable).
+
+struct Option<T> { present: bool, value: T }
+struct Pair<K, V> { key: K, val: V }
+
+// concrete instance flows through a param and a return type.
+proc wrap(x: i32) Option<i32> {
+    return Option::<i32> { present: true, value: x };
+}
+
+proc unwrap(o: Option<i32>) i32 {
+    return o.value;
+}
+
+@export
+proc main() i32 {
+    // two distinct instances of the same template.
+    let a: Option<i32> = Option::<i32> { present: true, value: 42 };
+    printf::<i32>("%d\n", a.value);        // 42
+
+    let b: Option<f32> = Option::<f32> { present: true, value: 3.5f32 };
+    printf32("%f\n", b.value);      // 3.500000
+
+    // a two-parameter template.
+    let p: Pair<i32, f32> = Pair::<i32, f32> { key: 7, val: 1.25f32 };
+    printf::<i32>("%d\n", p.key);          // 7
+    printf32("%f\n", p.val);        // 1.250000
+
+    // reuse of the Option<i32> instance (dedup path, no second struct emitted).
+    let c: Option<i32> = Option::<i32> { present: false, value: 99 };
+    printf::<i32>("%d\n", c.value);        // 99
+
+    // through a function boundary.
+    printf::<i32>("%d\n", unwrap(wrap(5))); // 5
+    return 0;
+}

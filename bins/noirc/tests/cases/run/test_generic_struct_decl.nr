@@ -1,0 +1,28 @@
+// Stage 1 of generic structs: a generic struct can be *declared* (with type
+// parameters, and fields referencing them). Such a template carries `Param`
+// fields and is not laid out directly - it must be dropped from codegen, exactly
+// like an uninstantiated generic function, and must not disturb ordinary structs.
+
+// generic struct with a field of its type parameter
+struct Option<T> {
+    present: bool,
+    value: T,
+}
+
+// multiple type params, all used in fields
+struct Pair<K, V> {
+    key: K,
+    val: V,
+}
+
+// an ordinary (non-generic) struct still works alongside the templates
+struct Vec2 { x: f32, y: f32 }
+
+@export
+proc main() i32 {
+    // no generic struct is instantiated here; the templates above are dropped.
+    let v: Vec2 = Vec2 { x: 3.0f32, y: 4.0f32 };
+    printf32("%f\n", v.x); // 3.0
+    printf32("%f\n", v.y); // 4.0
+    return 0;
+}

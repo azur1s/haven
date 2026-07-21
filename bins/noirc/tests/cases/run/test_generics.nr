@@ -1,0 +1,51 @@
+// Monomorphization of user-defined generic (type-parameter) functions.
+// Each distinct instantiation reachable from a concrete call site is
+// materialized into its own function (e.g. `id::<i32>` -> `id$i32`).
+
+struct Vec2 { x: f32, y: f32 }
+
+// same generic instantiated at multiple types
+proc id<T>(x: T) T {
+    let y: T = x;
+    return y;
+}
+
+// generic calling another generic, forwarding its own type param (transitivity)
+proc twice<T>(x: T) T {
+    return id::<T>(x);
+}
+
+// type param behind a pointer
+proc deref<T>(p: *T) T {
+    return *p;
+}
+
+// struct type argument (exercises struct-return / sret through a generic)
+proc pick<T>(a: T, b: T) T {
+    return a;
+}
+
+// this generic is never called: it must be dropped entirely, not emitted
+proc unused<T>(x: T) T { return x; }
+
+@export
+proc main() i32 {
+    let a: i32 = id::<i32>(7);
+    let b: f32 = id::<f32>(1.5f32);
+    let c: i32 = twice::<i32>(a);
+
+    let n: i32 = 99;
+    let d: i32 = deref::<i32>(&n);
+
+    let v: Vec2 = Vec2 { x: 1.0f32, y: 2.0f32 };
+    let w: Vec2 = pick::<Vec2>(v, v);
+
+    printf::<i32>("%d\n", a);          // 7
+    printf32("%f\n", b);        // 1.5
+    printf::<i32>("%d\n", c);          // 7
+    printf::<i32>("%d\n", d);          // 99
+    printf32("%f\n", w.x);      // 1.0
+    printf::<i32>("%d\n", pick::<i32>(3, 4)); // 3
+
+    return 0;
+}

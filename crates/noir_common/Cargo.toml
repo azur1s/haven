@@ -1,0 +1,8 @@
+[package]
+name = "noir_common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ariadne.workspace = true
+chumsky.workspace = true

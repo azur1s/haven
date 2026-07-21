@@ -1,0 +1,41 @@
+// function-as-value and indirect calls through function pointers.
+
+struct Vec2 {
+    x: f64,
+    y: f64,
+}
+
+proc sq(x: f64) f64 { return x * x; }
+
+// struct-returning function: called through a pointer this exercises sret
+// through an indirect callee (the caller-allocated slot is passed to a %reg,
+// not an @name).
+proc make(a: f64, b: f64) Vec2 {
+    return Vec2 { x: a, y: b };
+}
+
+// takes a function pointer and calls it: scalar return
+proc apply1(f: proc(f64) f64, x: f64) f64 {
+    return f(x);
+}
+
+// takes a struct-returning function pointer and calls it: sret through fn ptr
+proc apply2(f: proc(f64, f64) Vec2, a: f64, b: f64) Vec2 {
+    return f(a, b);
+}
+
+@export
+proc main() i32 {
+    // take a bare top-level function by value; `g` is a local fn pointer
+    let g: proc(f64) f64 = sq;
+    printf::<f64>("%f\n", g(5.0f64));          // expect 25.0 (direct call through local ptr)
+    printf::<f64>("%f\n", apply1(g, 6.0f64));  // expect 36.0 (ptr passed as param, called)
+
+    // sret through a function pointer: struct result must land in main's slot
+    let h: proc(f64, f64) Vec2 = make;
+    let v: Vec2 = apply2(h, 3.0f64, 4.0f64);
+    printf::<f64>("%f\n", v.x);                // expect 3.0
+    printf::<f64>("%f\n", v.y);                // expect 4.0
+
+    return 0;
+}

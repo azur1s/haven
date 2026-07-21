@@ -3,6 +3,7 @@
 *.ll
 *.dll
 *.lib
+*.so
 *.s
 
 # default compiler output

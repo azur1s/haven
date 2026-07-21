@@ -1,0 +1,27 @@
+// Regression: struct/array *literals* declared inside a loop used to emit their
+// alloca at the literal site (inside the loop body), growing the stack every
+// iteration. They are now hoisted to a single entry-block slot and filled in
+// place. This exercises that the reused slot is rewritten correctly each pass
+// and that struct+array literals coexist in one body.
+
+struct Vec2 { x: f32, y: f32 }
+
+@export
+proc main() i32 {
+    let i: i32 = 0;
+    let acc: f32 = 0.0f32;
+    let sum: i32 = 0;
+    while (i < 4) {
+        // struct literal whose fields depend on the loop var -> must be
+        // recomputed into the same slot every iteration
+        let v: Vec2 = Vec2 { x: 1.0f32, y: 2.0f32 };
+        // fixed-array literal in the same body, also depending on the loop var
+        let a: [i32; 3] = [i, i + 1, i + 2];
+        acc = acc + v.x + v.y;      // +3.0 each pass -> 12.0
+        sum = sum + a[0] + a[1] + a[2];
+        i = i + 1;
+    }
+    printf32("%f\n", acc);   // 12.000000
+    printf::<i32>("%d\n", sum);     // (0+1+2)+(1+2+3)+(2+3+4)+(3+4+5) = 30
+    return 0;
+}

@@ -1,0 +1,49 @@
+// FIXME: fixed arrays passed *by value* (`[T; N]` params) are a separate,
+// pre-existing codegen gap and are intentionally avoided here.
+
+// const param used as an ordinary compile-time value
+proc lane_count<const N: i32>() i32 {
+    return N;
+}
+
+// const param in an arithmetic expression
+proc scaled<const N: i32>(x: i32) i32 {
+    return x * N;
+}
+
+// type + const param, with the const in a `simd<T, N>` type position; the simd
+// is passed through by value (which lowers fine) and returned
+proc id_simd<T, const N: i32>(x: simd<T, N>) simd<T, N> {
+    return x;
+}
+
+// const param forwarded by name into intrinsic turbofishes: `simd_load::<f32, N>`
+// and `simd_store::<f32, N>` reuse the enclosing `const N`, which mono bakes into
+// a concrete lane count (here N = 4).
+proc simd_copy<const N: i32>(dst: [f32], src: [f32]) {
+    let v: simd<f32, N> = simd_load::<f32, N>(src, 0);
+    simd_store::<f32, N>(dst, 0, v);
+}
+
+@export
+proc main() i32 {
+    printf::<i32>("%d\n", lane_count::<8>()); // 8   (instance lane_count$8)
+    printf::<i32>("%d\n", lane_count::<3>()); // 3   (distinct instance lane_count$3)
+    printf::<i32>("%d\n", scaled::<10>(4));   // 40
+
+    // exercise the simd<T, N> type position end-to-end and observe the result
+    let buf: [f32] = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
+    let v: simd<f32, 4> = simd_splat::<f32, 4>(2.0f32);
+    let w: simd<f32, 4> = id_simd::<f32, 4>(v);
+    simd_store::<f32, 4>(buf, 0, w);
+    printf32("%f\n", buf[0]);            // 2.000000
+
+    // forward the const param through simd_load/simd_store turbofishes
+    let src: [f32] = [7.0f32, 8.0f32, 9.0f32, 10.0f32];
+    let dst: [f32] = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
+    simd_copy::<4>(dst, src);
+    printf32("%f\n", dst[0]);            // 7.000000
+    printf32("%f\n", dst[3]);            // 10.000000
+
+    return 0;
+}

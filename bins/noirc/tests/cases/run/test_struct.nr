@@ -1,0 +1,35 @@
+struct Stereo {
+    l: f32,
+    r: f32,
+}
+
+proc bump(s: Stereo) f32 {
+    s.l = s.l + 1.0f32;
+    return s.l + s.r;
+}
+
+// takes a pointer, mutate s
+proc bump_ref(s: *Stereo) {
+    s.l = s.l + 1.0f32;
+}
+
+@export
+proc main() i32 {
+    let x: Stereo = Stereo { l: 1.0f32, r: 0.25f32 };
+
+    // pass-by-value: x.l must stay 1.0 after the call
+    let y: f32 = bump(x);
+    printf32("%f\n", y);   // expect 2.25
+    printf32("%f\n", x.l); // expect 1.0
+
+    // copy-on-assign: z is independent of x
+    let z: Stereo = x;
+    z.l = 9.0f32;
+    printf32("%f\n", x.l); // expect 1.0
+
+    // pass-by-reference: bump_ref mutates the caller's struct
+    bump_ref(&x);
+    printf32("%f\n", x.l); // expect 2.0
+
+    return 0;
+}

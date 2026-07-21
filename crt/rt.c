@@ -1,31 +1,21 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 struct Slice {
     void* data;
     int length;
 };
 
-// `str` is a { ptr, i32 } fat pointer in the language
-// no null terminator is assumed, so the explicit length is used
-struct Str {
-    const char* ptr;
-    int length;
-};
+uint64_t rt_slice_len(struct Slice* slice) { return (uint64_t)slice->length; }
 
-void print(struct Str s) { fwrite(s.ptr, 1, (size_t)s.length, stdout); }
-void println(struct Str s) {
-    fwrite(s.ptr, 1, (size_t)s.length, stdout);
-    putchar('\n');
+// Heap allocation, exposed to the language via `std/alloc` (see crt/std/alloc.nr).
+// On failure these return NULL rather than aborting: `std/alloc` wraps the result
+// in `Option<*T>`, so out-of-memory surfaces as `none` for the caller to handle.
+void* rt_alloc(uint64_t size) {
+    return malloc((size_t)size);
 }
-
-void print_i32(int i) { printf("%d\n", i); }
-void print_float(float f) { printf("%f\n", f); }
-void print_double(double d) { printf("%f\n", d); }
-void print_float_slice(struct Slice* slice) {
-    printf("Slice length: %d\n", slice->length);
-    float* data = (float*)slice->data;
-    for (int i = 0; i < slice->length; i++) {
-        printf("Element %d: %f\n", i, data[i]);
-    }
+void* rt_realloc(void* ptr, uint64_t size) {
+    return realloc(ptr, (size_t)size);
 }
+void rt_free(void* ptr) { free(ptr); }

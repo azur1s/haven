@@ -1,0 +1,14 @@
+[package]
+name = "noirdoc"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "noirdoc"
+path = "src/main.rs"
+
+[dependencies]
+noir_common.workspace = true
+noir_front.workspace = true
+bumpalo.workspace = true
+clap.workspace = true

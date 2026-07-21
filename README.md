@@ -1,9 +1,9 @@
-# ixc
+# noir
 
-`ixc` is a statically typed programming language and compiler, built specifically for DSP and audio plugin development.
+`noir` is a statically typed programming language and compiler, built specifically for DSP and audio plugin development.
 
 > [!NOTE]
-> This is very alpha and work in progress, codebase can be messay and bugs may arise, please report if you find one.
+> This is very alpha and work in progress, codebase can be messy and bugs may arise, please report if you find one.
 
 ## Dependencies
 - (Developer dependencies)
@@ -15,13 +15,16 @@
 ## Usage
 ```shell
 # compile to an executable
-$ ixc program.ixc
+$ noirc program.nr
 $ ./output
 
 # or, compile to a library
-$ ixc lib.ixc --shared
+$ noirc lib.nr --shared
 $ clang host.c output.lib -o output
 
 # use the help flag for more info
-$ ixc -h
+$ noirc -h
 ```
+
+## License
+This project is dual-licensed under the MIT and Apache 2.0 licenses. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.

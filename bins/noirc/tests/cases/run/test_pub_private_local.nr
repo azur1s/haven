@@ -1,0 +1,12 @@
+// item visibility is item-level and default-private. a proc without `pub` is
+// module-private, but a module always sees all of its *own* items, so calling a
+// private helper from within the same file is fine. (cross-module privacy is
+// exercised by the fail/ cases.)
+
+proc dbl(x: i32) i32 { return x + x; }   // no `pub`: private to this module
+
+@export
+proc main() i32 {
+    printf::<i32>("%d\n", dbl(21)); // 42
+    return 0;
+}
