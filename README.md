@@ -25,3 +25,6 @@ $ clang host.c output.lib -o output
 # use the help flag for more info
 $ noirc -h
 ```
+
+## License
+This project is dual-licensed under the MIT and Apache 2.0 licenses. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.

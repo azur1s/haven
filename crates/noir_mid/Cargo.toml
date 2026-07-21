@@ -1,0 +1,8 @@
+[package]
+name = "noir_mid"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+noir_common.workspace = true
+bumpalo.workspace = true

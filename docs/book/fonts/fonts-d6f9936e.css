@@ -1,0 +1,32 @@
+/* Geist & Geist Mono (variable, weight axis 100-900), replacing mdBook's
+ * default Open Sans / Source Code Pro. The `{{ resource ... }}` helper is
+ * rendered by mdBook to the content-hashed font path at build time. */
+
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/Geist-c589db2a.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/Geist-Italic-f5386a9e.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/GeistMono-f3352ba0.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/GeistMono-Italic-e7da4fcf.woff2') format('woff2');
+}

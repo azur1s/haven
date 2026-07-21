@@ -1,0 +1,8 @@
+[book]
+title = "noir std"
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"

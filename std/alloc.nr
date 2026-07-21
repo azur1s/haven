@@ -4,10 +4,6 @@
 /// externs below deal in untyped `*void`; the generic wrappers hand back a typed
 /// `*T` sized by `sizeof::<T>()`. Reach for these to build growable buffers
 /// (e.g. a future `Vec<T>`).
-///
-/// The allocator aborts on out-of-memory, so none of these ever return a null
-/// pointer.
-/// TODO implement Option<T> so alloc returns Option<*T> instead of aborting on OOM.
 
 import std/option { Option, none, some }
 
