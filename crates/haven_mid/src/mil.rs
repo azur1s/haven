@@ -198,6 +198,15 @@ pub enum Terminator<'a> {
         else_block: BlockId,
     },
 
+    // switch <ty> %value, label %default [ <ty> <const>, label %block ... ]
+    // used by `match`; the scrutinee is an integer/enum-discriminant value.
+    Switch {
+        value: Value,
+        value_ty: Type<'a>,
+        default: BlockId,
+        cases: Vec<(Const, BlockId)>,
+    },
+
     // marks a provably unreachable point (e.g. the merge block after an if/else
     // whose branches both return). only emitted where the typechecker has already
     // proven control can't actually reach it.
@@ -212,6 +221,11 @@ impl <'a> Display for Terminator<'a> {
             Terminator::Jump(block) => write!(f, "br label {}", block),
             Terminator::Branch { cond, then_block, else_block } => {
                 write!(f, "br i1 {}, label {}, label {}", cond, then_block, else_block)
+            }
+            Terminator::Switch { value, value_ty, default, cases } => {
+                let arms = cases.iter().map(|(c, b)| format!("{} {}, label {}", value_ty, c, b))
+                    .collect::<Vec<_>>().join(" ");
+                write!(f, "switch {} {}, label {} [ {} ]", value_ty, value, default, arms)
             }
             Terminator::Unreachable => write!(f, "unreachable"),
         }
@@ -1337,6 +1351,55 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             cx.current_block = merge_block;
         }
 
+        StmtNode::Match { scrutinee, arms } => {
+            cx.emit(Inst::Comment(format!("match {}", scrutinee.value)));
+            let scrut_val = lower_expr(cx, scrutinee);
+            // the switch operand type: an enum uses its integer repr.
+            let value_ty = match cx.node_types[&scrutinee.id].clone() {
+                Type::Enum { repr, .. } => *repr,
+                t => t,
+            };
+
+            let merge_block = cx.fresh_block();
+            let mut cases: Vec<(Const, BlockId)> = Vec::new();
+            let mut wildcard_block: Option<BlockId> = None;
+            // one block per arm; bodies are lowered after the switch is wired.
+            let mut arm_blocks: Vec<(BlockId, &Stmt<'a>)> = Vec::new();
+            for (pat, body) in arms {
+                let block = cx.fresh_block();
+                match &pat.value {
+                    PatternNode::Wildcard => wildcard_block = Some(block),
+                    PatternNode::Int(n) => cases.push((int_const(&value_ty, *n), block)),
+                    PatternNode::Path(p) => {
+                        let c = enum_const(&cx.enums, p).expect("enum pattern validated in typecheck");
+                        cases.push((c, block));
+                    }
+                }
+                arm_blocks.push((block, body));
+            }
+
+            // the default target is the wildcard arm, or - for an exhaustive enum
+            // with no `_` - a synthesized unreachable block.
+            let synth_default = wildcard_block.is_none();
+            let default = wildcard_block.unwrap_or_else(|| cx.fresh_block());
+
+            cx.terminate(Terminator::Switch { value: scrut_val, value_ty, default, cases });
+
+            for (block, body) in arm_blocks {
+                cx.current_block = block;
+                lower_stmt(cx, body);
+                if cx.blocks.iter().find(|b| b.id == cx.current_block).unwrap().terminator.is_none() {
+                    cx.terminate(Terminator::Jump(merge_block));
+                }
+            }
+            if synth_default {
+                cx.current_block = default;
+                cx.terminate(Terminator::Unreachable);
+            }
+
+            cx.current_block = merge_block;
+        }
+
         StmtNode::Continue => {
             cx.emit(Inst::Comment("continue".to_string()));
             cx.terminate(Terminator::Jump(cx.loop_stack.last().unwrap().continue_block));
@@ -1402,6 +1465,9 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, enums: &HashMap<&'a str, EnumDef<'a>>, ou
         }
         StmtNode::While { body, .. } => {
             collect_locals(body, enums, out);
+        }
+        StmtNode::Match { arms, .. } => {
+            for (_pat, body) in arms { collect_locals(body, enums, out); }
         }
         // rest should have no declarations
         _ => {}

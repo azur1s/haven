@@ -1,0 +1,12 @@
+//@ error: unreachable match arm after `_`
+enum S { A, B }
+
+@export
+proc main() i32 {
+    let s: S = S::A;
+    match (s) {
+        S::A -> { return 1; }
+        _ -> { return 0; }
+        S::B -> { return 2; }
+    }
+}

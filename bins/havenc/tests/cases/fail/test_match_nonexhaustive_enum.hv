@@ -1,0 +1,12 @@
+//@ error: non-exhaustive match on enum 'S'
+enum S { A, B, C }
+
+@export
+proc main() i32 {
+    let s: S = S::A;
+    match (s) {
+        S::A -> { return 1; }
+        S::B -> { return 2; }
+    }
+    return 0;
+}

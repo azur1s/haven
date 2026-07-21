@@ -433,6 +433,13 @@ impl<'p, 'a> Mono<'p, 'a> {
                 condition: self.rebuild_expr(condition, b),
                 body: Box::new(self.rebuild_stmt(body, b)),
             },
+            StmtNode::Match { scrutinee, arms } => StmtNode::Match {
+                scrutinee: self.rebuild_expr(scrutinee, b),
+                // patterns carry no substitutable types; clone them, rebuild bodies.
+                arms: arms.iter()
+                    .map(|(p, body)| (p.clone(), Box::new(self.rebuild_stmt(body, b))))
+                    .collect(),
+            },
             StmtNode::Return(e) => StmtNode::Return(self.rebuild_expr(e, b)),
             StmtNode::Continue => StmtNode::Continue,
             StmtNode::Break => StmtNode::Break,

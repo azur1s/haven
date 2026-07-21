@@ -380,6 +380,12 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 self.expr(condition, gparams);
                 self.stmt(body, gparams);
             }
+            // patterns (`_` / int / `Enum::Variant`) need no rewriting; walk the
+            // scrutinee and each arm body.
+            StmtNode::Match { scrutinee, arms } => {
+                self.expr(scrutinee, gparams);
+                for (_pat, body) in arms { self.stmt(body, gparams); }
+            }
             StmtNode::Return(e) => self.expr(e, gparams),
             StmtNode::Continue | StmtNode::Break => {}
         }

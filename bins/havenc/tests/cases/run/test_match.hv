@@ -1,0 +1,46 @@
+// `match` on enums and integers: exhaustive enum match (drives all-paths-return
+// with no trailing `return`), enum match with a `_` wildcard, and an integer
+// match with a negative literal and `_`.
+
+enum Status { Continue, Sleep, Error }
+
+// exhaustive enum match, every arm returns -> the function needs no trailing return
+proc code(s: Status) i32 {
+    match (s) {
+        Status::Continue -> { return 1; }
+        Status::Error    -> { return -1; }
+        Status::Sleep    -> { return 0; }
+    }
+}
+
+// enum match as a statement mutating a local, with a wildcard
+proc label(s: Status) i32 {
+    let out: i32 = 99;
+    match (s) {
+        Status::Error -> { out = -1; }
+        _ -> { out = 0; }
+    }
+    return out;
+}
+
+// integer match with a negative-literal arm and a wildcard
+proc bucket(n: i32) i32 {
+    match (n) {
+        0 -> { return 100; }
+        1 -> { return 200; }
+        -1 -> { return 300; }
+        _ -> { return 0; }
+    }
+}
+
+@export
+proc main() i32 {
+    printf::<i32>("%d\n", code(Status::Continue)); // 1
+    printf::<i32>("%d\n", code(Status::Sleep));    // 0
+    printf::<i32>("%d\n", label(Status::Error));   // -1
+    printf::<i32>("%d\n", label(Status::Continue));// 0
+    printf::<i32>("%d\n", bucket(1));              // 200
+    printf::<i32>("%d\n", bucket(-1));             // 300
+    printf::<i32>("%d\n", bucket(42));             // 0
+    return 0;
+}

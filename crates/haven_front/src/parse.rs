@@ -101,6 +101,7 @@ fn lexer<'a> (
         "const"    => Token::Const,
         "struct"   => Token::Struct,
         "enum"     => Token::Enum,
+        "match"    => Token::Match,
         "import"   => Token::Import,
         "pub"      => Token::Pub,
         _ => Token::Var(ident),
@@ -114,6 +115,7 @@ fn lexer<'a> (
         just('>').then(just('=')).to(Token::BinaryOp(BinaryOp::Ge)),
         just('=').then(just('=')).to(Token::BinaryOp(BinaryOp::Eq)),
         just('!').then(just('=')).to(Token::BinaryOp(BinaryOp::Ne)),
+        just('-').then(just('>')).to(Token::Arrow),
 
         just('^').to(Token::BinaryOp(BinaryOp::BitXor)),
         just('|').to(Token::BinaryOp(BinaryOp::BitOr)),
@@ -712,6 +714,43 @@ fn parse_stmt<'tks, 'src: 'tks>()
                 body: Box::new(body),
             });
 
+        // a match pattern: `Enum::Variant`, an integer literal (opt. negative),
+        // or `_`. Field-less (no binding patterns) for Stage 2.
+        let int_pat = just(Token::BinaryOp(BinaryOp::Sub)).or_not()
+            .then(select_ref! {
+                Token::Int8(n)   => *n as i64,
+                Token::Int32(n)  => *n as i64,
+                Token::Int64(n)  => *n,
+                Token::Uint8(n)  => *n as i64,
+                Token::Uint32(n) => *n as i64,
+                Token::Uint64(n) => *n as i64,
+            })
+            .map(|(neg, n)| PatternNode::Int(if neg.is_some() { -n } else { n }));
+        let path_pat = var.then_ignore(just(Token::ColonColon)).then(var)
+            .map(|(a, b)| PatternNode::Path(leak(format!("{}::{}", a, b))));
+        let wild_pat = var.try_map(|s, span| if *s == "_" {
+            Ok(PatternNode::Wildcard)
+        } else {
+            Err(Rich::custom(span, "expected `_`, an enum variant `Enum::Variant`, or an integer literal in a match pattern"))
+        });
+        let pattern = choice((path_pat, int_pat, wild_pat))
+            .map_with(|p, e| Metadata::new(p, e.span()));
+
+        // `match (scrutinee) { pattern => body ... }`. Parens on the scrutinee
+        // mirror `if`/`while` and avoid the `Name { ... }` struct-literal ambiguity.
+        let match_ = just(Token::Match)
+            .ignore_then(parse_expr().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .then(
+                pattern
+                    .then_ignore(just(Token::Arrow))
+                    .then(single_stmt_or_block.clone().map(Box::new))
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            )
+            .map(|(scrutinee, arms)| StmtNode::Match { scrutinee, arms });
+
         let contbreak = choice((
             just(Token::Continue).to(StmtNode::Continue),
             just(Token::Break).to(StmtNode::Break),
@@ -727,6 +766,7 @@ fn parse_stmt<'tks, 'src: 'tks>()
             .or(if_else)
             .or(if_)
             .or(while_)
+            .or(match_)
             .or(contbreak)
             .or(return_)
             .map_with(|node, e| {

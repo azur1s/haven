@@ -98,11 +98,12 @@ pub enum Token<'a> {
 
     Dot, Comma, Semicolon,
     Colon, ColonColon, Assign, At,
+    Arrow,
 
     Let, If, Else, Return,
     While, Break, Continue,
     Proc, Extern, Const, Struct, Enum,
-    Import, Pub,
+    Import, Pub, Match,
 }
 
 impl Display for Token<'_> {
@@ -134,6 +135,7 @@ impl Display for Token<'_> {
             Token::ColonColon   => write!(f, "::"),
             Token::Assign       => write!(f, "="),
             Token::At           => write!(f, "@"),
+            Token::Arrow        => write!(f, "->"),
             Token::Let          => write!(f, "let"),
             Token::If           => write!(f, "if"),
             Token::Else         => write!(f, "else"),
@@ -148,6 +150,7 @@ impl Display for Token<'_> {
             Token::Enum         => write!(f, "enum"),
             Token::Import       => write!(f, "import"),
             Token::Pub          => write!(f, "pub"),
+            Token::Match        => write!(f, "match"),
         }
     }
 }
@@ -508,12 +511,32 @@ pub enum StmtNode<'a> {
         condition: Expr<'a>,
         body: Box<Stmt<'a>>,
     },
+    /// `match (scrutinee) { pattern => body ... }`. Field-less for now: patterns
+    /// are enum variants, integer literals, or `_` (wildcard). Each arm's body is
+    /// a single statement or a block. Typecheck enforces exhaustiveness.
+    Match {
+        scrutinee: Expr<'a>,
+        arms: Vec<(Pattern<'a>, Box<Stmt<'a>>)>,
+    },
 
     // TODO add label? (e.g. `continue 'label;`)
     Continue,
     Break,
     Return(Expr<'a>),
 }
+
+/// A `match` arm pattern (field-less, Stage 2).
+#[derive(Clone, Debug)]
+pub enum PatternNode<'a> {
+    /// `_` - matches anything; the default arm.
+    Wildcard,
+    /// an integer-literal pattern, e.g. `5` or `-1`.
+    Int(i64),
+    /// an enum-variant pattern, e.g. `Status::Continue` (stored joined).
+    Path(&'a str),
+}
+
+pub type Pattern<'a> = Metadata<PatternNode<'a>>;
 
 impl<'a> Display for StmtNode<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -534,6 +557,17 @@ impl<'a> Display for StmtNode<'a> {
                 write!(f, "if ({}) {}{}", condition.value, then_branch.value, else_str)
             },
             StmtNode::While { condition, body } => write!(f, "while ({}) {}", condition.value, body.value),
+            StmtNode::Match { scrutinee, arms } => {
+                let arms_str = arms.iter().map(|(p, body)| {
+                    let pat = match &p.value {
+                        PatternNode::Wildcard => "_".to_string(),
+                        PatternNode::Int(n) => n.to_string(),
+                        PatternNode::Path(s) => s.to_string(),
+                    };
+                    format!("    {} -> {}", pat, body.value)
+                }).collect::<Vec<_>>().join("\n");
+                write!(f, "match ({}) {{\n{}\n}}", scrutinee.value, arms_str)
+            },
 
             StmtNode::Continue => write!(f, "continue"),
             StmtNode::Break => write!(f, "break"),

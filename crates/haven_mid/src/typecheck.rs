@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use haven_common::ast::*;
 use crate::intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound};
 
@@ -918,6 +918,9 @@ fn always_returns(stmt: &Stmt) -> bool {
             Some(else_branch) => always_returns(then_branch) && always_returns(else_branch),
             None => false,
         },
+        // a match is exhaustive (typecheck guarantees it), so it returns on every
+        // path iff every arm body does.
+        StmtNode::Match { arms, .. } => !arms.is_empty() && arms.iter().all(|(_, body)| always_returns(body)),
         _ => false,
     }
 }
@@ -986,6 +989,82 @@ fn check_stmt<'a>(
             cx.push_scope();
             check_stmt(cx, return_ty, body)?;
             cx.pop_scope();
+        },
+
+        StmtNode::Match { scrutinee, arms } => {
+            let scrut_ty = infer(cx, scrutinee)?;
+            // the scrutinee must be an enum or an integer.
+            let enum_name: Option<&'a str> = match &scrut_ty {
+                Type::Enum { name, .. } => Some(name),
+                t if t.is_integer() => None,
+                other => return Err(Error {
+                    msg: format!("match scrutinee must be an enum or integer type, got {}", other),
+                    span: scrutinee.span.clone(),
+                }),
+            };
+
+            let mut has_wildcard = false;
+            let mut covered_variants: HashSet<&'a str> = HashSet::new();
+            let mut covered_ints: HashSet<i64> = HashSet::new();
+
+            for (pat, body) in arms {
+                if has_wildcard {
+                    return Err(Error { msg: "unreachable match arm after `_`".into(), span: pat.span.clone() });
+                }
+                match &pat.value {
+                    PatternNode::Wildcard => has_wildcard = true,
+                    PatternNode::Int(n) => {
+                        if let Some(en) = enum_name {
+                            return Err(Error { msg: format!("integer pattern in a match on enum '{}'", en), span: pat.span.clone() });
+                        }
+                        if !covered_ints.insert(*n) {
+                            return Err(Error { msg: format!("duplicate match arm for `{}`", n), span: pat.span.clone() });
+                        }
+                    }
+                    PatternNode::Path(p) => {
+                        let Some(en) = enum_name else {
+                            return Err(Error { msg: format!("enum-variant pattern `{}` in a match on integer type", p), span: pat.span.clone() });
+                        };
+                        let (pat_enum, variant) = p.split_once("::")
+                            .ok_or_else(|| Error { msg: format!("invalid enum pattern `{}`", p), span: pat.span.clone() })?;
+                        if pat_enum != en {
+                            return Err(Error { msg: format!("pattern `{}` is not a variant of enum '{}'", p, en), span: pat.span.clone() });
+                        }
+                        if !cx.enums[en].variants.contains_key(variant) {
+                            return Err(Error { msg: format!("enum '{}' has no variant '{}'", en, variant), span: pat.span.clone() });
+                        }
+                        if !covered_variants.insert(variant) {
+                            return Err(Error { msg: format!("duplicate match arm for `{}`", p), span: pat.span.clone() });
+                        }
+                    }
+                }
+                cx.push_scope();
+                check_stmt(cx, return_ty, body)?;
+                cx.pop_scope();
+            }
+
+            // exhaustiveness: an enum needs every variant or a `_`; an integer
+            // scrutinee always needs a `_` (its domain can't be enumerated).
+            if !has_wildcard {
+                match enum_name {
+                    Some(en) => {
+                        let mut missing: Vec<&str> = cx.enums[en].variants.keys()
+                            .filter(|v| !covered_variants.contains(**v)).cloned().collect();
+                        if !missing.is_empty() {
+                            missing.sort();
+                            return Err(Error {
+                                msg: format!("non-exhaustive match on enum '{}': missing {}; cover them or add a `_` arm",
+                                    en, missing.join(", ")),
+                                span: stmt.span.clone(),
+                            });
+                        }
+                    }
+                    None => return Err(Error {
+                        msg: "non-exhaustive match on an integer type: add a `_` arm".into(),
+                        span: stmt.span.clone(),
+                    }),
+                }
+            }
         },
 
         StmtNode::Continue | StmtNode::Break => {

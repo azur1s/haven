@@ -489,6 +489,14 @@ fn emit_terminator<'a>(cx: &mut EmitCtx<'a>, term: Terminator<'a>) {
         Jump(label) => emitln!(cx, "    br label %{label}"),
         Branch { cond, then_block, else_block } =>
             emitln!(cx, "    br i1 {cond}, label %{then_block}, label %{else_block}"),
+        Switch { value, value_ty, default, cases } => {
+            let ty = emit_type(&value_ty);
+            let arms = cases.iter()
+                .map(|(c, b)| format!("{ty} {}, label %{b}", emit_value(Value::Const(c.clone()))))
+                .collect::<Vec<_>>()
+                .join(" ");
+            emitln!(cx, "    switch {ty} {}, label %{default} [ {arms} ]", emit_value(value));
+        }
         Unreachable => emitln!(cx, "    unreachable"),
     }
 }
