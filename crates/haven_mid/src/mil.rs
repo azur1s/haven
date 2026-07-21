@@ -3,6 +3,47 @@ use std::fmt::{Display, Formatter};
 
 use haven_common::ast::*;
 use crate::intrinsics::Intrinsic;
+use crate::typecheck::EnumDef;
+
+/// A constant integer of the given integer `repr` type (an enum discriminant).
+fn int_const(repr: &Type, val: i64) -> Const {
+    match repr {
+        Type::Int8   => Const::Int8(val as i8),
+        Type::Int32  => Const::Int32(val as i32),
+        Type::Int64  => Const::Int64(val),
+        Type::Uint8  => Const::Uint8(val as u8),
+        Type::Uint32 => Const::Uint32(val as u32),
+        Type::Uint64 => Const::Uint64(val as u64),
+        _ => unreachable!("non-integer enum repr {:?}", repr),
+    }
+}
+
+/// If `name` is an `Enum::Variant` reference, the discriminant as a typed const.
+fn enum_const<'a>(enums: &HashMap<&'a str, EnumDef<'a>>, name: &str) -> Option<Const> {
+    let (ename, variant) = name.split_once("::")?;
+    let def = enums.get(ename)?;
+    Some(int_const(&def.repr, *def.variants.get(variant)?))
+}
+
+/// Rewrites a declared type's `Struct(name)` into `Type::Enum` for any declared
+/// enum, recursing through compound types. Struct field types arrive already
+/// resolved (via typecheck's `cx.structs`), but declared param/return/local
+/// types are the raw parser types, so lowering resolves them here.
+fn resolve_enum_ty<'a>(enums: &HashMap<&'a str, EnumDef<'a>>, ty: &Type<'a>) -> Type<'a> {
+    match ty {
+        Type::Struct { name, args } if args.is_empty() && enums.contains_key(name) =>
+            Type::Enum { name, repr: Box::new(enums[name].repr.clone()) },
+        Type::Pointer(i) => Type::Pointer(Box::new(resolve_enum_ty(enums, i))),
+        Type::Array(i, n) => Type::Array(Box::new(resolve_enum_ty(enums, i)), n.clone()),
+        Type::Slice(i)    => Type::Slice(Box::new(resolve_enum_ty(enums, i))),
+        Type::Simd(i, n)  => Type::Simd(Box::new(resolve_enum_ty(enums, i)), n.clone()),
+        Type::Function { params, return_type } => Type::Function {
+            params: params.iter().map(|p| resolve_enum_ty(enums, p)).collect(),
+            return_type: Box::new(resolve_enum_ty(enums, return_type)),
+        },
+        other => other.clone(),
+    }
+}
 
 // Unique SSA temps that will never be reassigned
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -264,6 +305,9 @@ pub struct LowerCtx<'a> {
     /// bare vars, distinct from `env` (locals/params), which shadow these.
     pub globals: HashMap<&'a str, Type<'a>>,
     pub structs: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>, // from typecheck
+    /// Declared enums (from typecheck): resolves an `Enum::Variant` reference to
+    /// its discriminant constant during lowering.
+    pub enums: HashMap<&'a str, EnumDef<'a>>,
     pub node_types: HashMap<usize, Type<'a>>, // from typecheck
     /// Name resolution from typecheck: `Var` node id -> its param/local binding.
     /// Absent for globals/functions, which resolve via `globals` / direct calls.
@@ -436,10 +480,15 @@ fn lower_intrinsic<'a>(
         //     }
         // }
         Intrinsic::NumericalCast => {
-            // numerical_cast::<T>(value)
+            // numerical_cast::<T>(value). An enum on either side casts as its
+            // integer discriminant repr, so unwrap it before selecting the cast.
+            let unwrap_enum = |t: Type<'a>| match t {
+                Type::Enum { repr, .. } => *repr,
+                other => other,
+            };
             let val = lower_expr(cx, &args[0]);
-            let from_ty = cx.node_types[&args[0].id].clone();
-            let to_ty = ta_type(type_args, 0);
+            let from_ty = unwrap_enum(cx.node_types[&args[0].id].clone());
+            let to_ty = unwrap_enum(ta_type(type_args, 0));
             let dst = cx.fresh_reg();
             cx.emit(Inst::Extend { dst, val, from_ty, to_ty });
             Value::Reg(dst)
@@ -645,6 +694,9 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
                 let dst = cx.fresh_reg();
                 cx.emit(Inst::GlobalPtr { dst, name });
                 Value::Reg(dst)
+            } else if let Some(c) = enum_const(&cx.enums, name) {
+                // an `Enum::Variant` reference is just its discriminant constant.
+                Value::Const(c)
             } else {
                 panic!("unknown variable '{name}' in MIL lowering");
             }
@@ -1132,6 +1184,8 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
         }
 
         StmtNode::Declare { ty, value, .. } => {
+            // resolve enum names so an enum local takes the scalar path below.
+            let ty = &resolve_enum_ty(&cx.enums, ty);
             // this local's binding identity is the Declare stmt's node id, matching
             // what name resolution recorded for every use of it.
             let binding = Binding::Local(stmt.id);
@@ -1317,9 +1371,12 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
 /// Recursively collect all local variable declarations in the function body,
 /// including nested ones in blocks and branches.
 /// This is for emitting all Alloca instructions upfront in the entry block
-fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(usize, &'a str, Type<'a>)>) {
+fn collect_locals<'a>(stmt: &Stmt<'a>, enums: &HashMap<&'a str, EnumDef<'a>>, out: &mut Vec<(usize, &'a str, Type<'a>)>) {
     match &stmt.value {
         StmtNode::Declare { name, ty, value } => {
+            // resolve enum names so an enum local is pre-allocated as its scalar
+            // repr (not skipped as a struct), matching the scalar Declare path.
+            let ty = resolve_enum_ty(enums, ty);
             // key by the Declare stmt's node id (its binding identity)
             match ty {
                 // A struct/array *literal* used to alloca at its own site, which
@@ -1330,21 +1387,21 @@ fn collect_locals<'a>(stmt: &Stmt<'a>, out: &mut Vec<(usize, &'a str, Type<'a>)>
                 // or copy in lower_stmt and are not pre-allocated here.
                 Type::Array(_, _) | Type::Struct { .. } => {
                     if matches!(value.value, ExprNode::Struct { .. } | ExprNode::Slice(_)) {
-                        out.push((stmt.id, name, ty.clone()));
+                        out.push((stmt.id, name, ty));
                     }
                 }
-                _ => out.push((stmt.id, name, ty.clone())),
+                _ => out.push((stmt.id, name, ty)),
             }
         }
         StmtNode::Block(stmts) => {
-            for s in stmts { collect_locals(s, out); }
+            for s in stmts { collect_locals(s, enums, out); }
         }
         StmtNode::If { then_branch, else_branch, .. } => {
-            collect_locals(then_branch, out);
-            if let Some(e) = else_branch { collect_locals(e, out); }
+            collect_locals(then_branch, enums, out);
+            if let Some(e) = else_branch { collect_locals(e, enums, out); }
         }
         StmtNode::While { body, .. } => {
-            collect_locals(body, out);
+            collect_locals(body, enums, out);
         }
         // rest should have no declarations
         _ => {}
@@ -1403,6 +1460,9 @@ fn lower_const_init<'a>(
             }
             ConstInit::Array(elem_ty, inits)
         }
+        // an `Enum::Variant` in a const initializer is its discriminant constant.
+        ExprNode::Var(name) if enum_const(&cx.enums, name).is_some() =>
+            ConstInit::Scalar(enum_const(&cx.enums, name).unwrap()),
         // a bare name in a const initializer is a function (typecheck ensured it);
         // its address @name is the constant.
         ExprNode::Var(name) => ConstInit::FnAddr(name),
@@ -1416,6 +1476,8 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
         TopLevelNode::Function { attributes, params, return_type, body, .. } => {
             let entry = cx.fresh_block();
             cx.current_block = entry;
+            // resolve enum names in the declared return type (raw parser type).
+            let return_type = &resolve_enum_ty(&cx.enums, return_type);
             cx.current_return_type = return_type.clone();
 
             // struct returns are lowered with an sret out-pointer
@@ -1431,6 +1493,9 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 
             let mut param_regs = Vec::new();
             for (name, ty) in params {
+                // resolve enum names in the declared param type (raw parser type)
+                // so an enum param takes the scalar path, not the by-value struct one.
+                let ty = &resolve_enum_ty(&cx.enums, ty);
                 if attributes.iter().any(|a| a.value.name == "export")
                 && matches!(ty, Type::Slice(_)) {
                     // split the fat pointer into 2 parameters for the data pointer and length
@@ -1504,7 +1569,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
             // locals get distinct slots (uses are routed by name resolution).
             let mut locals = Vec::new();
             for stmt in body {
-                collect_locals(stmt, &mut locals);
+                collect_locals(stmt, &cx.enums, &mut locals);
             }
             for (decl_id, name, ty) in locals {
                 let local_reg = cx.fresh_reg();
@@ -1548,6 +1613,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
         TopLevelNode::Extern { .. } => (vec![], None),
         TopLevelNode::Struct { .. } => (vec![], None),
         TopLevelNode::Global { .. } => (vec![], None),
+        TopLevelNode::Enum { .. } => (vec![], None),
     }
 }
 
@@ -1571,6 +1637,7 @@ pub fn lower<'a>(
         env: HashMap::new(),
         globals: HashMap::new(),
         structs: typecheck_context.structs.clone(),
+        enums: typecheck_context.enums.clone(),
         node_types: typecheck_context.node_types.clone(),
         resolved: typecheck_context.resolved.clone(),
         current_return_type: Type::Void,
@@ -1605,7 +1672,7 @@ pub fn lower<'a>(
                     name,
                     attributes: attributes.clone(),
                     params: param_regs,
-                    return_type: return_type.clone(),
+                    return_type: resolve_enum_ty(&cx.enums, return_type),
                     blocks: cx.blocks.clone(),
                     sret,
                 });
@@ -1628,13 +1695,13 @@ pub fn lower<'a>(
                 }).collect();
                 let concrete_params = params.iter()
                     .filter(|(_, ty)| !is_generic_type(&type_params, ty))
-                    .map(|(_, ty)| ty.clone())
+                    .map(|(_, ty)| resolve_enum_ty(&cx.enums, ty))
                     .collect();
                 externs.push(ExternDecl {
                     name,
                     attributes: attributes.clone(),
                     params: concrete_params,
-                    return_type: return_type.clone(),
+                    return_type: resolve_enum_ty(&cx.enums, return_type),
                 });
             }
             // generic struct templates carry `Param` fields and are never laid out
@@ -1642,7 +1709,12 @@ pub fn lower<'a>(
             // mirroring how generic functions are skipped above.
             TopLevelNode::Struct { generics, .. } if !generics.is_empty() => {}
             TopLevelNode::Struct { name, fields, .. } => {
-                structs.push((*name, fields.clone()));
+                // resolve enum-typed fields to their integer repr; a bare enum name
+                // otherwise emits an undefined `%EnumName` in the struct type.
+                let fields = fields.iter()
+                    .map(|(fname, fty)| (*fname, resolve_enum_ty(&cx.enums, fty)))
+                    .collect();
+                structs.push((*name, fields));
             }
             TopLevelNode::Global { name, attributes, ty, value, .. } => {
                 let init = lower_const_init(&mut cx, value);
@@ -1653,6 +1725,8 @@ pub fn lower<'a>(
                     init,
                 });
             }
+            // enums are erased to their integer repr; they emit no code or data.
+            TopLevelNode::Enum { .. } => {}
         }
     }
 

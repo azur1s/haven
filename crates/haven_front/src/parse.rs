@@ -100,6 +100,7 @@ fn lexer<'a> (
         "extern"   => Token::Extern,
         "const"    => Token::Const,
         "struct"   => Token::Struct,
+        "enum"     => Token::Enum,
         "import"   => Token::Import,
         "pub"      => Token::Pub,
         _ => Token::Var(ident),
@@ -897,10 +898,46 @@ fn parse_toplevel<'tks, 'src: 'tks>()
             value,
         });
 
+    // a field-less enum variant: a name with an optional explicit `= <int>`
+    // discriminant (a leading `-` is allowed for negative discriminants).
+    let enum_variant = var.map(|s| *s)
+        .then(
+            just(Token::Assign)
+                .ignore_then(just(Token::BinaryOp(BinaryOp::Sub)).or_not())
+                .then(select_ref! {
+                    Token::Int8(n)   => *n as i64,
+                    Token::Int32(n)  => *n as i64,
+                    Token::Int64(n)  => *n,
+                    Token::Uint8(n)  => *n as i64,
+                    Token::Uint32(n) => *n as i64,
+                    Token::Uint64(n) => *n as i64,
+                })
+                .map(|(neg, n)| if neg.is_some() { -n } else { n })
+                .or_not()
+        );
+
+    let enum_ = item_header.clone()
+        .then_ignore(just(Token::Enum))
+        .then(var.map(|s| *s))
+        .then(
+            enum_variant
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        )
+        .map(|(((attributes, is_pub), name), variants)| TopLevelNode::Enum {
+            name,
+            is_pub,
+            attributes,
+            variants,
+        });
+
     choice((
         function,
         extern_,
         struct_,
+        enum_,
         global,
     ))
         .map_with(|node, e| {

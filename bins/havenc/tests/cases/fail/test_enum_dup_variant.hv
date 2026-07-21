@@ -1,0 +1,5 @@
+//@ error: Duplicate variant 'A' in enum 'E'
+enum E { A, B, A }
+
+@export
+proc main() i32 { return 0; }

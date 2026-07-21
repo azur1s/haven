@@ -51,6 +51,18 @@ pub struct Context<'a> {
     /// Names of module-level constants. Used to reject direct assignment to a
     /// `const` global (they are read-only).
     pub global_consts: std::collections::HashSet<&'a str>,
+    /// Declared field-less enums, by name. Each carries the discriminant's
+    /// integer repr type (from `@repr(<int>)`, default `i32`) and its variants
+    /// mapped to their discriminant values. Used to resolve a `Struct(name)` type
+    /// to `Type::Enum` and an `E::V` variant reference to its constant.
+    pub enums: HashMap<&'a str, EnumDef<'a>>,
+}
+
+/// A field-less enum's definition: the discriminant repr and variant values.
+#[derive(Clone, Debug)]
+pub struct EnumDef<'a> {
+    pub repr: Type<'a>,
+    pub variants: HashMap<&'a str, i64>,
 }
 
 impl<'a> Context<'a> {
@@ -65,6 +77,7 @@ impl<'a> Context<'a> {
             const_generics: Vec::new(),
             generic_fns: HashMap::new(),
             global_consts: std::collections::HashSet::new(),
+            enums: HashMap::new(),
         }
     }
 
@@ -98,7 +111,7 @@ fn check_type_arg<'a>(
     ty: &Type<'a>,
     span: &Span,
 ) -> Result<Type<'a>, Error> {
-    let ty = resolve_type(&cx.generics, ty);
+    let ty = resolve_type(&cx.generics, &cx.enums, ty);
     if let Err(msg) = check_type_resolves(cx, &ty) {
         return Err(Error { msg: format!("{}(): {}", intrinsic, msg), span: span.clone() });
     }
@@ -266,7 +279,8 @@ fn typecheck_intrinsic<'a>(
             // numerical_cast::<T>(value) -> T
             let target_ty = tys[0].clone();
             let value_ty = infer(cx, &args[0])?;
-            if !value_ty.is_numeric() {
+            // an enum casts to/from its integer repr, so it is allowed here too.
+            if !value_ty.is_numeric() && !matches!(value_ty, Type::Enum { .. }) {
                 return Err(Error {
                     msg: format!("numerical_cast() argument must be a numeric type, got {}", value_ty),
                     span,
@@ -515,20 +529,26 @@ fn infer<'a>(
         ExprNode::Str(_)     => Type::Str,
 
         ExprNode::Var(name) => {
-            let Some((binding, ty)) = cx.lookup(name) else {
-                let msg = format!("Undefined variable '{}'", name);
-                return Err(Error {
-                    msg,
-                    span,
-                });
-            };
-            let binding = *binding;
-            let ty = ty.clone();
-            // record which param/local this use resolves to (globals -> None)
-            if let Some(b) = binding {
-                cx.resolved.insert(metadata.id, b);
+            // an `Enum::Variant` reference is an enum-typed constant (its value is
+            // the discriminant; MIL emits the literal). No local binding to record.
+            if let Some((ename, _val, repr)) = enum_variant(cx, name) {
+                Type::Enum { name: ename, repr: Box::new(repr) }
+            } else {
+                let Some((binding, ty)) = cx.lookup(name) else {
+                    let msg = format!("Undefined variable '{}'", name);
+                    return Err(Error {
+                        msg,
+                        span,
+                    });
+                };
+                let binding = *binding;
+                let ty = ty.clone();
+                // record which param/local this use resolves to (globals -> None)
+                if let Some(b) = binding {
+                    cx.resolved.insert(metadata.id, b);
+                }
+                ty
             }
-            ty
         },
 
         ExprNode::Slice(inner) if inner.len() == 0 => {
@@ -924,7 +944,7 @@ fn check_stmt<'a>(
             if let Err(msg) = check_const_scope(&cx.const_generics, ty) {
                 return Err(Error { msg: format!("in declaration of '{}': {}", name, msg), span: stmt.span.clone() });
             }
-            let ty = resolve_type(&cx.generics, ty);
+            let ty = resolve_type(&cx.generics, &cx.enums, ty);
             check_expr(cx, &ty, value)?;
             // the local's binding identity is this Declare stmt's node id, which
             // is globally unique - so shadowed same-named locals stay distinct.
@@ -1030,6 +1050,8 @@ fn check_export_type<'a>(
         }
         Type::Param(_) =>
             Err("generic type parameters are not allowed in @export functions".into()),
+        // an enum is its integer repr across FFI - a plain C enum / integer.
+        Type::Enum { .. } => Ok(()),
         // these are all fine across FFI
         Type::Void | Type::Bool
         | Type::Int8 | Type::Int32 | Type::Int64
@@ -1055,6 +1077,8 @@ fn check_const_initializer<'a>(cx: &Context<'a>, expr: &Expr<'a>) -> Result<(), 
                 ExprNode::Int8(_) | ExprNode::Int32(_) | ExprNode::Int64(_)
                 | ExprNode::Uint8(_) | ExprNode::Uint32(_) | ExprNode::Uint64(_)
                 | ExprNode::Float32(_) | ExprNode::Float64(_)) => Ok(()),
+        // an `Enum::Variant` is a compile-time integer constant.
+        ExprNode::Var(name) if enum_variant(cx, name).is_some() => Ok(()),
         // a bare top-level function name: its address is a link-time constant.
         // a *global* of function type is excluded - reading its value isn't const.
         ExprNode::Var(name)
@@ -1098,14 +1122,18 @@ fn check_toplevel<'a>(
                     });
                 }
                 for (param_name, ty) in params {
-                    if let Err(msg) = check_export_type(ty, &cx.structs) {
+                    // resolve enum names first (@export can't be generic) so an
+                    // enum param is checked as its integer repr, not an unknown struct.
+                    let ty = resolve_type(&[], &cx.enums, ty);
+                    if let Err(msg) = check_export_type(&ty, &cx.structs) {
                         return Err(Error {
                             msg: format!("parameter '{}' in @export function '{}': {}", param_name, name, msg),
                             span: node.span.clone(),
                         });
                     }
                 }
-                if let Err(msg) = check_export_type(return_type, &cx.structs) {
+                let return_type = resolve_type(&[], &cx.enums, return_type);
+                if let Err(msg) = check_export_type(&return_type, &cx.structs) {
                     return Err(Error {
                         msg: format!("return type in @export function '{}': {}", name, msg),
                         span: node.span.clone(),
@@ -1144,7 +1172,7 @@ fn check_toplevel<'a>(
                 });
             }
 
-            let return_ty = resolve_type(&cx.generics, return_type);
+            let return_ty = resolve_type(&cx.generics, &cx.enums, return_type);
             if let Err(msg) = check_type_resolves(cx, &return_ty) {
                 return Err(Error {
                     msg: format!("return type of '{}': {}", name, msg),
@@ -1165,7 +1193,7 @@ fn check_toplevel<'a>(
 
             // push params into scope, resolving type-param references
             for (pname, ty) in params {
-                let resolved = resolve_type(&cx.generics, ty);
+                let resolved = resolve_type(&cx.generics, &cx.enums, ty);
                 if let Err(msg) = check_type_resolves(cx, &resolved) {
                     return Err(Error {
                         msg: format!("parameter '{}' of '{}': {}", pname, name, msg),
@@ -1209,7 +1237,7 @@ fn check_toplevel<'a>(
                 GenericParam::Const(_, _) => None,
             }).collect();
             for (pname, ty) in params {
-                let resolved = resolve_type(&type_params, ty);
+                let resolved = resolve_type(&type_params, &cx.enums, ty);
                 if let Err(msg) = check_type_resolves(cx, &resolved) {
                     return Err(Error {
                         msg: format!("parameter '{}' of extern '{}': {}", pname, name, msg),
@@ -1217,7 +1245,7 @@ fn check_toplevel<'a>(
                     });
                 }
             }
-            let resolved_ret = resolve_type(&type_params, return_type);
+            let resolved_ret = resolve_type(&type_params, &cx.enums, return_type);
             if let Err(msg) = check_type_resolves(cx, &resolved_ret) {
                 return Err(Error {
                     msg: format!("return type of extern '{}': {}", name, msg),
@@ -1248,7 +1276,7 @@ fn check_toplevel<'a>(
                 }
                 // resolve the struct's own type params to `Param` first, so they
                 // aren't reported as unknown struct names.
-                let resolved = resolve_type(&type_params, field_ty);
+                let resolved = resolve_type(&type_params, &cx.enums, field_ty);
                 if let Err(msg) = check_type_resolves(cx, &resolved) {
                     return Err(Error {
                         msg: format!("In field '{}' of struct '{}': {}", field_name, name, msg),
@@ -1276,36 +1304,75 @@ fn check_toplevel<'a>(
             check_const_initializer(cx, value)?;
             check_expr(cx, ty, value)?;
         }
+        // field-less enums are fully validated in the forward-declaration pass
+        // (duplicate variants, `@repr` value); nothing more to check here.
+        TopLevelNode::Enum { .. } => {}
     }
 
     Ok(())
 }
 
-/// Rewrites every `Type::Struct(name)` whose name is a generic type parameter
-/// in scope into a `Type::Param(name)`, recursing through compound types. The
-/// parser can't tell a struct name from a type param (both are bare idents), so
-/// this resolution happens once the function's generic list is known.
-fn resolve_type<'a>(generics: &[&'a str], ty: &Type<'a>) -> Type<'a> {
+/// The discriminant repr type for an enum, from its `@repr(<int>)` attribute.
+/// Defaults to `i32` (C `int`); `@repr(C)` is an explicit spelling of that.
+/// haven has no 16-bit integer, so `u16`/`i16` are not accepted yet.
+fn enum_repr<'a>(attributes: &[Attribute<'a>]) -> Result<Type<'a>, String> {
+    for a in attributes {
+        if a.value.name == "repr" {
+            return match a.value.value.as_deref() {
+                None | Some("C") | Some("i32") => Ok(Type::Int32),
+                Some("i8")  => Ok(Type::Int8),
+                Some("i64") => Ok(Type::Int64),
+                Some("u8")  => Ok(Type::Uint8),
+                Some("u32") => Ok(Type::Uint32),
+                Some("u64") => Ok(Type::Uint64),
+                Some(other) => Err(format!(
+                    "unknown @repr('{}') on enum; expected an integer type \
+                     (i8/i32/i64/u8/u32/u64) or C", other)),
+            };
+        }
+    }
+    Ok(Type::Int32)
+}
+
+/// If `name` is an `Enum::Variant` reference to a declared enum, return the
+/// enum's name, the variant's discriminant value, and the discriminant repr.
+/// The enum name comes from the table key so it carries the `'a` lifetime.
+fn enum_variant<'a>(cx: &Context<'a>, name: &str) -> Option<(&'a str, i64, Type<'a>)> {
+    let (ename, variant) = name.split_once("::")?;
+    let (&ekey, def) = cx.enums.get_key_value(ename)?;
+    let val = *def.variants.get(variant)?;
+    Some((ekey, val, def.repr.clone()))
+}
+
+/// Rewrites a bare named type into a `Type::Param` (generic param in scope),
+/// `Type::Enum` (declared enum), or leaves it a `Type::Struct`, recursing
+/// through compound types. The parser can't tell these apart (all bare idents),
+/// so this resolution happens once the generic list and enum table are known.
+fn resolve_type<'a>(generics: &[&'a str], enums: &HashMap<&'a str, EnumDef<'a>>, ty: &Type<'a>) -> Type<'a> {
     match ty {
         // a bare `T` that names an in-scope param becomes `Param`; any other named
         // type keeps its name but has its generic args resolved recursively (a
         // struct arg can itself mention `T`, e.g. `Option<T>`).
         Type::Struct { name, args } if args.is_empty() && generics.contains(name) => Type::Param(name),
+        // a bare name that is a declared enum becomes `Type::Enum`, with the
+        // discriminant repr baked in so later stages need no enum table.
+        Type::Struct { name, args } if args.is_empty() && enums.contains_key(name) =>
+            Type::Enum { name, repr: Box::new(enums[name].repr.clone()) },
         Type::Struct { name, args } => Type::Struct {
             name,
             // only type args can name a type param; const args pass through.
             args: args.iter().map(|a| match a {
-                GenericArg::Type(t) => GenericArg::Type(resolve_type(generics, t)),
+                GenericArg::Type(t) => GenericArg::Type(resolve_type(generics, enums, t)),
                 GenericArg::Const(_) => a.clone(),
             }).collect(),
         },
-        Type::Pointer(inner)  => Type::Pointer(Box::new(resolve_type(generics, inner))),
-        Type::Array(inner, n) => Type::Array(Box::new(resolve_type(generics, inner)), n.clone()),
-        Type::Slice(inner)    => Type::Slice(Box::new(resolve_type(generics, inner))),
-        Type::Simd(inner, n)  => Type::Simd(Box::new(resolve_type(generics, inner)), n.clone()),
+        Type::Pointer(inner)  => Type::Pointer(Box::new(resolve_type(generics, enums, inner))),
+        Type::Array(inner, n) => Type::Array(Box::new(resolve_type(generics, enums, inner)), n.clone()),
+        Type::Slice(inner)    => Type::Slice(Box::new(resolve_type(generics, enums, inner))),
+        Type::Simd(inner, n)  => Type::Simd(Box::new(resolve_type(generics, enums, inner)), n.clone()),
         Type::Function { params, return_type } => Type::Function {
-            params: params.iter().map(|p| resolve_type(generics, p)).collect(),
-            return_type: Box::new(resolve_type(generics, return_type)),
+            params: params.iter().map(|p| resolve_type(generics, enums, p)).collect(),
+            return_type: Box::new(resolve_type(generics, enums, return_type)),
         },
         other => other.clone(),
     }
@@ -1380,7 +1447,7 @@ fn check_generic_call<'a>(
             (GenericParam::Type(pname), GenericArg::Type(ty)) => {
                 // resolve against the caller's own type params (a generic body
                 // can forward its `T`), then check any structs exist.
-                let ty = resolve_type(&cx.generics, ty);
+                let ty = resolve_type(&cx.generics, &cx.enums, ty);
                 if let Err(msg) = check_type_resolves(cx, &ty) {
                     return Err(Error { msg: format!("{}(): {}", name, msg), span: span.clone() });
                 }
@@ -1466,7 +1533,7 @@ fn bind_struct_generics<'a>(
     for (gp, ga) in params.iter().zip(args) {
         match (gp, ga) {
             (GenericParam::Type(pname), GenericArg::Type(ty)) => {
-                let ty = resolve_type(&cx.generics, ty);
+                let ty = resolve_type(&cx.generics, &cx.enums, ty);
                 if let Err(msg) = check_type_resolves(cx, &ty) {
                     return Err(Error { msg: format!("struct '{}': {}", name, msg), span: span.clone() });
                 }
@@ -1600,12 +1667,50 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
 
     // --- forward declaration pass
 
+    // enums come first: a struct field or function parameter may name an enum
+    // type, and `resolve_type` needs the enum table to rewrite `Struct(name)`
+    // into `Type::Enum`.
+    for node in program {
+        if let TopLevelNode::Enum { name, attributes, variants, .. } = &node.value {
+            if cx.enums.contains_key(name) || cx.structs.contains_key(name) {
+                errors.push(Error {
+                    msg: format!("Duplicate type definition '{}'", name),
+                    span: node.span.clone(),
+                });
+                continue;
+            }
+            let repr = match enum_repr(attributes) {
+                Ok(r) => r,
+                Err(msg) => { errors.push(Error { msg, span: node.span.clone() }); continue; }
+            };
+            // C-style discriminants: an unspecified variant is the previous one
+            // plus one, starting at 0.
+            let mut vmap = HashMap::new();
+            let mut next: i64 = 0;
+            let mut dup = false;
+            for (vname, explicit) in variants {
+                let val = explicit.unwrap_or(next);
+                if vmap.insert(*vname, val).is_some() {
+                    errors.push(Error {
+                        msg: format!("Duplicate variant '{}' in enum '{}'", vname, name),
+                        span: node.span.clone(),
+                    });
+                    dup = true;
+                    break;
+                }
+                next = val + 1;
+            }
+            if dup { continue; }
+            cx.enums.insert(name, EnumDef { repr, variants: vmap });
+        }
+    }
+
     // forward declare structs so that they can be referenced in function signatures
     for node in program {
         if let TopLevelNode::Struct { name, generics, fields, .. } = &node.value {
-            if cx.structs.contains_key(name) {
+            if cx.structs.contains_key(name) || cx.enums.contains_key(name) {
                 errors.push(Error {
-                    msg: format!("Duplicate struct definition '{}'", name),
+                    msg: format!("Duplicate type definition '{}'", name),
                     span: node.span.clone(),
                 });
                 continue;
@@ -1619,7 +1724,7 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 GenericParam::Const(_, _) => None,
             }).collect();
             let resolved_fields = fields.iter()
-                .map(|(fname, fty)| (*fname, resolve_type(&type_params, fty)))
+                .map(|(fname, fty)| (*fname, resolve_type(&type_params, &cx.enums, fty)))
                 .collect();
             cx.structs.insert(name, resolved_fields);
             if !generics.is_empty() {
@@ -1642,9 +1747,9 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 // only type params get reclassified `Struct`->`Param`; const params
                 // already arrive as `ConstVal::Param` from the parser.
                 let resolved_params = params.iter()
-                    .map(|(_, ty)| resolve_type(&type_params, ty))
+                    .map(|(_, ty)| resolve_type(&type_params, &cx.enums, ty))
                     .collect();
-                let resolved_return = resolve_type(&type_params, return_type);
+                let resolved_return = resolve_type(&type_params, &cx.enums, return_type);
                 cx.generic_fns.insert(name, GenericFnSig {
                     generics: generics.clone(),
                     params: resolved_params,
@@ -1663,9 +1768,9 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                     GenericParam::Const(_, _) => None,
                 }).collect();
                 let resolved_params = params.iter()
-                    .map(|(_, ty)| resolve_type(&type_params, ty))
+                    .map(|(_, ty)| resolve_type(&type_params, &cx.enums, ty))
                     .collect();
-                let resolved_return = resolve_type(&type_params, return_type);
+                let resolved_return = resolve_type(&type_params, &cx.enums, return_type);
                 cx.generic_fns.insert(name, GenericFnSig {
                     generics: generics.clone(),
                     params: resolved_params,
@@ -1674,9 +1779,12 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
             }
             TopLevelNode::Function { name, params, return_type, .. }
             | TopLevelNode::Extern { name, params, return_type, .. } => {
+                // resolve enum-typed params/return (no generics here) so the stored
+                // signature uses `Type::Enum`, matching how a call's args infer;
+                // otherwise an enum param stays `Struct` and mismatches the arg.
                 cx.insert(name, None, Type::Function {
-                    params: params.iter().map(|(_, ty)| ty.clone()).collect(),
-                    return_type: Box::new(return_type.clone()),
+                    params: params.iter().map(|(_, ty)| resolve_type(&[], &cx.enums, ty)).collect(),
+                    return_type: Box::new(resolve_type(&[], &cx.enums, return_type)),
                 });
             }
             // globals share the value namespace with functions; register the name
@@ -1685,7 +1793,9 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 cx.insert(name, None, ty.clone());
                 cx.global_consts.insert(name);
             }
-            TopLevelNode::Struct { .. } => {}
+            // enums were collected in their own pass above; nothing to register
+            // in the value namespace (variant refs resolve directly).
+            TopLevelNode::Struct { .. } | TopLevelNode::Enum { .. } => {}
         }
     }
 

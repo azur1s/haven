@@ -101,7 +101,7 @@ pub enum Token<'a> {
 
     Let, If, Else, Return,
     While, Break, Continue,
-    Proc, Extern, Const, Struct,
+    Proc, Extern, Const, Struct, Enum,
     Import, Pub,
 }
 
@@ -145,6 +145,7 @@ impl Display for Token<'_> {
             Token::Extern       => write!(f, "extern"),
             Token::Const        => write!(f, "const"),
             Token::Struct       => write!(f, "struct"),
+            Token::Enum         => write!(f, "enum"),
             Token::Import       => write!(f, "import"),
             Token::Pub          => write!(f, "pub"),
         }
@@ -259,6 +260,12 @@ pub enum Type<'a> {
     /// instance with a mangled `name` and no `args` (like generic functions). Use
     /// [`Type::plain_struct`] to build the common no-args case.
     Struct { name: &'a str, args: Vec<GenericArg<'a>> },
+    /// A named (field-less, C-style) enum. `repr` is the integer type its
+    /// discriminant is stored as (default `i32`, or set by `@repr(<int>)`). The
+    /// repr is baked into the type so layout/codegen just delegate to it; `name`
+    /// keeps enum values distinct from a plain integer for typechecking. Produced
+    /// by typecheck when a `Struct(name)` resolves to a declared enum.
+    Enum { name: &'a str, repr: Box<Self> },
     /// A generic type parameter, e.g. `T`.
     /// Produced during typechecking by resolving a `Struct(name)` where the name
     /// matches a type param in scope. It is abstract and must never survive to
@@ -314,6 +321,7 @@ impl<'a> Display for Type<'a> {
                 let args_str = args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "{}<{}>", name, args_str)
             },
+            Enum { name, .. } => write!(f, "{}", name),
             Param(name) => write!(f, "{}", name),
         }
     }
@@ -598,6 +606,18 @@ pub enum TopLevelNode<'a> {
         fields: Vec<(&'a str, Type<'a>)>,
     },
 
+    /// A field-less, C-style enum: `enum Status { Continue, Sleep = 5, Error }`.
+    /// Each variant is a name with an optional explicit discriminant; unspecified
+    /// discriminants continue from the previous one + 1 (starting at 0), as in C.
+    /// The discriminant's integer type is set by `@repr(<int>)` in `attributes`
+    /// (default `i32`). Field-less only for now (no payloads / no `match`).
+    Enum {
+        name: &'a str,
+        is_pub: bool,
+        attributes: Vec<Attribute<'a>>,
+        variants: Vec<(&'a str, Option<i64>)>,
+    },
+
     /// A module-level constant, e.g. `const SR: f32 = 48000.0;`. The initializer
     /// must be a compile-time constant (literal or const struct literal); it is
     /// emitted as an LLVM `constant` global. `@export` gives it external linkage
@@ -660,6 +680,20 @@ impl<'a> Display for TopLevelNode<'a> {
                 let pub_str = if *is_pub { "pub " } else { "" };
 
                 write!(f, "{}{}const {}: {} = {};", attrs_str, pub_str, name, ty, value.value)
+            },
+            TopLevelNode::Enum { name, is_pub, attributes, variants } => {
+                let attrs_str = if attributes.is_empty() {
+                    String::new()
+                } else {
+                    attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
+                };
+                let pub_str = if *is_pub { "pub " } else { "" };
+                let variants_str = variants.iter().map(|(vname, val)| match val {
+                    Some(v) => format!("    {} = {},\n", vname, v),
+                    None => format!("    {},\n", vname),
+                }).collect::<String>();
+
+                write!(f, "{}{}enum {} {{\n{}}}", attrs_str, pub_str, name, variants_str)
             },
         }
     }

@@ -218,7 +218,8 @@ fn item_is_pub(node: &TopLevelNode) -> bool {
         TopLevelNode::Function { is_pub, .. }
         | TopLevelNode::Extern { is_pub, .. }
         | TopLevelNode::Struct { is_pub, .. }
-        | TopLevelNode::Global { is_pub, .. } => *is_pub,
+        | TopLevelNode::Global { is_pub, .. }
+        | TopLevelNode::Enum { is_pub, .. } => *is_pub,
     }
 }
 
@@ -242,7 +243,8 @@ fn item_name<'a>(node: &TopLevelNode<'a>) -> &'a str {
         TopLevelNode::Function { name, .. }
         | TopLevelNode::Extern { name, .. }
         | TopLevelNode::Struct { name, .. }
-        | TopLevelNode::Global { name, .. } => name,
+        | TopLevelNode::Global { name, .. }
+        | TopLevelNode::Enum { name, .. } => name,
     }
 }
 
@@ -292,6 +294,18 @@ fn signature(node: &TopLevelNode, src: &str, start: usize, end: usize) -> String
         TopLevelNode::Global { name, attributes, ty, value, .. } => {
             let mut s = attr_prefix(attributes);
             s.push_str(&format!("const {}: {} = {};", name, ty, value.value));
+            s
+        }
+        TopLevelNode::Enum { name, attributes, variants, .. } => {
+            let mut s = attr_prefix(attributes);
+            s.push_str(&format!("enum {} {{\n", name));
+            for (vname, val) in variants {
+                match val {
+                    Some(v) => s.push_str(&format!("    {} = {},\n", vname, v)),
+                    None => s.push_str(&format!("    {},\n", vname)),
+                }
+            }
+            s.push('}');
             s
         }
     }

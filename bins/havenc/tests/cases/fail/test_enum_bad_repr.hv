@@ -1,0 +1,7 @@
+//@ error: unknown @repr('u16') on enum
+// haven has no 16-bit integer type, so @repr(u16) is rejected.
+@repr(u16)
+enum E { A, B }
+
+@export
+proc main() i32 { return 0; }

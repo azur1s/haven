@@ -167,6 +167,7 @@ fn mangle_ty(ty: &Type) -> String {
         Type::Float32 => "f32".into(),
         Type::Float64 => "f64".into(),
         Type::Str => "str".into(),
+        Type::Enum { name, .. } => (*name).into(),
         Type::Pointer(inner) => format!(".ptr{}", mangle_ty(inner)),
         Type::Array(inner, n) => format!(".arr{}.{}", n.expect_lit(), mangle_ty(inner)),
         Type::Slice(inner) => format!(".slice{}", mangle_ty(inner)),
@@ -519,7 +520,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
                 concrete.insert(i, m.rebuild_function(tl, &empty, None));
             }
             TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. }
-            | TopLevelNode::Global { .. } => {}
+            | TopLevelNode::Global { .. } | TopLevelNode::Enum { .. } => {}
         }
     }
 
@@ -660,7 +661,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
                 }
             }
             TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. }
-            | TopLevelNode::Global { .. } => output.push(tl.clone()),
+            | TopLevelNode::Global { .. } | TopLevelNode::Enum { .. } => output.push(tl.clone()),
         }
     }
 

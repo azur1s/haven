@@ -265,6 +265,8 @@ fn leaf_class(ty: &Type) -> Class {
         // A slice is a two-INTEGER-word fat pointer; FFI bans it, but classify
         // sanely. `str` is a single `*const u8`, handled as a pointer leaf below.
         Type::Slice(_) | Type::Str => Class::Integer,
+        // an enum is its integer discriminant repr - an INTEGER-class leaf.
+        Type::Enum { .. } => Class::Integer,
         Type::Void => Class::NoClass,
         Type::Struct { .. } | Type::Array(..) => {
             unreachable!("aggregates are handled by classify_into, not leaf_class")

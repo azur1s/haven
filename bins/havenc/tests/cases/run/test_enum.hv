@@ -1,0 +1,51 @@
+// Field-less (C-style) enums: default i32 repr with auto-numbered variants,
+// `@repr(<int>)` to set the discriminant width, explicit discriminants with
+// C-style auto-increment resuming after them, comparison, enums as parameter
+// and return types (including across `@export`), and enum<->int via cast.
+
+enum Status { Continue, Sleep, Error }   // 0, 1, 2
+
+// a narrow repr, used as a struct field (stored as its i8 discriminant).
+@repr(u8)
+enum Kind { Off, On = 5u8 }
+
+struct Cell { k: Kind, n: i32 }
+
+@repr(u32)
+enum ProcessStatus {
+    Error = 0u32,
+    Continue = 1u32,
+    ContinueIfNotQuiet,   // 2 (auto-increment resumes)
+    Tail,                 // 3
+    Sleep = 100u32,
+}
+
+proc step(s: Status) i32 {
+    if (s == Status::Error) { return -1; }
+    if (s == Status::Sleep) { return 0; }
+    return 1;
+}
+
+// an enum crosses @export as its integer repr.
+@export
+proc classify(p: ProcessStatus) u32 {
+    return numerical_cast::<u32>(p);
+}
+
+@export
+proc main() i32 {
+    printf::<i32>("%d\n", step(Status::Continue)); // 1
+    printf::<i32>("%d\n", step(Status::Error));    // -1
+    printf::<i32>("%d\n", step(Status::Sleep));    // 0
+
+    // enum local, then cast to its int discriminant
+    let ps: ProcessStatus = ProcessStatus::ContinueIfNotQuiet;
+    printf::<i32>("%d\n", numerical_cast::<i32>(classify(ps)));                    // 2
+    printf::<i32>("%d\n", numerical_cast::<i32>(classify(ProcessStatus::Sleep)));  // 100
+
+    // enum as a struct field, read back through the field
+    let c: Cell = Cell { k: Kind::On, n: 7 };
+    printf::<i32>("%d\n", numerical_cast::<i32>(c.k)); // 5
+    printf::<i32>("%d\n", c.n);                        // 7
+    return 0;
+}

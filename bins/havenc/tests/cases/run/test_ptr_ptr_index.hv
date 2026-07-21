@@ -1,0 +1,38 @@
+// Multi-level pointer indexing through `**f32` - the CLAP process() read/write
+// path `audio.data32[ch][i]`. Covers: building a `**f32` from `&arr[i]` and an
+// array of channel pointers, nested read `data[ch][i]`, nested write
+// `data[ch][i] = x`, and reading through a pointer-to-struct field.
+
+struct AudioBuffer {
+    data32: **f32,
+    channels: u32,
+}
+
+// the real CLAP shape: index a `**f32` field reached through a `*struct`.
+proc read_buf(buf: *AudioBuffer, ch: i32, i: i32) f32 {
+    return buf.data32[ch][i];
+}
+
+@export
+proc main() i32 {
+    let ch0: [f32; 3] = [1.0, 2.0, 3.0];
+    let ch1: [f32; 3] = [4.0, 5.0, 6.0];
+
+    // channel base pointers, then a `**f32` pointing at them
+    let channels: [*f32; 2] = [ &ch0[0], &ch1[0] ];
+    let data: **f32 = &channels[0];
+
+    // nested read: data[ch][i]
+    printf::<i32>("%d\n", numerical_cast::<i32>(data[1][2])); // 6
+    printf::<i32>("%d\n", numerical_cast::<i32>(data[0][0])); // 1
+
+    // nested write, then read back through the same path
+    data[0][1] = 9.0;
+    printf::<i32>("%d\n", numerical_cast::<i32>(data[0][1])); // 9
+
+    // through a `*AudioBuffer` field: buf.data32[ch][i]
+    let buf: AudioBuffer = AudioBuffer { data32: data, channels: 2u32 };
+    printf::<i32>("%d\n", numerical_cast::<i32>(read_buf(&buf, 1, 0))); // 4
+
+    return 0;
+}

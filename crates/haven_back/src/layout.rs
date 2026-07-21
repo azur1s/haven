@@ -52,6 +52,8 @@ pub fn size_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
         Slice(_) => aggregate_layout(fat_pointer_fields().iter(), structs).0,
         // `str` is a raw `*const u8` - a single machine pointer.
         Str => POINTER_SIZE,
+        // an enum is stored as its integer discriminant repr.
+        Enum { repr, .. } => size_of(repr, structs),
 
         Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).0,
 
@@ -82,6 +84,7 @@ pub fn align_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
 
         Slice(_) => aggregate_layout(fat_pointer_fields().iter(), structs).1,
         Str => POINTER_ALIGN,
+        Enum { repr, .. } => align_of(repr, structs),
 
         Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).1,
 

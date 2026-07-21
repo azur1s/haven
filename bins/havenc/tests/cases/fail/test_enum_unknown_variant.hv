@@ -1,0 +1,8 @@
+//@ error: Undefined variable 'E::Nope'
+enum E { A, B }
+
+@export
+proc main() i32 {
+    let x: E = E::Nope;
+    return 0;
+}

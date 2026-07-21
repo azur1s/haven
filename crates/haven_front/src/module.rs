@@ -428,6 +428,10 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 self.ty(ty, &empty);
                 self.expr(value, &empty);
             }
+            // field-less enums have nothing to rewrite: the type name is kept
+            // stable (see build_symtab) and variant refs `E::V` pass through the
+            // Var arm untouched, resolved globally in typecheck.
+            TopLevelNode::Enum { .. } => {}
         }
     }
 }
@@ -445,6 +449,13 @@ fn build_symtab<'a>(m: &Module<'a>, arena: &'a Bump) -> SymTab<'a> {
             }
             TopLevelNode::Struct { name, is_pub, attributes, .. } => {
                 st.structs.insert(name, Sym { name: final_struct_name(m, name, attributes, arena), is_pub: *is_pub });
+            }
+            // enums live in the type namespace like structs, but their name is
+            // kept stable (unmangled) so the `E::V` variant refs that pass through
+            // resolution unchanged still line up in typecheck. Stage-1 limitation:
+            // enum type names must be globally unique across modules.
+            TopLevelNode::Enum { name, is_pub, .. } => {
+                st.structs.insert(name, Sym { name, is_pub: *is_pub });
             }
             // globals live in the callable/value namespace (referenced as vars).
             TopLevelNode::Global { name, is_pub, attributes, .. } => {
@@ -714,6 +725,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                 TopLevelNode::Extern { name, params, return_type, .. } =>
                     (*name, true, params.as_slice(), return_type),
                 TopLevelNode::Struct { .. } => { out.push(tl.clone()); continue; }
+                TopLevelNode::Enum { .. } => { out.push(tl.clone()); continue; }
                 TopLevelNode::Global { name, .. } => {
                     if !seen_globals.insert(*name) {
                         merge_errs.push(Error::new(tl.span.clone(), format!(
@@ -731,7 +743,7 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                         (false, params.as_slice(), return_type),
                     TopLevelNode::Extern { params, return_type, .. } =>
                         (true, params.as_slice(), return_type),
-                    TopLevelNode::Struct { .. } => unreachable!("only callables are recorded"),
+                    TopLevelNode::Struct { .. } | TopLevelNode::Enum { .. } => unreachable!("only callables are recorded"),
                     TopLevelNode::Global { .. } => unreachable!("globals are deduped separately"),
                 };
                 // signatures match on types only (param names are irrelevant to the ABI)
