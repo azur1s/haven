@@ -249,9 +249,19 @@ fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
 
                 Lt | Le | Gt | Ge => unreachable!("{}", ty),
 
+                // logical and/or reach here only via the non-short-circuit
+                // fallback path; on i1 the bitwise ops are the logical ops.
                 And => "and",
                 Or => "or",
-                Xor => "xor",
+
+                BitAnd => "and",
+                BitOr => "or",
+                BitXor => "xor",
+                Shl => "shl",
+                // arithmetic shift for signed, logical for unsigned
+                Shr if is_signed_int => "ashr",
+                Shr if is_unsigned_int => "lshr",
+                Shr => unreachable!("{}", ty),
             }, emit_type(&ty), emit_value(lhs), emit_value(rhs));
         }
         Call { dst, callee, args, return_type, sret } => {

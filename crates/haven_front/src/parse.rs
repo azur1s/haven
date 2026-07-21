@@ -114,17 +114,19 @@ fn lexer<'a> (
         just('=').then(just('=')).to(Token::BinaryOp(BinaryOp::Eq)),
         just('!').then(just('=')).to(Token::BinaryOp(BinaryOp::Ne)),
 
-        just('^').to(Token::BinaryOp(BinaryOp::Xor)),
+        just('^').to(Token::BinaryOp(BinaryOp::BitXor)),
+        just('|').to(Token::BinaryOp(BinaryOp::BitOr)),
         just('+').to(Token::BinaryOp(BinaryOp::Add)),
         just('-').to(Token::BinaryOp(BinaryOp::Sub)), // Map to unary neg in parsing
-        just('*').to(Token::BinaryOp(BinaryOp::Mul)), // This too
+        just('*').to(Token::BinaryOp(BinaryOp::Mul)), // This too, deref in prefix position
         just('/').to(Token::BinaryOp(BinaryOp::Div)),
         just('%').to(Token::BinaryOp(BinaryOp::Mod)),
         just('<').to(Token::BinaryOp(BinaryOp::Lt)),
         just('>').to(Token::BinaryOp(BinaryOp::Gt)),
 
         just('!').to(Token::UnaryOp(UnaryOp::Not)),
-        just('&').to(Token::UnaryOp(UnaryOp::AddrOf)),
+        // one token, like `*`/Mul: infix bitwise-and, or prefix address-of.
+        just('&').to(Token::BinaryOp(BinaryOp::BitAnd)),
     ));
 
     let delim = choice((
@@ -225,6 +227,27 @@ fn parse_expr<'tks, 'src: 'tks>()
         macro_rules! bin {
             ($op:expr, $precedence:expr) => {
                 infix(left($precedence), just(Token::BinaryOp($op)), |x, _, y, e|
+                    Metadata::new(
+                        ExprNode::Binary {
+                            op: $op,
+                            left: Box::new(x),
+                            right: Box::new(y),
+                        },
+                        e.span(),
+                    )
+                )
+            };
+        }
+
+        // A shift operator (`<<`/`>>`) is two adjacent `<`/`>` tokens rather than a
+        // dedicated token, so nested generics like `Vec<Option<*T>>` keep closing
+        // on single `>`s. $tok is the single-angle op to double up; must be listed
+        // before the matching `bin!(Lt/Gt)` so two angles are tried before one.
+        macro_rules! shift {
+            ($tok:expr, $op:expr, $precedence:expr) => {
+                infix(left($precedence),
+                    just(Token::BinaryOp($tok)).ignore_then(just(Token::BinaryOp($tok))),
+                    |x, _, y, e|
                     Metadata::new(
                         ExprNode::Binary {
                             op: $op,
@@ -416,7 +439,7 @@ fn parse_expr<'tks, 'src: 'tks>()
             una!(Token::BinaryOp(BinaryOp::Sub), UnaryOp::Neg, 190),
             una!(Token::UnaryOp(UnaryOp::Not), UnaryOp::Not, 190),
             una!(Token::BinaryOp(BinaryOp::Mul), UnaryOp::Deref, 190),
-            una!(Token::UnaryOp(UnaryOp::AddrOf), UnaryOp::AddrOf, 190),
+            una!(Token::BinaryOp(BinaryOp::BitAnd), UnaryOp::AddrOf, 190),
 
             bin!(BinaryOp::Mul, 180),
             bin!(BinaryOp::Div, 180),
@@ -424,6 +447,11 @@ fn parse_expr<'tks, 'src: 'tks>()
 
             bin!(BinaryOp::Add, 170),
             bin!(BinaryOp::Sub, 170),
+
+            // shifts bind tighter than comparison (C order). Listed before the
+            // `<`/`>` comparisons so `<<`/`>>` win over a single angle bracket.
+            shift!(BinaryOp::Lt, BinaryOp::Shl, 165),
+            shift!(BinaryOp::Gt, BinaryOp::Shr, 165),
 
             bin!(BinaryOp::Lt,  160),
             bin!(BinaryOp::Gt,  160),
@@ -433,7 +461,11 @@ fn parse_expr<'tks, 'src: 'tks>()
             bin!(BinaryOp::Eq,  150),
             bin!(BinaryOp::Ne,  150),
 
-            bin!(BinaryOp::Xor, 140),
+            // bitwise, in C precedence: & tighter than ^ tighter than |
+            bin!(BinaryOp::BitAnd, 145),
+            bin!(BinaryOp::BitXor, 140),
+            bin!(BinaryOp::BitOr,  135),
+
             bin!(BinaryOp::And, 130),
             bin!(BinaryOp::Or,  120),
         ))

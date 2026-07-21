@@ -651,11 +651,20 @@ fn infer<'a>(
                     check_expr(cx, &expected, right)?;
                     Type::Bool
                 },
-                Xor => {
-                    let expected = Type::Int32;
-                    check_expr(cx, &expected, left)?;
-                    check_expr(cx, &expected, right)?;
-                    Type::Int32
+                // bitwise and shifts: integer operands, same type on both sides
+                // (LLVM requires the shift amount to match the value type), result
+                // is that integer type.
+                BitAnd | BitOr | BitXor | Shl | Shr => {
+                    let left_ty = infer(cx, left)?;
+                    check_expr(cx, &left_ty, right)?;
+                    if !left_ty.is_integer() {
+                        let msg = format!(
+                            "Expected an integer type for bitwise operator '{}', got {}",
+                            op, left_ty
+                        );
+                        return Err(Error { msg, span });
+                    }
+                    left_ty
                 },
             }
         },

@@ -169,7 +169,10 @@ impl Display for UnaryOp {
 pub enum BinaryOp {
     Add, Sub, Mul, Div, Mod,
     Eq, Ne, Lt, Gt, Le, Ge,
-    And, Or, Xor,
+    // logical (bool, short-circuiting)
+    And, Or,
+    // bitwise (integers)
+    BitAnd, BitOr, BitXor, Shl, Shr,
 }
 
 impl Display for BinaryOp {
@@ -188,7 +191,11 @@ impl Display for BinaryOp {
             BinaryOp::Ge  => ">=",
             BinaryOp::And => "&&",
             BinaryOp::Or  => "||",
-            BinaryOp::Xor => "^",
+            BinaryOp::BitAnd => "&",
+            BinaryOp::BitOr  => "|",
+            BinaryOp::BitXor => "^",
+            BinaryOp::Shl => "<<",
+            BinaryOp::Shr => ">>",
         })
     }
 }

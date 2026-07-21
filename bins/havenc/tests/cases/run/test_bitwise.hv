@@ -1,0 +1,35 @@
+// Bitwise operators (& | ^ << >>) and shift precedence. Signed results are
+// value-checked below; the unsigned logical-shift (`lshr`) and the addr-of/deref
+// forms of `&`/`*` are exercised compile-only, since `&` is now one token used
+// both as infix bitwise-and and prefix address-of (like `*` / Mul / Deref).
+
+@export
+proc main() i32 {
+    let a: i32 = 12;
+    let b: i32 = 10;
+
+    printf::<i32>("%d\n", a & b);   // 8   (and)
+    printf::<i32>("%d\n", a | b);   // 14  (or)
+    printf::<i32>("%d\n", a ^ b);   // 6   (xor)
+    printf::<i32>("%d\n", a << 2);  // 48  (shl)
+    printf::<i32>("%d\n", a >> 1);  // 6   (ashr, positive)
+    printf::<i32>("%d\n", -16 >> 2);// -4  (ashr, sign-preserving)
+
+    // precedence (C order): shift tighter than |, & tighter than |,
+    // additive tighter than shift.
+    printf::<i32>("%d\n", 2 | 1 << 2); // 6   = 2 | (1<<2)
+    printf::<i32>("%d\n", 6 & 3 | 8);  // 10  = (6&3) | 8
+    printf::<i32>("%d\n", 1 + 1 << 2); // 8   = (1+1) << 2
+
+    // compile-only: unsigned `>>` must emit `lshr`, not `ashr`.
+    let u: u32 = 128u32;
+    let lsr: u32 = u >> 1u32;
+    let uand: u32 = u & 64u32;
+
+    // compile-only: `&` still parses as prefix address-of, `*` as deref.
+    let x: i32 = 42;
+    let xp: *i32 = &x;
+    let xv: i32 = *xp;
+
+    return 0;
+}
