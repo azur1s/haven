@@ -7,7 +7,7 @@ scope everywhere without an `import`. It is deliberately tiny.
 
 ## `printf`
 
-```nr
+```hv
 extern printf<T>(fmt: str, arg: T) void;
 ```
 
@@ -17,7 +17,7 @@ Print `arg` to stdout using the C `printf` format string `fmt`
 
 ## `print`
 
-```nr
+```hv
 proc print(s: str) void
 ```
 
@@ -25,7 +25,7 @@ Write `s` to stdout with no trailing newline.
 
 ## `println`
 
-```nr
+```hv
 proc println(s: str) void
 ```
 
@@ -33,7 +33,7 @@ Write `s` to stdout followed by a newline.
 
 ## `printf32`
 
-```nr
+```hv
 proc printf32(fmt: str, arg: f32) void
 ```
 
@@ -43,7 +43,7 @@ correctly on their own.
 
 ## `slice_len`
 
-```nr
+```hv
 proc slice_len<T>(slice: *[T]) u64
 ```
 

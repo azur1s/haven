@@ -236,6 +236,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "haven_back"
+version = "0.1.0"
+dependencies = [
+ "haven_common",
+ "haven_mid",
+]
+
+[[package]]
+name = "haven_common"
+version = "0.1.0"
+dependencies = [
+ "ariadne",
+ "chumsky",
+]
+
+[[package]]
+name = "haven_front"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "chumsky",
+ "haven_common",
+ "include_dir",
+]
+
+[[package]]
+name = "haven_mid"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "haven_common",
+]
+
+[[package]]
+name = "havenc"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "cc",
+ "clap",
+ "haven_back",
+ "haven_common",
+ "haven_front",
+ "haven_mid",
+ "libtest-mimic",
+ "tempfile",
+]
+
+[[package]]
+name = "havendoc"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "clap",
+ "haven_common",
+ "haven_front",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -295,65 +354,6 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
-
-[[package]]
-name = "noir_back"
-version = "0.1.0"
-dependencies = [
- "noir_common",
- "noir_mid",
-]
-
-[[package]]
-name = "noir_common"
-version = "0.1.0"
-dependencies = [
- "ariadne",
- "chumsky",
-]
-
-[[package]]
-name = "noir_front"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "chumsky",
- "include_dir",
- "noir_common",
-]
-
-[[package]]
-name = "noir_mid"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "noir_common",
-]
-
-[[package]]
-name = "noirc"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "cc",
- "clap",
- "libtest-mimic",
- "noir_back",
- "noir_common",
- "noir_front",
- "noir_mid",
- "tempfile",
-]
-
-[[package]]
-name = "noirdoc"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "clap",
- "noir_common",
- "noir_front",
-]
 
 [[package]]
 name = "object"

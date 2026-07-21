@@ -14,7 +14,7 @@ All single precision.
 
 ## `OnePole`
 
-```nr
+```hv
 struct OnePole {
     a0: f32,
     b1: f32,
@@ -24,7 +24,7 @@ struct OnePole {
 
 ## `onepole_lowpass`
 
-```nr
+```hv
 proc onepole_lowpass(cutoff: f32, sr: f32) OnePole
 ```
 
@@ -32,7 +32,7 @@ A one-pole lowpass with corner frequency `cutoff` hertz at sample rate `sr`.
 
 ## `onepole_set_cutoff`
 
-```nr
+```hv
 proc onepole_set_cutoff(f: *OnePole, cutoff: f32, sr: f32) void
 ```
 
@@ -40,7 +40,7 @@ Retune an existing one-pole to corner frequency `cutoff` at sample rate `sr`.
 
 ## `onepole_process`
 
-```nr
+```hv
 @alloc(false)
 proc onepole_process(f: *OnePole, x: f32) f32
 ```
@@ -49,7 +49,7 @@ Filter one input sample `x`, returning the filtered output.
 
 ## `Biquad`
 
-```nr
+```hv
 struct Biquad {
     b0: f32,
     b1: f32,
@@ -63,7 +63,7 @@ struct Biquad {
 
 ## `biquad_from`
 
-```nr
+```hv
 proc biquad_from(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) Biquad
 ```
 
@@ -72,7 +72,7 @@ starting from zero state. The response constructors below are built on this.
 
 ## `biquad_lowpass`
 
-```nr
+```hv
 proc biquad_lowpass(cutoff: f32, q: f32, sr: f32) Biquad
 ```
 
@@ -80,7 +80,7 @@ Lowpass at `cutoff` hertz with resonance `q`, for sample rate `sr`.
 
 ## `biquad_highpass`
 
-```nr
+```hv
 proc biquad_highpass(cutoff: f32, q: f32, sr: f32) Biquad
 ```
 
@@ -88,7 +88,7 @@ Highpass at `cutoff` hertz with resonance `q`, for sample rate `sr`.
 
 ## `biquad_bandpass`
 
-```nr
+```hv
 proc biquad_bandpass(cutoff: f32, q: f32, sr: f32) Biquad
 ```
 
@@ -97,7 +97,7 @@ Bandpass centered at `cutoff` hertz with `q` setting the width, normalized to
 
 ## `biquad_notch`
 
-```nr
+```hv
 proc biquad_notch(cutoff: f32, q: f32, sr: f32) Biquad
 ```
 
@@ -106,7 +106,7 @@ rate `sr`.
 
 ## `biquad_peak`
 
-```nr
+```hv
 proc biquad_peak(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 ```
 
@@ -115,7 +115,7 @@ for sample rate `sr`.
 
 ## `biquad_lowshelf`
 
-```nr
+```hv
 proc biquad_lowshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 ```
 
@@ -124,7 +124,7 @@ for sample rate `sr`.
 
 ## `biquad_highshelf`
 
-```nr
+```hv
 proc biquad_highshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 ```
 
@@ -133,7 +133,7 @@ for sample rate `sr`.
 
 ## `biquad_process`
 
-```nr
+```hv
 @alloc(false)
 proc biquad_process(f: *Biquad, x: f32) f32
 ```
@@ -142,7 +142,7 @@ Filter one input sample `x`, returning the filtered output.
 
 ## `SvfOut`
 
-```nr
+```hv
 struct SvfOut {
     lp: f32,  /// lowpass output
     hp: f32,  /// highpass output
@@ -155,7 +155,7 @@ The four simultaneous outputs of a state-variable filter for one sample.
 
 ## `StateVariable`
 
-```nr
+```hv
 struct StateVariable {
     g: f32,
     k: f32,
@@ -169,7 +169,7 @@ struct StateVariable {
 
 ## `svf_new`
 
-```nr
+```hv
 proc svf_new(cutoff: f32, q: f32, sr: f32) StateVariable
 ```
 
@@ -178,7 +178,7 @@ rate `sr`.
 
 ## `svf_set`
 
-```nr
+```hv
 proc svf_set(f: *StateVariable, cutoff: f32, q: f32, sr: f32) void
 ```
 
@@ -187,7 +187,7 @@ for sample rate `sr`, keeping its running state.
 
 ## `svf_process`
 
-```nr
+```hv
 @alloc(false)
 proc svf_process(f: *StateVariable, x: f32) SvfOut
 ```

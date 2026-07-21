@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>dsp/osc - noir std</title>
+        <title>dsp/osc - haven std</title>
 
 
         <!-- Custom HTML head -->
@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-031d866c.js";
+            window.path_to_searchindex_js = "../searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9f74e925.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -181,7 +181,7 @@ waveform shapes (sine, saw, square, triangle). The shapers are naive, i.e.
 not bandlimited, so they alias at high frequencies. Frequencies and sample
 rate are in hertz; all sample outputs are single precision.</p>
 <h2 id="phasor"><a class="header" href="#phasor"><code>Phasor</code></a></h2>
-<pre><code class="language-nr">struct Phasor {
+<pre><code class="language-hv">struct Phasor {
     phase: f32,
     inc: f32,
 }
@@ -189,21 +189,21 @@ rate are in hertz; all sample outputs are single precision.</p>
 <p>A bare ramp generator: outputs a rising phase in [0, 1) that wraps every
 cycle. Every oscillator shape below is derived from it.</p>
 <h2 id="phasor_new"><a class="header" href="#phasor_new"><code>phasor_new</code></a></h2>
-<pre><code class="language-nr">proc phasor_new(freq: f32, sr: f32) Phasor
+<pre><code class="language-hv">proc phasor_new(freq: f32, sr: f32) Phasor
 </code></pre>
 <p>A <code>Phasor</code> running at <code>freq</code> hertz for sample rate <code>sr</code>, starting at phase 0.</p>
 <h2 id="phasor_set_freq"><a class="header" href="#phasor_set_freq"><code>phasor_set_freq</code></a></h2>
-<pre><code class="language-nr">proc phasor_set_freq(p: *Phasor, freq: f32, sr: f32) void
+<pre><code class="language-hv">proc phasor_set_freq(p: *Phasor, freq: f32, sr: f32) void
 </code></pre>
 <p>Retune the phasor to <code>freq</code> hertz at sample rate <code>sr</code>, keeping its phase.</p>
 <h2 id="phasor_next"><a class="header" href="#phasor_next"><code>phasor_next</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc phasor_next(p: *Phasor) f32
 </code></pre>
 <p>Advance one sample and return the phase from <em>before</em> the step, so a fresh
 phasor yields 0.0 on its first call.</p>
 <h2 id="osc"><a class="header" href="#osc"><code>Osc</code></a></h2>
-<pre><code class="language-nr">struct Osc {
+<pre><code class="language-hv">struct Osc {
     phase: f32,
     inc: f32,
 }
@@ -212,40 +212,40 @@ phasor yields 0.0 on its first call.</p>
 shapers. Every shaper advances the phase by one sample and returns a value
 in [-1, 1].</p>
 <h2 id="osc_new"><a class="header" href="#osc_new"><code>osc_new</code></a></h2>
-<pre><code class="language-nr">proc osc_new(freq: f32, sr: f32) Osc
+<pre><code class="language-hv">proc osc_new(freq: f32, sr: f32) Osc
 </code></pre>
 <p>An <code>Osc</code> running at <code>freq</code> hertz for sample rate <code>sr</code>, starting at phase 0.</p>
 <h2 id="osc_set_freq"><a class="header" href="#osc_set_freq"><code>osc_set_freq</code></a></h2>
-<pre><code class="language-nr">proc osc_set_freq(o: *Osc, freq: f32, sr: f32) void
+<pre><code class="language-hv">proc osc_set_freq(o: *Osc, freq: f32, sr: f32) void
 </code></pre>
 <p>Retune the oscillator to <code>freq</code> hertz at sample rate <code>sr</code>, keeping its phase.</p>
 <h2 id="osc_set_phase"><a class="header" href="#osc_set_phase"><code>osc_set_phase</code></a></h2>
-<pre><code class="language-nr">proc osc_set_phase(o: *Osc, phase: f32) void
+<pre><code class="language-hv">proc osc_set_phase(o: *Osc, phase: f32) void
 </code></pre>
 <p>Jump the oscillator to <code>phase</code> (wrapped into [0, 1)).</p>
 <h2 id="osc_advance"><a class="header" href="#osc_advance"><code>osc_advance</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_advance(o: *Osc) void
 </code></pre>
 <p>Advance the oscillator by one sample without producing output.</p>
 <h2 id="osc_sine"><a class="header" href="#osc_sine"><code>osc_sine</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_sine(o: *Osc) f32
 </code></pre>
 <p>Next sine sample, then advance.</p>
 <h2 id="osc_saw"><a class="header" href="#osc_saw"><code>osc_saw</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_saw(o: *Osc) f32
 </code></pre>
 <p>Next sawtooth sample (rising ramp), then advance.</p>
 <h2 id="osc_square"><a class="header" href="#osc_square"><code>osc_square</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_square(o: *Osc) f32
 </code></pre>
 <p>Next square sample (+1 for the first half of the cycle, -1 for the second),
 then advance.</p>
 <h2 id="osc_tri"><a class="header" href="#osc_tri"><code>osc_tri</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_tri(o: *Osc) f32
 </code></pre>
 <p>Next triangle sample, then advance.</p>

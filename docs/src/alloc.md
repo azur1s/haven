@@ -11,7 +11,7 @@ level containers like `Vec<T>` are built on.
 
 ## `alloc`
 
-```nr
+```hv
 @alloc(true)
 proc alloc<T>(count: u64) Option<*T>
 ```
@@ -21,7 +21,7 @@ pointer on success, or `none` if the allocation failed.
 
 ## `realloc`
 
-```nr
+```hv
 @alloc(true)
 proc realloc<T>(ptr: *T, count: u64) Option<*T>
 ```
@@ -32,7 +32,7 @@ failure (in which case the original allocation is left untouched).
 
 ## `dealloc`
 
-```nr
+```hv
 @alloc(true)
 proc dealloc<T>(ptr: *T) void
 ```

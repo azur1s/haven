@@ -9,7 +9,7 @@ rate are in hertz; all sample outputs are single precision.
 
 ## `Phasor`
 
-```nr
+```hv
 struct Phasor {
     phase: f32,
     inc: f32,
@@ -21,7 +21,7 @@ cycle. Every oscillator shape below is derived from it.
 
 ## `phasor_new`
 
-```nr
+```hv
 proc phasor_new(freq: f32, sr: f32) Phasor
 ```
 
@@ -29,7 +29,7 @@ A `Phasor` running at `freq` hertz for sample rate `sr`, starting at phase 0.
 
 ## `phasor_set_freq`
 
-```nr
+```hv
 proc phasor_set_freq(p: *Phasor, freq: f32, sr: f32) void
 ```
 
@@ -37,7 +37,7 @@ Retune the phasor to `freq` hertz at sample rate `sr`, keeping its phase.
 
 ## `phasor_next`
 
-```nr
+```hv
 @alloc(false)
 proc phasor_next(p: *Phasor) f32
 ```
@@ -47,7 +47,7 @@ phasor yields 0.0 on its first call.
 
 ## `Osc`
 
-```nr
+```hv
 struct Osc {
     phase: f32,
     inc: f32,
@@ -60,7 +60,7 @@ in [-1, 1].
 
 ## `osc_new`
 
-```nr
+```hv
 proc osc_new(freq: f32, sr: f32) Osc
 ```
 
@@ -68,7 +68,7 @@ An `Osc` running at `freq` hertz for sample rate `sr`, starting at phase 0.
 
 ## `osc_set_freq`
 
-```nr
+```hv
 proc osc_set_freq(o: *Osc, freq: f32, sr: f32) void
 ```
 
@@ -76,7 +76,7 @@ Retune the oscillator to `freq` hertz at sample rate `sr`, keeping its phase.
 
 ## `osc_set_phase`
 
-```nr
+```hv
 proc osc_set_phase(o: *Osc, phase: f32) void
 ```
 
@@ -84,7 +84,7 @@ Jump the oscillator to `phase` (wrapped into [0, 1)).
 
 ## `osc_advance`
 
-```nr
+```hv
 @alloc(false)
 proc osc_advance(o: *Osc) void
 ```
@@ -93,7 +93,7 @@ Advance the oscillator by one sample without producing output.
 
 ## `osc_sine`
 
-```nr
+```hv
 @alloc(false)
 proc osc_sine(o: *Osc) f32
 ```
@@ -102,7 +102,7 @@ Next sine sample, then advance.
 
 ## `osc_saw`
 
-```nr
+```hv
 @alloc(false)
 proc osc_saw(o: *Osc) f32
 ```
@@ -111,7 +111,7 @@ Next sawtooth sample (rising ramp), then advance.
 
 ## `osc_square`
 
-```nr
+```hv
 @alloc(false)
 proc osc_square(o: *Osc) f32
 ```
@@ -121,7 +121,7 @@ then advance.
 
 ## `osc_tri`
 
-```nr
+```hv
 @alloc(false)
 proc osc_tri(o: *Osc) f32
 ```

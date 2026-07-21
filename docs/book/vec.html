@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>vec - noir std</title>
+        <title>vec - haven std</title>
 
 
         <!-- Custom HTML head -->
@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-031d866c.js";
+            window.path_to_searchindex_js = "searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -184,70 +184,70 @@ for you, in amortized O(1) per push. Create one with <code>vec_new</code> (or
 when you are done with it. A fresh <code>vec_new</code> allocates nothing, so an empty
 Vec is cheap and the first push performs the initial allocation.</p>
 <h2 id="vec-1"><a class="header" href="#vec-1"><code>Vec</code></a></h2>
-<pre><code class="language-nr">struct Vec&lt;T&gt; {
+<pre><code class="language-hv">struct Vec&lt;T&gt; {
     data: *T,  /// heap buffer, or null when cap == 0
     len: u64,  /// number of initialized elements
     cap: u64,  /// number of elements the buffer can hold
 }
 </code></pre>
 <h2 id="vec_new"><a class="header" href="#vec_new"><code>vec_new</code></a></h2>
-<pre><code class="language-nr">proc vec_new&lt;T&gt;() Vec&lt;T&gt;
+<pre><code class="language-hv">proc vec_new&lt;T&gt;() Vec&lt;T&gt;
 </code></pre>
 <p>An empty Vec that owns no allocation yet.</p>
 <h2 id="vec_with_capacity"><a class="header" href="#vec_with_capacity"><code>vec_with_capacity</code></a></h2>
-<pre><code class="language-nr">proc vec_with_capacity&lt;T&gt;(cap: u64) Vec&lt;T&gt;
+<pre><code class="language-hv">proc vec_with_capacity&lt;T&gt;(cap: u64) Vec&lt;T&gt;
 </code></pre>
 <p>An empty Vec with room for <code>cap</code> elements already reserved.</p>
 <h2 id="vec_len"><a class="header" href="#vec_len"><code>vec_len</code></a></h2>
-<pre><code class="language-nr">proc vec_len&lt;T&gt;(v: *Vec&lt;T&gt;) u64
+<pre><code class="language-hv">proc vec_len&lt;T&gt;(v: *Vec&lt;T&gt;) u64
 </code></pre>
 <h2 id="vec_cap"><a class="header" href="#vec_cap"><code>vec_cap</code></a></h2>
-<pre><code class="language-nr">proc vec_cap&lt;T&gt;(v: *Vec&lt;T&gt;) u64
+<pre><code class="language-hv">proc vec_cap&lt;T&gt;(v: *Vec&lt;T&gt;) u64
 </code></pre>
 <h2 id="vec_is_empty"><a class="header" href="#vec_is_empty"><code>vec_is_empty</code></a></h2>
-<pre><code class="language-nr">proc vec_is_empty&lt;T&gt;(v: *Vec&lt;T&gt;) bool
+<pre><code class="language-hv">proc vec_is_empty&lt;T&gt;(v: *Vec&lt;T&gt;) bool
 </code></pre>
 <h2 id="vec_reserve"><a class="header" href="#vec_reserve"><code>vec_reserve</code></a></h2>
-<pre><code class="language-nr">proc vec_reserve&lt;T&gt;(v: *Vec&lt;T&gt;, needed: u64) void
+<pre><code class="language-hv">proc vec_reserve&lt;T&gt;(v: *Vec&lt;T&gt;, needed: u64) void
 </code></pre>
 <p>Ensure the buffer can hold at least <code>needed</code> elements, reallocating (and
 doubling) if it currently cannot. Does nothing when there is already room.</p>
 <h2 id="vec_push"><a class="header" href="#vec_push"><code>vec_push</code></a></h2>
-<pre><code class="language-nr">proc vec_push&lt;T&gt;(v: *Vec&lt;T&gt;, value: T) void
+<pre><code class="language-hv">proc vec_push&lt;T&gt;(v: *Vec&lt;T&gt;, value: T) void
 </code></pre>
 <p>Append <code>value</code> to the end, growing the buffer if it is full.</p>
 <h2 id="vec_get"><a class="header" href="#vec_get"><code>vec_get</code></a></h2>
-<pre><code class="language-nr">proc vec_get&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) T
+<pre><code class="language-hv">proc vec_get&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) T
 </code></pre>
 <p>Read the element at <code>i</code> by value. Out-of-bounds is undefined; guard with len.</p>
 <h2 id="vec_get_ptr"><a class="header" href="#vec_get_ptr"><code>vec_get_ptr</code></a></h2>
-<pre><code class="language-nr">proc vec_get_ptr&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) *T
+<pre><code class="language-hv">proc vec_get_ptr&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) *T
 </code></pre>
 <p>A pointer to the element at <code>i</code>, for in-place mutation of the slot.</p>
 <h2 id="vec_set"><a class="header" href="#vec_set"><code>vec_set</code></a></h2>
-<pre><code class="language-nr">proc vec_set&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64, value: T) void
+<pre><code class="language-hv">proc vec_set&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64, value: T) void
 </code></pre>
 <p>Overwrite the element at <code>i</code>. Out-of-bounds is undefined; guard with len.</p>
 <h2 id="vec_pop"><a class="header" href="#vec_pop"><code>vec_pop</code></a></h2>
-<pre><code class="language-nr">proc vec_pop&lt;T&gt;(v: *Vec&lt;T&gt;) Option&lt;*T&gt;
+<pre><code class="language-hv">proc vec_pop&lt;T&gt;(v: *Vec&lt;T&gt;) Option&lt;*T&gt;
 </code></pre>
 <p>Remove and return the last element. Returns <code>Option&lt;*T&gt;</code>: <code>some</code> pointing at
 the (now logically dead but still resident) slot, or <code>none</code> when empty.
 The pointer is valid until the next push or free.</p>
 <h2 id="vec_clear"><a class="header" href="#vec_clear"><code>vec_clear</code></a></h2>
-<pre><code class="language-nr">proc vec_clear&lt;T&gt;(v: *Vec&lt;T&gt;) void
+<pre><code class="language-hv">proc vec_clear&lt;T&gt;(v: *Vec&lt;T&gt;) void
 </code></pre>
 <p>Logically empty the Vec without touching its capacity or freeing memory.</p>
 <h2 id="vec_free"><a class="header" href="#vec_free"><code>vec_free</code></a></h2>
-<pre><code class="language-nr">proc vec_free&lt;T&gt;(v: *Vec&lt;T&gt;) void
+<pre><code class="language-hv">proc vec_free&lt;T&gt;(v: *Vec&lt;T&gt;) void
 </code></pre>
 <p>Release the backing allocation and reset to the empty, unallocated state.</p>
 <h2 id="vec_for_each"><a class="header" href="#vec_for_each"><code>vec_for_each</code></a></h2>
-<pre><code class="language-nr">proc vec_for_each&lt;T&gt;(v: *Vec&lt;T&gt;, f: proc(*T) void) void
+<pre><code class="language-hv">proc vec_for_each&lt;T&gt;(v: *Vec&lt;T&gt;, f: proc(*T) void) void
 </code></pre>
 <p>Iterate over the Vec, calling <code>f</code> on each element by pointer.</p>
 <h2 id="vec_map"><a class="header" href="#vec_map"><code>vec_map</code></a></h2>
-<pre><code class="language-nr">proc vec_map&lt;T, U&gt;(v: *Vec&lt;T&gt;, f: proc(*T) U) Vec&lt;U&gt;
+<pre><code class="language-hv">proc vec_map&lt;T, U&gt;(v: *Vec&lt;T&gt;, f: proc(*T) U) Vec&lt;U&gt;
 </code></pre>
 <p>Map each element of the Vec to a new Vec by calling <code>f</code> on each element by pointer.</p>
 

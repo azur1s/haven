@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>prelude - noir std</title>
+        <title>prelude - haven std</title>
 
 
         <!-- Custom HTML head -->
@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-031d866c.js";
+            window.path_to_searchindex_js = "searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -179,27 +179,27 @@
 <p>The prelude is imported implicitly into every module, so these items are in
 scope everywhere without an <code>import</code>. It is deliberately tiny.</p>
 <h2 id="printf"><a class="header" href="#printf"><code>printf</code></a></h2>
-<pre><code class="language-nr">extern printf&lt;T&gt;(fmt: str, arg: T) void;
+<pre><code class="language-hv">extern printf&lt;T&gt;(fmt: str, arg: T) void;
 </code></pre>
 <p>Print <code>arg</code> to stdout using the C <code>printf</code> format string <code>fmt</code>
 (e.g. <code>printf::&lt;i32&gt;("%d\n", 42)</code>). Exactly one argument is supported, and
 <code>T</code> must match the conversion specifier in <code>fmt</code>.</p>
 <h2 id="print"><a class="header" href="#print"><code>print</code></a></h2>
-<pre><code class="language-nr">proc print(s: str) void
+<pre><code class="language-hv">proc print(s: str) void
 </code></pre>
 <p>Write <code>s</code> to stdout with no trailing newline.</p>
 <h2 id="println"><a class="header" href="#println"><code>println</code></a></h2>
-<pre><code class="language-nr">proc println(s: str) void
+<pre><code class="language-hv">proc println(s: str) void
 </code></pre>
 <p>Write <code>s</code> to stdout followed by a newline.</p>
 <h2 id="printf32"><a class="header" href="#printf32"><code>printf32</code></a></h2>
-<pre><code class="language-nr">proc printf32(fmt: str, arg: f32) void
+<pre><code class="language-hv">proc printf32(fmt: str, arg: f32) void
 </code></pre>
 <p>Print a single <code>f32</code> using the <code>printf</code> format <code>fmt</code> (e.g. <code>"%f\n"</code>). Use
 this rather than <code>printf</code> for <code>f32</code> values, which variadics can’t pass
 correctly on their own.</p>
 <h2 id="slice_len"><a class="header" href="#slice_len"><code>slice_len</code></a></h2>
-<pre><code class="language-nr">proc slice_len&lt;T&gt;(slice: *[T]) u64
+<pre><code class="language-hv">proc slice_len&lt;T&gt;(slice: *[T]) u64
 </code></pre>
 <p>The number of elements in the runtime slice <code>slice</code>.</p>
 

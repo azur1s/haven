@@ -1,10 +1,10 @@
 // Tested with:
 // (Linux)
-// $ noirc examples/1_showcase.nr --shared -o 1_showcase
+// $ havenc examples/1_showcase.hv --shared -o 1_showcase
 // $ clang examples/1_showcase.c ./1_showcase.so -o showcase
 // $ ./showcase
 // (Windows)
-// $ noirc examples/1_showcase.nr --shared -o 1_showcase
+// $ havenc examples/1_showcase.hv --shared -o 1_showcase
 // $ clang examples/1_showcase.c ./1_showcase.lib -o showcase.exe
 // $ ./showcase.exe
 

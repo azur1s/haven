@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>alloc - noir std</title>
+        <title>alloc - haven std</title>
 
 
         <!-- Custom HTML head -->
@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-031d866c.js";
+            window.path_to_searchindex_js = "searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -183,20 +183,20 @@ each returns an <code>Option&lt;*T&gt;</code> that is <code>none</code> on failu
 buffer you allocate to <code>dealloc</code> when done. These are the primitives higher
 level containers like <code>Vec&lt;T&gt;</code> are built on.</p>
 <h2 id="alloc-1"><a class="header" href="#alloc-1"><code>alloc</code></a></h2>
-<pre><code class="language-nr">@alloc(true)
+<pre><code class="language-hv">@alloc(true)
 proc alloc&lt;T&gt;(count: u64) Option&lt;*T&gt;
 </code></pre>
 <p>Allocate uninitialized room for <code>count</code> values of type <code>T</code>. Returns <code>some</code>
 pointer on success, or <code>none</code> if the allocation failed.</p>
 <h2 id="realloc"><a class="header" href="#realloc"><code>realloc</code></a></h2>
-<pre><code class="language-nr">@alloc(true)
+<pre><code class="language-hv">@alloc(true)
 proc realloc&lt;T&gt;(ptr: *T, count: u64) Option&lt;*T&gt;
 </code></pre>
 <p>Resize the allocation at <code>ptr</code> to hold <code>count</code> values of type <code>T</code>, preserving
 existing contents. Returns <code>some</code> new pointer on success, or <code>none</code> on
 failure (in which case the original allocation is left untouched).</p>
 <h2 id="dealloc"><a class="header" href="#dealloc"><code>dealloc</code></a></h2>
-<pre><code class="language-nr">@alloc(true)
+<pre><code class="language-hv">@alloc(true)
 proc dealloc&lt;T&gt;(ptr: *T) void
 </code></pre>
 <p>Release an allocation obtained from <code>alloc</code>/<code>realloc</code>. Using <code>ptr</code> afterward

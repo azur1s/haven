@@ -13,7 +13,7 @@ Vec is cheap and the first push performs the initial allocation.
 
 ## `Vec`
 
-```nr
+```hv
 struct Vec<T> {
     data: *T,  /// heap buffer, or null when cap == 0
     len: u64,  /// number of initialized elements
@@ -23,7 +23,7 @@ struct Vec<T> {
 
 ## `vec_new`
 
-```nr
+```hv
 proc vec_new<T>() Vec<T>
 ```
 
@@ -31,7 +31,7 @@ An empty Vec that owns no allocation yet.
 
 ## `vec_with_capacity`
 
-```nr
+```hv
 proc vec_with_capacity<T>(cap: u64) Vec<T>
 ```
 
@@ -39,25 +39,25 @@ An empty Vec with room for `cap` elements already reserved.
 
 ## `vec_len`
 
-```nr
+```hv
 proc vec_len<T>(v: *Vec<T>) u64
 ```
 
 ## `vec_cap`
 
-```nr
+```hv
 proc vec_cap<T>(v: *Vec<T>) u64
 ```
 
 ## `vec_is_empty`
 
-```nr
+```hv
 proc vec_is_empty<T>(v: *Vec<T>) bool
 ```
 
 ## `vec_reserve`
 
-```nr
+```hv
 proc vec_reserve<T>(v: *Vec<T>, needed: u64) void
 ```
 
@@ -66,7 +66,7 @@ doubling) if it currently cannot. Does nothing when there is already room.
 
 ## `vec_push`
 
-```nr
+```hv
 proc vec_push<T>(v: *Vec<T>, value: T) void
 ```
 
@@ -74,7 +74,7 @@ Append `value` to the end, growing the buffer if it is full.
 
 ## `vec_get`
 
-```nr
+```hv
 proc vec_get<T>(v: *Vec<T>, i: u64) T
 ```
 
@@ -82,7 +82,7 @@ Read the element at `i` by value. Out-of-bounds is undefined; guard with len.
 
 ## `vec_get_ptr`
 
-```nr
+```hv
 proc vec_get_ptr<T>(v: *Vec<T>, i: u64) *T
 ```
 
@@ -90,7 +90,7 @@ A pointer to the element at `i`, for in-place mutation of the slot.
 
 ## `vec_set`
 
-```nr
+```hv
 proc vec_set<T>(v: *Vec<T>, i: u64, value: T) void
 ```
 
@@ -98,7 +98,7 @@ Overwrite the element at `i`. Out-of-bounds is undefined; guard with len.
 
 ## `vec_pop`
 
-```nr
+```hv
 proc vec_pop<T>(v: *Vec<T>) Option<*T>
 ```
 
@@ -108,7 +108,7 @@ The pointer is valid until the next push or free.
 
 ## `vec_clear`
 
-```nr
+```hv
 proc vec_clear<T>(v: *Vec<T>) void
 ```
 
@@ -116,7 +116,7 @@ Logically empty the Vec without touching its capacity or freeing memory.
 
 ## `vec_free`
 
-```nr
+```hv
 proc vec_free<T>(v: *Vec<T>) void
 ```
 
@@ -124,7 +124,7 @@ Release the backing allocation and reset to the empty, unallocated state.
 
 ## `vec_for_each`
 
-```nr
+```hv
 proc vec_for_each<T>(v: *Vec<T>, f: proc(*T) void) void
 ```
 
@@ -132,7 +132,7 @@ Iterate over the Vec, calling `f` on each element by pointer.
 
 ## `vec_map`
 
-```nr
+```hv
 proc vec_map<T, U>(v: *Vec<T>, f: proc(*T) U) Vec<U>
 ```
 

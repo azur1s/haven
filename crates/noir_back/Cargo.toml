@@ -1,8 +1,0 @@
-[package]
-name = "noir_back"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-noir_common.workspace = true
-noir_mid.workspace = true

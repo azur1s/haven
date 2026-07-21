@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>math - noir std</title>
+        <title>math - haven std</title>
 
 
         <!-- Custom HTML head -->
@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-031d866c.js";
+            window.path_to_searchindex_js = "searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -176,221 +176,221 @@
                     <main>
                         <h1 id="math"><a class="header" href="#math"><code>math</code></a></h1>
 <p>std/math: scalar math constants and the C standard-library math functions.</p>
-<p>Two layers: a handful of convenience constants/helpers written in noir, and
+<p>Two layers: a handful of convenience constants/helpers written in haven, and
 direct bindings to libm. Every libm function comes in an <code>f64</code> form and an
 <code>f32</code> form (suffixed <code>f</code>) so single-precision DSP code never widens to double.
 Angles are in radians throughout.</p>
 <h2 id="square"><a class="header" href="#square"><code>square</code></a></h2>
-<pre><code class="language-nr">proc square(x: f64) f64
+<pre><code class="language-hv">proc square(x: f64) f64
 </code></pre>
 <p><code>x</code> squared (<code>x * x</code>).</p>
 <h2 id="pi"><a class="header" href="#pi"><code>pi</code></a></h2>
-<pre><code class="language-nr">proc pi() f64
+<pre><code class="language-hv">proc pi() f64
 </code></pre>
 <p>The constant pi as an <code>f64</code>.</p>
 <h2 id="tau"><a class="header" href="#tau"><code>tau</code></a></h2>
-<pre><code class="language-nr">proc tau() f64
+<pre><code class="language-hv">proc tau() f64
 </code></pre>
 <p>The constant tau (2*pi) as an <code>f64</code>.</p>
 <h2 id="pi_f32"><a class="header" href="#pi_f32"><code>pi_f32</code></a></h2>
-<pre><code class="language-nr">proc pi_f32() f32
+<pre><code class="language-hv">proc pi_f32() f32
 </code></pre>
 <p>The constant pi as an <code>f32</code>.</p>
 <h2 id="tau_f32"><a class="header" href="#tau_f32"><code>tau_f32</code></a></h2>
-<pre><code class="language-nr">proc tau_f32() f32
+<pre><code class="language-hv">proc tau_f32() f32
 </code></pre>
 <p>The constant tau (2*pi) as an <code>f32</code>.</p>
 <h2 id="clampf"><a class="header" href="#clampf"><code>clampf</code></a></h2>
-<pre><code class="language-nr">proc clampf(x: f64, lo: f64, hi: f64) f64
+<pre><code class="language-hv">proc clampf(x: f64, lo: f64, hi: f64) f64
 </code></pre>
 <p>Clamp <code>x</code> into the inclusive range [lo, hi].</p>
 <h2 id="sin"><a class="header" href="#sin"><code>sin</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sin(x: f64) f64;
 </code></pre>
 <p>Sine of <code>x</code> (radians).</p>
 <h2 id="cos"><a class="header" href="#cos"><code>cos</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cos(x: f64) f64;
 </code></pre>
 <p>Cosine of <code>x</code> (radians).</p>
 <h2 id="tan"><a class="header" href="#tan"><code>tan</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tan(x: f64) f64;
 </code></pre>
 <p>Tangent of <code>x</code> (radians).</p>
 <h2 id="asin"><a class="header" href="#asin"><code>asin</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern asin(x: f64) f64;
 </code></pre>
 <p>Arcsine of <code>x</code>, in radians. <code>x</code> must be in [-1, 1].</p>
 <h2 id="acos"><a class="header" href="#acos"><code>acos</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern acos(x: f64) f64;
 </code></pre>
 <p>Arccosine of <code>x</code>, in radians. <code>x</code> must be in [-1, 1].</p>
 <h2 id="atan"><a class="header" href="#atan"><code>atan</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern atan(x: f64) f64;
 </code></pre>
 <p>Arctangent of <code>x</code>, in radians.</p>
 <h2 id="atan2"><a class="header" href="#atan2"><code>atan2</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern atan2(y: f64, x: f64) f64;
 </code></pre>
 <p>Arctangent of <code>y/x</code> in radians, using the signs of both to pick the quadrant.</p>
 <h2 id="sinh"><a class="header" href="#sinh"><code>sinh</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sinh(x: f64) f64;
 </code></pre>
 <p>Hyperbolic sine of <code>x</code>.</p>
 <h2 id="cosh"><a class="header" href="#cosh"><code>cosh</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cosh(x: f64) f64;
 </code></pre>
 <p>Hyperbolic cosine of <code>x</code>.</p>
 <h2 id="tanh"><a class="header" href="#tanh"><code>tanh</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tanh(x: f64) f64;
 </code></pre>
 <p>Hyperbolic tangent of <code>x</code>.</p>
 <h2 id="exp"><a class="header" href="#exp"><code>exp</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern exp(x: f64) f64;
 </code></pre>
 <p>e raised to the power <code>x</code>.</p>
 <h2 id="log"><a class="header" href="#log"><code>log</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log(x: f64) f64;
 </code></pre>
 <p>Natural (base-e) logarithm of <code>x</code>. <code>x</code> must be positive.</p>
 <h2 id="log2"><a class="header" href="#log2"><code>log2</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log2(x: f64) f64;
 </code></pre>
 <p>Base-2 logarithm of <code>x</code>. <code>x</code> must be positive.</p>
 <h2 id="log10"><a class="header" href="#log10"><code>log10</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log10(x: f64) f64;
 </code></pre>
 <p>Base-10 logarithm of <code>x</code>. <code>x</code> must be positive.</p>
 <h2 id="pow"><a class="header" href="#pow"><code>pow</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern pow(base: f64, exp: f64) f64;
 </code></pre>
 <p><code>base</code> raised to the power <code>exp</code>.</p>
 <h2 id="sqrt"><a class="header" href="#sqrt"><code>sqrt</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sqrt(x: f64) f64;
 </code></pre>
 <p>Square root of <code>x</code>. <code>x</code> must be non-negative.</p>
 <h2 id="cbrt"><a class="header" href="#cbrt"><code>cbrt</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cbrt(x: f64) f64;
 </code></pre>
 <p>Cube root of <code>x</code>.</p>
 <h2 id="fabs"><a class="header" href="#fabs"><code>fabs</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fabs(x: f64) f64;
 </code></pre>
 <p>Absolute value of <code>x</code>.</p>
 <h2 id="floor"><a class="header" href="#floor"><code>floor</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern floor(x: f64) f64;
 </code></pre>
 <p>Largest integer value not greater than <code>x</code>, as an <code>f64</code>.</p>
 <h2 id="ceil"><a class="header" href="#ceil"><code>ceil</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern ceil(x: f64) f64;
 </code></pre>
 <p>Smallest integer value not less than <code>x</code>, as an <code>f64</code>.</p>
 <h2 id="round"><a class="header" href="#round"><code>round</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern round(x: f64) f64;
 </code></pre>
 <p><code>x</code> rounded to the nearest integer, halves away from zero, as an <code>f64</code>.</p>
 <h2 id="trunc"><a class="header" href="#trunc"><code>trunc</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern trunc(x: f64) f64;
 </code></pre>
 <p><code>x</code> truncated toward zero, as an <code>f64</code>.</p>
 <h2 id="fmod"><a class="header" href="#fmod"><code>fmod</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fmod(x: f64, y: f64) f64;
 </code></pre>
 <p>Floating-point remainder of <code>x / y</code>, with the sign of <code>x</code>.</p>
 <h2 id="sinf"><a class="header" href="#sinf"><code>sinf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sinf(x: f32) f32;
 </code></pre>
 <p>Sine of <code>x</code> (radians), single precision.</p>
 <h2 id="cosf"><a class="header" href="#cosf"><code>cosf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cosf(x: f32) f32;
 </code></pre>
 <p>Cosine of <code>x</code> (radians), single precision.</p>
 <h2 id="tanf"><a class="header" href="#tanf"><code>tanf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tanf(x: f32) f32;
 </code></pre>
 <p>Tangent of <code>x</code> (radians), single precision.</p>
 <h2 id="atan2f"><a class="header" href="#atan2f"><code>atan2f</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern atan2f(y: f32, x: f32) f32;
 </code></pre>
 <p>Arctangent of <code>y/x</code> (radians), quadrant-aware, single precision.</p>
 <h2 id="tanhf"><a class="header" href="#tanhf"><code>tanhf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tanhf(x: f32) f32;
 </code></pre>
 <p>Hyperbolic tangent of <code>x</code>, single precision.</p>
 <h2 id="expf"><a class="header" href="#expf"><code>expf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern expf(x: f32) f32;
 </code></pre>
 <p>e raised to the power <code>x</code>, single precision.</p>
 <h2 id="logf"><a class="header" href="#logf"><code>logf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern logf(x: f32) f32;
 </code></pre>
 <p>Natural (base-e) logarithm of <code>x</code>, single precision. <code>x</code> must be positive.</p>
 <h2 id="log2f"><a class="header" href="#log2f"><code>log2f</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log2f(x: f32) f32;
 </code></pre>
 <p>Base-2 logarithm of <code>x</code>, single precision. <code>x</code> must be positive.</p>
 <h2 id="log10f"><a class="header" href="#log10f"><code>log10f</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log10f(x: f32) f32;
 </code></pre>
 <p>Base-10 logarithm of <code>x</code>, single precision. <code>x</code> must be positive.</p>
 <h2 id="powf"><a class="header" href="#powf"><code>powf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern powf(base: f32, exp: f32) f32;
 </code></pre>
 <p><code>base</code> raised to the power <code>exp</code>, single precision.</p>
 <h2 id="sqrtf"><a class="header" href="#sqrtf"><code>sqrtf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sqrtf(x: f32) f32;
 </code></pre>
 <p>Square root of <code>x</code>, single precision. <code>x</code> must be non-negative.</p>
 <h2 id="fabsf"><a class="header" href="#fabsf"><code>fabsf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fabsf(x: f32) f32;
 </code></pre>
 <p>Absolute value of <code>x</code>, single precision.</p>
 <h2 id="floorf"><a class="header" href="#floorf"><code>floorf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern floorf(x: f32) f32;
 </code></pre>
 <p>Largest integer value not greater than <code>x</code>, single precision.</p>
 <h2 id="ceilf"><a class="header" href="#ceilf"><code>ceilf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern ceilf(x: f32) f32;
 </code></pre>
 <p>Smallest integer value not less than <code>x</code>, single precision.</p>
 <h2 id="fmodf"><a class="header" href="#fmodf"><code>fmodf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fmodf(x: f32, y: f32) f32;
 </code></pre>
 <p>Floating-point remainder of <code>x / y</code> with the sign of <code>x</code>, single precision.</p>

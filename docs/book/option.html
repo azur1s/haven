@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>option - noir std</title>
+        <title>option - haven std</title>
 
 
         <!-- Custom HTML head -->
@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-031d866c.js";
+            window.path_to_searchindex_js = "searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -182,33 +182,33 @@ fallible operation (an allocation, a <code>vec_pop</code>, a lookup, etc.), to s
 value” without a sentinel of its own. Test with <code>is_some</code>/<code>is_none</code>, then
 retrieve with <code>unwrap</code> or <code>unwrap_or</code>.</p>
 <h2 id="option-1"><a class="header" href="#option-1"><code>Option</code></a></h2>
-<pre><code class="language-nr">struct Option&lt;T&gt; {
+<pre><code class="language-hv">struct Option&lt;T&gt; {
     value: T,
 }
 </code></pre>
 <h2 id="some"><a class="header" href="#some"><code>some</code></a></h2>
-<pre><code class="language-nr">proc some&lt;T&gt;(value: *T) Option&lt;*T&gt;
+<pre><code class="language-hv">proc some&lt;T&gt;(value: *T) Option&lt;*T&gt;
 </code></pre>
 <p>An <code>Option</code> holding the pointer <code>value</code>.</p>
 <h2 id="none"><a class="header" href="#none"><code>none</code></a></h2>
-<pre><code class="language-nr">proc none&lt;T&gt;() Option&lt;*T&gt;
+<pre><code class="language-hv">proc none&lt;T&gt;() Option&lt;*T&gt;
 </code></pre>
 <p>The empty <code>Option</code>.</p>
 <h2 id="is_some"><a class="header" href="#is_some"><code>is_some</code></a></h2>
-<pre><code class="language-nr">proc is_some&lt;T&gt;(o: Option&lt;*T&gt;) bool
+<pre><code class="language-hv">proc is_some&lt;T&gt;(o: Option&lt;*T&gt;) bool
 </code></pre>
 <p>Whether the <code>Option</code> holds a value.</p>
 <h2 id="is_none"><a class="header" href="#is_none"><code>is_none</code></a></h2>
-<pre><code class="language-nr">proc is_none&lt;T&gt;(o: Option&lt;*T&gt;) bool
+<pre><code class="language-hv">proc is_none&lt;T&gt;(o: Option&lt;*T&gt;) bool
 </code></pre>
 <p>Whether the <code>Option</code> is empty.</p>
 <h2 id="unwrap"><a class="header" href="#unwrap"><code>unwrap</code></a></h2>
-<pre><code class="language-nr">proc unwrap&lt;T&gt;(o: Option&lt;*T&gt;) *T
+<pre><code class="language-hv">proc unwrap&lt;T&gt;(o: Option&lt;*T&gt;) *T
 </code></pre>
 <p>The contained pointer. On <code>none</code> this prints an error and returns the null
 pointer rather than aborting, so guard with <code>is_some</code> when <code>none</code> is possible.</p>
 <h2 id="unwrap_or"><a class="header" href="#unwrap_or"><code>unwrap_or</code></a></h2>
-<pre><code class="language-nr">proc unwrap_or&lt;T&gt;(o: Option&lt;*T&gt;, default: *T) *T
+<pre><code class="language-hv">proc unwrap_or&lt;T&gt;(o: Option&lt;*T&gt;, default: *T) *T
 </code></pre>
 <p>The contained pointer, or <code>default</code> when the <code>Option</code> is empty.</p>
 

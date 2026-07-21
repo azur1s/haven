@@ -2,14 +2,14 @@
 
 std/math: scalar math constants and the C standard-library math functions.
 
-Two layers: a handful of convenience constants/helpers written in noir, and
+Two layers: a handful of convenience constants/helpers written in haven, and
 direct bindings to libm. Every libm function comes in an `f64` form and an
 `f32` form (suffixed `f`) so single-precision DSP code never widens to double.
 Angles are in radians throughout.
 
 ## `square`
 
-```nr
+```hv
 proc square(x: f64) f64
 ```
 
@@ -17,7 +17,7 @@ proc square(x: f64) f64
 
 ## `pi`
 
-```nr
+```hv
 proc pi() f64
 ```
 
@@ -25,7 +25,7 @@ The constant pi as an `f64`.
 
 ## `tau`
 
-```nr
+```hv
 proc tau() f64
 ```
 
@@ -33,7 +33,7 @@ The constant tau (2*pi) as an `f64`.
 
 ## `pi_f32`
 
-```nr
+```hv
 proc pi_f32() f32
 ```
 
@@ -41,7 +41,7 @@ The constant pi as an `f32`.
 
 ## `tau_f32`
 
-```nr
+```hv
 proc tau_f32() f32
 ```
 
@@ -49,7 +49,7 @@ The constant tau (2*pi) as an `f32`.
 
 ## `clampf`
 
-```nr
+```hv
 proc clampf(x: f64, lo: f64, hi: f64) f64
 ```
 
@@ -57,7 +57,7 @@ Clamp `x` into the inclusive range [lo, hi].
 
 ## `sin`
 
-```nr
+```hv
 @alloc(false)
 extern sin(x: f64) f64;
 ```
@@ -66,7 +66,7 @@ Sine of `x` (radians).
 
 ## `cos`
 
-```nr
+```hv
 @alloc(false)
 extern cos(x: f64) f64;
 ```
@@ -75,7 +75,7 @@ Cosine of `x` (radians).
 
 ## `tan`
 
-```nr
+```hv
 @alloc(false)
 extern tan(x: f64) f64;
 ```
@@ -84,7 +84,7 @@ Tangent of `x` (radians).
 
 ## `asin`
 
-```nr
+```hv
 @alloc(false)
 extern asin(x: f64) f64;
 ```
@@ -93,7 +93,7 @@ Arcsine of `x`, in radians. `x` must be in [-1, 1].
 
 ## `acos`
 
-```nr
+```hv
 @alloc(false)
 extern acos(x: f64) f64;
 ```
@@ -102,7 +102,7 @@ Arccosine of `x`, in radians. `x` must be in [-1, 1].
 
 ## `atan`
 
-```nr
+```hv
 @alloc(false)
 extern atan(x: f64) f64;
 ```
@@ -111,7 +111,7 @@ Arctangent of `x`, in radians.
 
 ## `atan2`
 
-```nr
+```hv
 @alloc(false)
 extern atan2(y: f64, x: f64) f64;
 ```
@@ -120,7 +120,7 @@ Arctangent of `y/x` in radians, using the signs of both to pick the quadrant.
 
 ## `sinh`
 
-```nr
+```hv
 @alloc(false)
 extern sinh(x: f64) f64;
 ```
@@ -129,7 +129,7 @@ Hyperbolic sine of `x`.
 
 ## `cosh`
 
-```nr
+```hv
 @alloc(false)
 extern cosh(x: f64) f64;
 ```
@@ -138,7 +138,7 @@ Hyperbolic cosine of `x`.
 
 ## `tanh`
 
-```nr
+```hv
 @alloc(false)
 extern tanh(x: f64) f64;
 ```
@@ -147,7 +147,7 @@ Hyperbolic tangent of `x`.
 
 ## `exp`
 
-```nr
+```hv
 @alloc(false)
 extern exp(x: f64) f64;
 ```
@@ -156,7 +156,7 @@ e raised to the power `x`.
 
 ## `log`
 
-```nr
+```hv
 @alloc(false)
 extern log(x: f64) f64;
 ```
@@ -165,7 +165,7 @@ Natural (base-e) logarithm of `x`. `x` must be positive.
 
 ## `log2`
 
-```nr
+```hv
 @alloc(false)
 extern log2(x: f64) f64;
 ```
@@ -174,7 +174,7 @@ Base-2 logarithm of `x`. `x` must be positive.
 
 ## `log10`
 
-```nr
+```hv
 @alloc(false)
 extern log10(x: f64) f64;
 ```
@@ -183,7 +183,7 @@ Base-10 logarithm of `x`. `x` must be positive.
 
 ## `pow`
 
-```nr
+```hv
 @alloc(false)
 extern pow(base: f64, exp: f64) f64;
 ```
@@ -192,7 +192,7 @@ extern pow(base: f64, exp: f64) f64;
 
 ## `sqrt`
 
-```nr
+```hv
 @alloc(false)
 extern sqrt(x: f64) f64;
 ```
@@ -201,7 +201,7 @@ Square root of `x`. `x` must be non-negative.
 
 ## `cbrt`
 
-```nr
+```hv
 @alloc(false)
 extern cbrt(x: f64) f64;
 ```
@@ -210,7 +210,7 @@ Cube root of `x`.
 
 ## `fabs`
 
-```nr
+```hv
 @alloc(false)
 extern fabs(x: f64) f64;
 ```
@@ -219,7 +219,7 @@ Absolute value of `x`.
 
 ## `floor`
 
-```nr
+```hv
 @alloc(false)
 extern floor(x: f64) f64;
 ```
@@ -228,7 +228,7 @@ Largest integer value not greater than `x`, as an `f64`.
 
 ## `ceil`
 
-```nr
+```hv
 @alloc(false)
 extern ceil(x: f64) f64;
 ```
@@ -237,7 +237,7 @@ Smallest integer value not less than `x`, as an `f64`.
 
 ## `round`
 
-```nr
+```hv
 @alloc(false)
 extern round(x: f64) f64;
 ```
@@ -246,7 +246,7 @@ extern round(x: f64) f64;
 
 ## `trunc`
 
-```nr
+```hv
 @alloc(false)
 extern trunc(x: f64) f64;
 ```
@@ -255,7 +255,7 @@ extern trunc(x: f64) f64;
 
 ## `fmod`
 
-```nr
+```hv
 @alloc(false)
 extern fmod(x: f64, y: f64) f64;
 ```
@@ -264,7 +264,7 @@ Floating-point remainder of `x / y`, with the sign of `x`.
 
 ## `sinf`
 
-```nr
+```hv
 @alloc(false)
 extern sinf(x: f32) f32;
 ```
@@ -273,7 +273,7 @@ Sine of `x` (radians), single precision.
 
 ## `cosf`
 
-```nr
+```hv
 @alloc(false)
 extern cosf(x: f32) f32;
 ```
@@ -282,7 +282,7 @@ Cosine of `x` (radians), single precision.
 
 ## `tanf`
 
-```nr
+```hv
 @alloc(false)
 extern tanf(x: f32) f32;
 ```
@@ -291,7 +291,7 @@ Tangent of `x` (radians), single precision.
 
 ## `atan2f`
 
-```nr
+```hv
 @alloc(false)
 extern atan2f(y: f32, x: f32) f32;
 ```
@@ -300,7 +300,7 @@ Arctangent of `y/x` (radians), quadrant-aware, single precision.
 
 ## `tanhf`
 
-```nr
+```hv
 @alloc(false)
 extern tanhf(x: f32) f32;
 ```
@@ -309,7 +309,7 @@ Hyperbolic tangent of `x`, single precision.
 
 ## `expf`
 
-```nr
+```hv
 @alloc(false)
 extern expf(x: f32) f32;
 ```
@@ -318,7 +318,7 @@ e raised to the power `x`, single precision.
 
 ## `logf`
 
-```nr
+```hv
 @alloc(false)
 extern logf(x: f32) f32;
 ```
@@ -327,7 +327,7 @@ Natural (base-e) logarithm of `x`, single precision. `x` must be positive.
 
 ## `log2f`
 
-```nr
+```hv
 @alloc(false)
 extern log2f(x: f32) f32;
 ```
@@ -336,7 +336,7 @@ Base-2 logarithm of `x`, single precision. `x` must be positive.
 
 ## `log10f`
 
-```nr
+```hv
 @alloc(false)
 extern log10f(x: f32) f32;
 ```
@@ -345,7 +345,7 @@ Base-10 logarithm of `x`, single precision. `x` must be positive.
 
 ## `powf`
 
-```nr
+```hv
 @alloc(false)
 extern powf(base: f32, exp: f32) f32;
 ```
@@ -354,7 +354,7 @@ extern powf(base: f32, exp: f32) f32;
 
 ## `sqrtf`
 
-```nr
+```hv
 @alloc(false)
 extern sqrtf(x: f32) f32;
 ```
@@ -363,7 +363,7 @@ Square root of `x`, single precision. `x` must be non-negative.
 
 ## `fabsf`
 
-```nr
+```hv
 @alloc(false)
 extern fabsf(x: f32) f32;
 ```
@@ -372,7 +372,7 @@ Absolute value of `x`, single precision.
 
 ## `floorf`
 
-```nr
+```hv
 @alloc(false)
 extern floorf(x: f32) f32;
 ```
@@ -381,7 +381,7 @@ Largest integer value not greater than `x`, single precision.
 
 ## `ceilf`
 
-```nr
+```hv
 @alloc(false)
 extern ceilf(x: f32) f32;
 ```
@@ -390,7 +390,7 @@ Smallest integer value not less than `x`, single precision.
 
 ## `fmodf`
 
-```nr
+```hv
 @alloc(false)
 extern fmodf(x: f32, y: f32) f32;
 ```

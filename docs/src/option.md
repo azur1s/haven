@@ -10,7 +10,7 @@ retrieve with `unwrap` or `unwrap_or`.
 
 ## `Option`
 
-```nr
+```hv
 struct Option<T> {
     value: T,
 }
@@ -18,7 +18,7 @@ struct Option<T> {
 
 ## `some`
 
-```nr
+```hv
 proc some<T>(value: *T) Option<*T>
 ```
 
@@ -26,7 +26,7 @@ An `Option` holding the pointer `value`.
 
 ## `none`
 
-```nr
+```hv
 proc none<T>() Option<*T>
 ```
 
@@ -34,7 +34,7 @@ The empty `Option`.
 
 ## `is_some`
 
-```nr
+```hv
 proc is_some<T>(o: Option<*T>) bool
 ```
 
@@ -42,7 +42,7 @@ Whether the `Option` holds a value.
 
 ## `is_none`
 
-```nr
+```hv
 proc is_none<T>(o: Option<*T>) bool
 ```
 
@@ -50,7 +50,7 @@ Whether the `Option` is empty.
 
 ## `unwrap`
 
-```nr
+```hv
 proc unwrap<T>(o: Option<*T>) *T
 ```
 
@@ -59,7 +59,7 @@ pointer rather than aborting, so guard with `is_some` when `none` is possible.
 
 ## `unwrap_or`
 
-```nr
+```hv
 proc unwrap_or<T>(o: Option<*T>, default: *T) *T
 ```
 

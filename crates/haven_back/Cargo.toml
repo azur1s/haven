@@ -1,0 +1,8 @@
+[package]
+name = "haven_back"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+haven_common.workspace = true
+haven_mid.workspace = true

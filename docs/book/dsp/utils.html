@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>dsp/utils - noir std</title>
+        <title>dsp/utils - haven std</title>
 
 
         <!-- Custom HTML head -->
@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-031d866c.js";
+            window.path_to_searchindex_js = "../searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9f74e925.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -180,19 +180,19 @@
 amplitude vs decibels, and MIDI note numbers vs frequency in hertz. All
 single precision.</p>
 <h2 id="db_to_lin"><a class="header" href="#db_to_lin"><code>db_to_lin</code></a></h2>
-<pre><code class="language-nr">proc db_to_lin(db: f32) f32
+<pre><code class="language-hv">proc db_to_lin(db: f32) f32
 </code></pre>
 <p>Convert a gain in decibels to a linear amplitude multiplier (0 dB -&gt; 1.0).</p>
 <h2 id="lin_to_db"><a class="header" href="#lin_to_db"><code>lin_to_db</code></a></h2>
-<pre><code class="language-nr">proc lin_to_db(lin: f32) f32
+<pre><code class="language-hv">proc lin_to_db(lin: f32) f32
 </code></pre>
 <p>Convert a linear amplitude multiplier to decibels (1.0 -&gt; 0 dB).</p>
 <h2 id="midi_to_hz"><a class="header" href="#midi_to_hz"><code>midi_to_hz</code></a></h2>
-<pre><code class="language-nr">proc midi_to_hz(note: f32) f32
+<pre><code class="language-hv">proc midi_to_hz(note: f32) f32
 </code></pre>
 <p>Convert a MIDI note number to frequency in hertz (A4 = note 69 = 440 Hz).</p>
 <h2 id="hz_to_midi"><a class="header" href="#hz_to_midi"><code>hz_to_midi</code></a></h2>
-<pre><code class="language-nr">proc hz_to_midi(hz: f32) f32
+<pre><code class="language-hv">proc hz_to_midi(hz: f32) f32
 </code></pre>
 <p>Convert a frequency in hertz to a (fractional) MIDI note number.</p>
 

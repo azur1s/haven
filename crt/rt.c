@@ -9,7 +9,7 @@ struct Slice {
 
 uint64_t rt_slice_len(struct Slice* slice) { return (uint64_t)slice->length; }
 
-// Heap allocation, exposed to the language via `std/alloc` (see crt/std/alloc.nr).
+// Heap allocation, exposed to the language via `std/alloc` (see crt/std/alloc.hv).
 // On failure these return NULL rather than aborting: `std/alloc` wraps the result
 // in `Option<*T>`, so out-of-memory surfaces as `none` for the caller to handle.
 void* rt_alloc(uint64_t size) {

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>noir std</title>
+        <title>haven std</title>
         <meta name="robots" content="noindex">
 
 
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-031d866c.js";
+            window.path_to_searchindex_js = "searchindex-6013fb23.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -138,7 +138,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">noir std</h1>
+                    <h1 class="menu-title">haven std</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -184,20 +184,20 @@ each returns an <code>Option&lt;*T&gt;</code> that is <code>none</code> on failu
 buffer you allocate to <code>dealloc</code> when done. These are the primitives higher
 level containers like <code>Vec&lt;T&gt;</code> are built on.</p>
 <h2 id="alloc-1"><a class="header" href="#alloc-1"><code>alloc</code></a></h2>
-<pre><code class="language-nr">@alloc(true)
+<pre><code class="language-hv">@alloc(true)
 proc alloc&lt;T&gt;(count: u64) Option&lt;*T&gt;
 </code></pre>
 <p>Allocate uninitialized room for <code>count</code> values of type <code>T</code>. Returns <code>some</code>
 pointer on success, or <code>none</code> if the allocation failed.</p>
 <h2 id="realloc"><a class="header" href="#realloc"><code>realloc</code></a></h2>
-<pre><code class="language-nr">@alloc(true)
+<pre><code class="language-hv">@alloc(true)
 proc realloc&lt;T&gt;(ptr: *T, count: u64) Option&lt;*T&gt;
 </code></pre>
 <p>Resize the allocation at <code>ptr</code> to hold <code>count</code> values of type <code>T</code>, preserving
 existing contents. Returns <code>some</code> new pointer on success, or <code>none</code> on
 failure (in which case the original allocation is left untouched).</p>
 <h2 id="dealloc"><a class="header" href="#dealloc"><code>dealloc</code></a></h2>
-<pre><code class="language-nr">@alloc(true)
+<pre><code class="language-hv">@alloc(true)
 proc dealloc&lt;T&gt;(ptr: *T) void
 </code></pre>
 <p>Release an allocation obtained from <code>alloc</code>/<code>realloc</code>. Using <code>ptr</code> afterward
@@ -214,27 +214,27 @@ state-variable filter that produces lowpass/highpass/bandpass/notch at once.</p>
 input sample. State lives in the filter struct, so keep it between samples.
 All single precision.</p>
 <h2 id="onepole"><a class="header" href="#onepole"><code>OnePole</code></a></h2>
-<pre><code class="language-nr">struct OnePole {
+<pre><code class="language-hv">struct OnePole {
     a0: f32,
     b1: f32,
     z1: f32,
 }
 </code></pre>
 <h2 id="onepole_lowpass"><a class="header" href="#onepole_lowpass"><code>onepole_lowpass</code></a></h2>
-<pre><code class="language-nr">proc onepole_lowpass(cutoff: f32, sr: f32) OnePole
+<pre><code class="language-hv">proc onepole_lowpass(cutoff: f32, sr: f32) OnePole
 </code></pre>
 <p>A one-pole lowpass with corner frequency <code>cutoff</code> hertz at sample rate <code>sr</code>.</p>
 <h2 id="onepole_set_cutoff"><a class="header" href="#onepole_set_cutoff"><code>onepole_set_cutoff</code></a></h2>
-<pre><code class="language-nr">proc onepole_set_cutoff(f: *OnePole, cutoff: f32, sr: f32) void
+<pre><code class="language-hv">proc onepole_set_cutoff(f: *OnePole, cutoff: f32, sr: f32) void
 </code></pre>
 <p>Retune an existing one-pole to corner frequency <code>cutoff</code> at sample rate <code>sr</code>.</p>
 <h2 id="onepole_process"><a class="header" href="#onepole_process"><code>onepole_process</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc onepole_process(f: *OnePole, x: f32) f32
 </code></pre>
 <p>Filter one input sample <code>x</code>, returning the filtered output.</p>
 <h2 id="biquad"><a class="header" href="#biquad"><code>Biquad</code></a></h2>
-<pre><code class="language-nr">struct Biquad {
+<pre><code class="language-hv">struct Biquad {
     b0: f32,
     b1: f32,
     b2: f32,
@@ -245,50 +245,50 @@ proc onepole_process(f: *OnePole, x: f32) f32
 }
 </code></pre>
 <h2 id="biquad_from"><a class="header" href="#biquad_from"><code>biquad_from</code></a></h2>
-<pre><code class="language-nr">proc biquad_from(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) Biquad
+<pre><code class="language-hv">proc biquad_from(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) Biquad
 </code></pre>
 <p>Build a biquad from raw coefficients <code>b0..a2</code>, normalizing by <code>a0</code> and
 starting from zero state. The response constructors below are built on this.</p>
 <h2 id="biquad_lowpass"><a class="header" href="#biquad_lowpass"><code>biquad_lowpass</code></a></h2>
-<pre><code class="language-nr">proc biquad_lowpass(cutoff: f32, q: f32, sr: f32) Biquad
+<pre><code class="language-hv">proc biquad_lowpass(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
 <p>Lowpass at <code>cutoff</code> hertz with resonance <code>q</code>, for sample rate <code>sr</code>.</p>
 <h2 id="biquad_highpass"><a class="header" href="#biquad_highpass"><code>biquad_highpass</code></a></h2>
-<pre><code class="language-nr">proc biquad_highpass(cutoff: f32, q: f32, sr: f32) Biquad
+<pre><code class="language-hv">proc biquad_highpass(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
 <p>Highpass at <code>cutoff</code> hertz with resonance <code>q</code>, for sample rate <code>sr</code>.</p>
 <h2 id="biquad_bandpass"><a class="header" href="#biquad_bandpass"><code>biquad_bandpass</code></a></h2>
-<pre><code class="language-nr">proc biquad_bandpass(cutoff: f32, q: f32, sr: f32) Biquad
+<pre><code class="language-hv">proc biquad_bandpass(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
 <p>Bandpass centered at <code>cutoff</code> hertz with <code>q</code> setting the width, normalized to
 0 dB peak gain, for sample rate <code>sr</code>.</p>
 <h2 id="biquad_notch"><a class="header" href="#biquad_notch"><code>biquad_notch</code></a></h2>
-<pre><code class="language-nr">proc biquad_notch(cutoff: f32, q: f32, sr: f32) Biquad
+<pre><code class="language-hv">proc biquad_notch(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
 <p>Notch (band-reject) at <code>cutoff</code> hertz with <code>q</code> setting the width, for sample
 rate <code>sr</code>.</p>
 <h2 id="biquad_peak"><a class="header" href="#biquad_peak"><code>biquad_peak</code></a></h2>
-<pre><code class="language-nr">proc biquad_peak(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
+<pre><code class="language-hv">proc biquad_peak(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 </code></pre>
 <p>Peaking EQ: <code>gain_db</code> boost (or cut) at <code>cutoff</code> hertz, bandwidth set by <code>q</code>,
 for sample rate <code>sr</code>.</p>
 <h2 id="biquad_lowshelf"><a class="header" href="#biquad_lowshelf"><code>biquad_lowshelf</code></a></h2>
-<pre><code class="language-nr">proc biquad_lowshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
+<pre><code class="language-hv">proc biquad_lowshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 </code></pre>
 <p>Low shelf: <code>gain_db</code> boost (or cut) below <code>cutoff</code> hertz, slope set by <code>q</code>,
 for sample rate <code>sr</code>.</p>
 <h2 id="biquad_highshelf"><a class="header" href="#biquad_highshelf"><code>biquad_highshelf</code></a></h2>
-<pre><code class="language-nr">proc biquad_highshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
+<pre><code class="language-hv">proc biquad_highshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 </code></pre>
 <p>High shelf: <code>gain_db</code> boost (or cut) above <code>cutoff</code> hertz, slope set by <code>q</code>,
 for sample rate <code>sr</code>.</p>
 <h2 id="biquad_process"><a class="header" href="#biquad_process"><code>biquad_process</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc biquad_process(f: *Biquad, x: f32) f32
 </code></pre>
 <p>Filter one input sample <code>x</code>, returning the filtered output.</p>
 <h2 id="svfout"><a class="header" href="#svfout"><code>SvfOut</code></a></h2>
-<pre><code class="language-nr">struct SvfOut {
+<pre><code class="language-hv">struct SvfOut {
     lp: f32,  /// lowpass output
     hp: f32,  /// highpass output
     bp: f32,  /// bandpass output
@@ -297,7 +297,7 @@ proc biquad_process(f: *Biquad, x: f32) f32
 </code></pre>
 <p>The four simultaneous outputs of a state-variable filter for one sample.</p>
 <h2 id="statevariable"><a class="header" href="#statevariable"><code>StateVariable</code></a></h2>
-<pre><code class="language-nr">struct StateVariable {
+<pre><code class="language-hv">struct StateVariable {
     g: f32,
     k: f32,
     a1: f32,
@@ -308,17 +308,17 @@ proc biquad_process(f: *Biquad, x: f32) f32
 }
 </code></pre>
 <h2 id="svf_new"><a class="header" href="#svf_new"><code>svf_new</code></a></h2>
-<pre><code class="language-nr">proc svf_new(cutoff: f32, q: f32, sr: f32) StateVariable
+<pre><code class="language-hv">proc svf_new(cutoff: f32, q: f32, sr: f32) StateVariable
 </code></pre>
 <p>A state-variable filter at <code>cutoff</code> hertz with resonance <code>q</code>, for sample
 rate <code>sr</code>.</p>
 <h2 id="svf_set"><a class="header" href="#svf_set"><code>svf_set</code></a></h2>
-<pre><code class="language-nr">proc svf_set(f: *StateVariable, cutoff: f32, q: f32, sr: f32) void
+<pre><code class="language-hv">proc svf_set(f: *StateVariable, cutoff: f32, q: f32, sr: f32) void
 </code></pre>
 <p>Retune an existing state-variable filter to <code>cutoff</code> hertz and resonance <code>q</code>,
 for sample rate <code>sr</code>, keeping its running state.</p>
 <h2 id="svf_process"><a class="header" href="#svf_process"><code>svf_process</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc svf_process(f: *StateVariable, x: f32) SvfOut
 </code></pre>
 <p>Filter one input sample <code>x</code>, returning all four responses as an <code>SvfOut</code>.</p>
@@ -330,7 +330,7 @@ waveform shapes (sine, saw, square, triangle). The shapers are naive, i.e.
 not bandlimited, so they alias at high frequencies. Frequencies and sample
 rate are in hertz; all sample outputs are single precision.</p>
 <h2 id="phasor"><a class="header" href="#phasor"><code>Phasor</code></a></h2>
-<pre><code class="language-nr">struct Phasor {
+<pre><code class="language-hv">struct Phasor {
     phase: f32,
     inc: f32,
 }
@@ -338,21 +338,21 @@ rate are in hertz; all sample outputs are single precision.</p>
 <p>A bare ramp generator: outputs a rising phase in [0, 1) that wraps every
 cycle. Every oscillator shape below is derived from it.</p>
 <h2 id="phasor_new"><a class="header" href="#phasor_new"><code>phasor_new</code></a></h2>
-<pre><code class="language-nr">proc phasor_new(freq: f32, sr: f32) Phasor
+<pre><code class="language-hv">proc phasor_new(freq: f32, sr: f32) Phasor
 </code></pre>
 <p>A <code>Phasor</code> running at <code>freq</code> hertz for sample rate <code>sr</code>, starting at phase 0.</p>
 <h2 id="phasor_set_freq"><a class="header" href="#phasor_set_freq"><code>phasor_set_freq</code></a></h2>
-<pre><code class="language-nr">proc phasor_set_freq(p: *Phasor, freq: f32, sr: f32) void
+<pre><code class="language-hv">proc phasor_set_freq(p: *Phasor, freq: f32, sr: f32) void
 </code></pre>
 <p>Retune the phasor to <code>freq</code> hertz at sample rate <code>sr</code>, keeping its phase.</p>
 <h2 id="phasor_next"><a class="header" href="#phasor_next"><code>phasor_next</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc phasor_next(p: *Phasor) f32
 </code></pre>
 <p>Advance one sample and return the phase from <em>before</em> the step, so a fresh
 phasor yields 0.0 on its first call.</p>
 <h2 id="osc"><a class="header" href="#osc"><code>Osc</code></a></h2>
-<pre><code class="language-nr">struct Osc {
+<pre><code class="language-hv">struct Osc {
     phase: f32,
     inc: f32,
 }
@@ -361,40 +361,40 @@ phasor yields 0.0 on its first call.</p>
 shapers. Every shaper advances the phase by one sample and returns a value
 in [-1, 1].</p>
 <h2 id="osc_new"><a class="header" href="#osc_new"><code>osc_new</code></a></h2>
-<pre><code class="language-nr">proc osc_new(freq: f32, sr: f32) Osc
+<pre><code class="language-hv">proc osc_new(freq: f32, sr: f32) Osc
 </code></pre>
 <p>An <code>Osc</code> running at <code>freq</code> hertz for sample rate <code>sr</code>, starting at phase 0.</p>
 <h2 id="osc_set_freq"><a class="header" href="#osc_set_freq"><code>osc_set_freq</code></a></h2>
-<pre><code class="language-nr">proc osc_set_freq(o: *Osc, freq: f32, sr: f32) void
+<pre><code class="language-hv">proc osc_set_freq(o: *Osc, freq: f32, sr: f32) void
 </code></pre>
 <p>Retune the oscillator to <code>freq</code> hertz at sample rate <code>sr</code>, keeping its phase.</p>
 <h2 id="osc_set_phase"><a class="header" href="#osc_set_phase"><code>osc_set_phase</code></a></h2>
-<pre><code class="language-nr">proc osc_set_phase(o: *Osc, phase: f32) void
+<pre><code class="language-hv">proc osc_set_phase(o: *Osc, phase: f32) void
 </code></pre>
 <p>Jump the oscillator to <code>phase</code> (wrapped into [0, 1)).</p>
 <h2 id="osc_advance"><a class="header" href="#osc_advance"><code>osc_advance</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_advance(o: *Osc) void
 </code></pre>
 <p>Advance the oscillator by one sample without producing output.</p>
 <h2 id="osc_sine"><a class="header" href="#osc_sine"><code>osc_sine</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_sine(o: *Osc) f32
 </code></pre>
 <p>Next sine sample, then advance.</p>
 <h2 id="osc_saw"><a class="header" href="#osc_saw"><code>osc_saw</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_saw(o: *Osc) f32
 </code></pre>
 <p>Next sawtooth sample (rising ramp), then advance.</p>
 <h2 id="osc_square"><a class="header" href="#osc_square"><code>osc_square</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_square(o: *Osc) f32
 </code></pre>
 <p>Next square sample (+1 for the first half of the cycle, -1 for the second),
 then advance.</p>
 <h2 id="osc_tri"><a class="header" href="#osc_tri"><code>osc_tri</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 proc osc_tri(o: *Osc) f32
 </code></pre>
 <p>Next triangle sample, then advance.</p>
@@ -405,239 +405,239 @@ proc osc_tri(o: *Osc) f32
 amplitude vs decibels, and MIDI note numbers vs frequency in hertz. All
 single precision.</p>
 <h2 id="db_to_lin"><a class="header" href="#db_to_lin"><code>db_to_lin</code></a></h2>
-<pre><code class="language-nr">proc db_to_lin(db: f32) f32
+<pre><code class="language-hv">proc db_to_lin(db: f32) f32
 </code></pre>
 <p>Convert a gain in decibels to a linear amplitude multiplier (0 dB -&gt; 1.0).</p>
 <h2 id="lin_to_db"><a class="header" href="#lin_to_db"><code>lin_to_db</code></a></h2>
-<pre><code class="language-nr">proc lin_to_db(lin: f32) f32
+<pre><code class="language-hv">proc lin_to_db(lin: f32) f32
 </code></pre>
 <p>Convert a linear amplitude multiplier to decibels (1.0 -&gt; 0 dB).</p>
 <h2 id="midi_to_hz"><a class="header" href="#midi_to_hz"><code>midi_to_hz</code></a></h2>
-<pre><code class="language-nr">proc midi_to_hz(note: f32) f32
+<pre><code class="language-hv">proc midi_to_hz(note: f32) f32
 </code></pre>
 <p>Convert a MIDI note number to frequency in hertz (A4 = note 69 = 440 Hz).</p>
 <h2 id="hz_to_midi"><a class="header" href="#hz_to_midi"><code>hz_to_midi</code></a></h2>
-<pre><code class="language-nr">proc hz_to_midi(hz: f32) f32
+<pre><code class="language-hv">proc hz_to_midi(hz: f32) f32
 </code></pre>
 <p>Convert a frequency in hertz to a (fractional) MIDI note number.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="math"><a class="header" href="#math"><code>math</code></a></h1>
 <p>std/math: scalar math constants and the C standard-library math functions.</p>
-<p>Two layers: a handful of convenience constants/helpers written in noir, and
+<p>Two layers: a handful of convenience constants/helpers written in haven, and
 direct bindings to libm. Every libm function comes in an <code>f64</code> form and an
 <code>f32</code> form (suffixed <code>f</code>) so single-precision DSP code never widens to double.
 Angles are in radians throughout.</p>
 <h2 id="square"><a class="header" href="#square"><code>square</code></a></h2>
-<pre><code class="language-nr">proc square(x: f64) f64
+<pre><code class="language-hv">proc square(x: f64) f64
 </code></pre>
 <p><code>x</code> squared (<code>x * x</code>).</p>
 <h2 id="pi"><a class="header" href="#pi"><code>pi</code></a></h2>
-<pre><code class="language-nr">proc pi() f64
+<pre><code class="language-hv">proc pi() f64
 </code></pre>
 <p>The constant pi as an <code>f64</code>.</p>
 <h2 id="tau"><a class="header" href="#tau"><code>tau</code></a></h2>
-<pre><code class="language-nr">proc tau() f64
+<pre><code class="language-hv">proc tau() f64
 </code></pre>
 <p>The constant tau (2*pi) as an <code>f64</code>.</p>
 <h2 id="pi_f32"><a class="header" href="#pi_f32"><code>pi_f32</code></a></h2>
-<pre><code class="language-nr">proc pi_f32() f32
+<pre><code class="language-hv">proc pi_f32() f32
 </code></pre>
 <p>The constant pi as an <code>f32</code>.</p>
 <h2 id="tau_f32"><a class="header" href="#tau_f32"><code>tau_f32</code></a></h2>
-<pre><code class="language-nr">proc tau_f32() f32
+<pre><code class="language-hv">proc tau_f32() f32
 </code></pre>
 <p>The constant tau (2*pi) as an <code>f32</code>.</p>
 <h2 id="clampf"><a class="header" href="#clampf"><code>clampf</code></a></h2>
-<pre><code class="language-nr">proc clampf(x: f64, lo: f64, hi: f64) f64
+<pre><code class="language-hv">proc clampf(x: f64, lo: f64, hi: f64) f64
 </code></pre>
 <p>Clamp <code>x</code> into the inclusive range [lo, hi].</p>
 <h2 id="sin"><a class="header" href="#sin"><code>sin</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sin(x: f64) f64;
 </code></pre>
 <p>Sine of <code>x</code> (radians).</p>
 <h2 id="cos"><a class="header" href="#cos"><code>cos</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cos(x: f64) f64;
 </code></pre>
 <p>Cosine of <code>x</code> (radians).</p>
 <h2 id="tan"><a class="header" href="#tan"><code>tan</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tan(x: f64) f64;
 </code></pre>
 <p>Tangent of <code>x</code> (radians).</p>
 <h2 id="asin"><a class="header" href="#asin"><code>asin</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern asin(x: f64) f64;
 </code></pre>
 <p>Arcsine of <code>x</code>, in radians. <code>x</code> must be in [-1, 1].</p>
 <h2 id="acos"><a class="header" href="#acos"><code>acos</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern acos(x: f64) f64;
 </code></pre>
 <p>Arccosine of <code>x</code>, in radians. <code>x</code> must be in [-1, 1].</p>
 <h2 id="atan"><a class="header" href="#atan"><code>atan</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern atan(x: f64) f64;
 </code></pre>
 <p>Arctangent of <code>x</code>, in radians.</p>
 <h2 id="atan2"><a class="header" href="#atan2"><code>atan2</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern atan2(y: f64, x: f64) f64;
 </code></pre>
 <p>Arctangent of <code>y/x</code> in radians, using the signs of both to pick the quadrant.</p>
 <h2 id="sinh"><a class="header" href="#sinh"><code>sinh</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sinh(x: f64) f64;
 </code></pre>
 <p>Hyperbolic sine of <code>x</code>.</p>
 <h2 id="cosh"><a class="header" href="#cosh"><code>cosh</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cosh(x: f64) f64;
 </code></pre>
 <p>Hyperbolic cosine of <code>x</code>.</p>
 <h2 id="tanh"><a class="header" href="#tanh"><code>tanh</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tanh(x: f64) f64;
 </code></pre>
 <p>Hyperbolic tangent of <code>x</code>.</p>
 <h2 id="exp"><a class="header" href="#exp"><code>exp</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern exp(x: f64) f64;
 </code></pre>
 <p>e raised to the power <code>x</code>.</p>
 <h2 id="log"><a class="header" href="#log"><code>log</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log(x: f64) f64;
 </code></pre>
 <p>Natural (base-e) logarithm of <code>x</code>. <code>x</code> must be positive.</p>
 <h2 id="log2"><a class="header" href="#log2"><code>log2</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log2(x: f64) f64;
 </code></pre>
 <p>Base-2 logarithm of <code>x</code>. <code>x</code> must be positive.</p>
 <h2 id="log10"><a class="header" href="#log10"><code>log10</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log10(x: f64) f64;
 </code></pre>
 <p>Base-10 logarithm of <code>x</code>. <code>x</code> must be positive.</p>
 <h2 id="pow"><a class="header" href="#pow"><code>pow</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern pow(base: f64, exp: f64) f64;
 </code></pre>
 <p><code>base</code> raised to the power <code>exp</code>.</p>
 <h2 id="sqrt"><a class="header" href="#sqrt"><code>sqrt</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sqrt(x: f64) f64;
 </code></pre>
 <p>Square root of <code>x</code>. <code>x</code> must be non-negative.</p>
 <h2 id="cbrt"><a class="header" href="#cbrt"><code>cbrt</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cbrt(x: f64) f64;
 </code></pre>
 <p>Cube root of <code>x</code>.</p>
 <h2 id="fabs"><a class="header" href="#fabs"><code>fabs</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fabs(x: f64) f64;
 </code></pre>
 <p>Absolute value of <code>x</code>.</p>
 <h2 id="floor"><a class="header" href="#floor"><code>floor</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern floor(x: f64) f64;
 </code></pre>
 <p>Largest integer value not greater than <code>x</code>, as an <code>f64</code>.</p>
 <h2 id="ceil"><a class="header" href="#ceil"><code>ceil</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern ceil(x: f64) f64;
 </code></pre>
 <p>Smallest integer value not less than <code>x</code>, as an <code>f64</code>.</p>
 <h2 id="round"><a class="header" href="#round"><code>round</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern round(x: f64) f64;
 </code></pre>
 <p><code>x</code> rounded to the nearest integer, halves away from zero, as an <code>f64</code>.</p>
 <h2 id="trunc"><a class="header" href="#trunc"><code>trunc</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern trunc(x: f64) f64;
 </code></pre>
 <p><code>x</code> truncated toward zero, as an <code>f64</code>.</p>
 <h2 id="fmod"><a class="header" href="#fmod"><code>fmod</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fmod(x: f64, y: f64) f64;
 </code></pre>
 <p>Floating-point remainder of <code>x / y</code>, with the sign of <code>x</code>.</p>
 <h2 id="sinf"><a class="header" href="#sinf"><code>sinf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sinf(x: f32) f32;
 </code></pre>
 <p>Sine of <code>x</code> (radians), single precision.</p>
 <h2 id="cosf"><a class="header" href="#cosf"><code>cosf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern cosf(x: f32) f32;
 </code></pre>
 <p>Cosine of <code>x</code> (radians), single precision.</p>
 <h2 id="tanf"><a class="header" href="#tanf"><code>tanf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tanf(x: f32) f32;
 </code></pre>
 <p>Tangent of <code>x</code> (radians), single precision.</p>
 <h2 id="atan2f"><a class="header" href="#atan2f"><code>atan2f</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern atan2f(y: f32, x: f32) f32;
 </code></pre>
 <p>Arctangent of <code>y/x</code> (radians), quadrant-aware, single precision.</p>
 <h2 id="tanhf"><a class="header" href="#tanhf"><code>tanhf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern tanhf(x: f32) f32;
 </code></pre>
 <p>Hyperbolic tangent of <code>x</code>, single precision.</p>
 <h2 id="expf"><a class="header" href="#expf"><code>expf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern expf(x: f32) f32;
 </code></pre>
 <p>e raised to the power <code>x</code>, single precision.</p>
 <h2 id="logf"><a class="header" href="#logf"><code>logf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern logf(x: f32) f32;
 </code></pre>
 <p>Natural (base-e) logarithm of <code>x</code>, single precision. <code>x</code> must be positive.</p>
 <h2 id="log2f"><a class="header" href="#log2f"><code>log2f</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log2f(x: f32) f32;
 </code></pre>
 <p>Base-2 logarithm of <code>x</code>, single precision. <code>x</code> must be positive.</p>
 <h2 id="log10f"><a class="header" href="#log10f"><code>log10f</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern log10f(x: f32) f32;
 </code></pre>
 <p>Base-10 logarithm of <code>x</code>, single precision. <code>x</code> must be positive.</p>
 <h2 id="powf"><a class="header" href="#powf"><code>powf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern powf(base: f32, exp: f32) f32;
 </code></pre>
 <p><code>base</code> raised to the power <code>exp</code>, single precision.</p>
 <h2 id="sqrtf"><a class="header" href="#sqrtf"><code>sqrtf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern sqrtf(x: f32) f32;
 </code></pre>
 <p>Square root of <code>x</code>, single precision. <code>x</code> must be non-negative.</p>
 <h2 id="fabsf"><a class="header" href="#fabsf"><code>fabsf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fabsf(x: f32) f32;
 </code></pre>
 <p>Absolute value of <code>x</code>, single precision.</p>
 <h2 id="floorf"><a class="header" href="#floorf"><code>floorf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern floorf(x: f32) f32;
 </code></pre>
 <p>Largest integer value not greater than <code>x</code>, single precision.</p>
 <h2 id="ceilf"><a class="header" href="#ceilf"><code>ceilf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern ceilf(x: f32) f32;
 </code></pre>
 <p>Smallest integer value not less than <code>x</code>, single precision.</p>
 <h2 id="fmodf"><a class="header" href="#fmodf"><code>fmodf</code></a></h2>
-<pre><code class="language-nr">@alloc(false)
+<pre><code class="language-hv">@alloc(false)
 extern fmodf(x: f32, y: f32) f32;
 </code></pre>
 <p>Floating-point remainder of <code>x / y</code> with the sign of <code>x</code>, single precision.</p>
@@ -650,33 +650,33 @@ fallible operation (an allocation, a <code>vec_pop</code>, a lookup, etc.), to s
 value” without a sentinel of its own. Test with <code>is_some</code>/<code>is_none</code>, then
 retrieve with <code>unwrap</code> or <code>unwrap_or</code>.</p>
 <h2 id="option-1"><a class="header" href="#option-1"><code>Option</code></a></h2>
-<pre><code class="language-nr">struct Option&lt;T&gt; {
+<pre><code class="language-hv">struct Option&lt;T&gt; {
     value: T,
 }
 </code></pre>
 <h2 id="some"><a class="header" href="#some"><code>some</code></a></h2>
-<pre><code class="language-nr">proc some&lt;T&gt;(value: *T) Option&lt;*T&gt;
+<pre><code class="language-hv">proc some&lt;T&gt;(value: *T) Option&lt;*T&gt;
 </code></pre>
 <p>An <code>Option</code> holding the pointer <code>value</code>.</p>
 <h2 id="none"><a class="header" href="#none"><code>none</code></a></h2>
-<pre><code class="language-nr">proc none&lt;T&gt;() Option&lt;*T&gt;
+<pre><code class="language-hv">proc none&lt;T&gt;() Option&lt;*T&gt;
 </code></pre>
 <p>The empty <code>Option</code>.</p>
 <h2 id="is_some"><a class="header" href="#is_some"><code>is_some</code></a></h2>
-<pre><code class="language-nr">proc is_some&lt;T&gt;(o: Option&lt;*T&gt;) bool
+<pre><code class="language-hv">proc is_some&lt;T&gt;(o: Option&lt;*T&gt;) bool
 </code></pre>
 <p>Whether the <code>Option</code> holds a value.</p>
 <h2 id="is_none"><a class="header" href="#is_none"><code>is_none</code></a></h2>
-<pre><code class="language-nr">proc is_none&lt;T&gt;(o: Option&lt;*T&gt;) bool
+<pre><code class="language-hv">proc is_none&lt;T&gt;(o: Option&lt;*T&gt;) bool
 </code></pre>
 <p>Whether the <code>Option</code> is empty.</p>
 <h2 id="unwrap"><a class="header" href="#unwrap"><code>unwrap</code></a></h2>
-<pre><code class="language-nr">proc unwrap&lt;T&gt;(o: Option&lt;*T&gt;) *T
+<pre><code class="language-hv">proc unwrap&lt;T&gt;(o: Option&lt;*T&gt;) *T
 </code></pre>
 <p>The contained pointer. On <code>none</code> this prints an error and returns the null
 pointer rather than aborting, so guard with <code>is_some</code> when <code>none</code> is possible.</p>
 <h2 id="unwrap_or"><a class="header" href="#unwrap_or"><code>unwrap_or</code></a></h2>
-<pre><code class="language-nr">proc unwrap_or&lt;T&gt;(o: Option&lt;*T&gt;, default: *T) *T
+<pre><code class="language-hv">proc unwrap_or&lt;T&gt;(o: Option&lt;*T&gt;, default: *T) *T
 </code></pre>
 <p>The contained pointer, or <code>default</code> when the <code>Option</code> is empty.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -685,27 +685,27 @@ pointer rather than aborting, so guard with <code>is_some</code> when <code>none
 <p>The prelude is imported implicitly into every module, so these items are in
 scope everywhere without an <code>import</code>. It is deliberately tiny.</p>
 <h2 id="printf"><a class="header" href="#printf"><code>printf</code></a></h2>
-<pre><code class="language-nr">extern printf&lt;T&gt;(fmt: str, arg: T) void;
+<pre><code class="language-hv">extern printf&lt;T&gt;(fmt: str, arg: T) void;
 </code></pre>
 <p>Print <code>arg</code> to stdout using the C <code>printf</code> format string <code>fmt</code>
 (e.g. <code>printf::&lt;i32&gt;("%d\n", 42)</code>). Exactly one argument is supported, and
 <code>T</code> must match the conversion specifier in <code>fmt</code>.</p>
 <h2 id="print"><a class="header" href="#print"><code>print</code></a></h2>
-<pre><code class="language-nr">proc print(s: str) void
+<pre><code class="language-hv">proc print(s: str) void
 </code></pre>
 <p>Write <code>s</code> to stdout with no trailing newline.</p>
 <h2 id="println"><a class="header" href="#println"><code>println</code></a></h2>
-<pre><code class="language-nr">proc println(s: str) void
+<pre><code class="language-hv">proc println(s: str) void
 </code></pre>
 <p>Write <code>s</code> to stdout followed by a newline.</p>
 <h2 id="printf32"><a class="header" href="#printf32"><code>printf32</code></a></h2>
-<pre><code class="language-nr">proc printf32(fmt: str, arg: f32) void
+<pre><code class="language-hv">proc printf32(fmt: str, arg: f32) void
 </code></pre>
 <p>Print a single <code>f32</code> using the <code>printf</code> format <code>fmt</code> (e.g. <code>"%f\n"</code>). Use
 this rather than <code>printf</code> for <code>f32</code> values, which variadics can’t pass
 correctly on their own.</p>
 <h2 id="slice_len"><a class="header" href="#slice_len"><code>slice_len</code></a></h2>
-<pre><code class="language-nr">proc slice_len&lt;T&gt;(slice: *[T]) u64
+<pre><code class="language-hv">proc slice_len&lt;T&gt;(slice: *[T]) u64
 </code></pre>
 <p>The number of elements in the runtime slice <code>slice</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -719,70 +719,70 @@ for you, in amortized O(1) per push. Create one with <code>vec_new</code> (or
 when you are done with it. A fresh <code>vec_new</code> allocates nothing, so an empty
 Vec is cheap and the first push performs the initial allocation.</p>
 <h2 id="vec-1"><a class="header" href="#vec-1"><code>Vec</code></a></h2>
-<pre><code class="language-nr">struct Vec&lt;T&gt; {
+<pre><code class="language-hv">struct Vec&lt;T&gt; {
     data: *T,  /// heap buffer, or null when cap == 0
     len: u64,  /// number of initialized elements
     cap: u64,  /// number of elements the buffer can hold
 }
 </code></pre>
 <h2 id="vec_new"><a class="header" href="#vec_new"><code>vec_new</code></a></h2>
-<pre><code class="language-nr">proc vec_new&lt;T&gt;() Vec&lt;T&gt;
+<pre><code class="language-hv">proc vec_new&lt;T&gt;() Vec&lt;T&gt;
 </code></pre>
 <p>An empty Vec that owns no allocation yet.</p>
 <h2 id="vec_with_capacity"><a class="header" href="#vec_with_capacity"><code>vec_with_capacity</code></a></h2>
-<pre><code class="language-nr">proc vec_with_capacity&lt;T&gt;(cap: u64) Vec&lt;T&gt;
+<pre><code class="language-hv">proc vec_with_capacity&lt;T&gt;(cap: u64) Vec&lt;T&gt;
 </code></pre>
 <p>An empty Vec with room for <code>cap</code> elements already reserved.</p>
 <h2 id="vec_len"><a class="header" href="#vec_len"><code>vec_len</code></a></h2>
-<pre><code class="language-nr">proc vec_len&lt;T&gt;(v: *Vec&lt;T&gt;) u64
+<pre><code class="language-hv">proc vec_len&lt;T&gt;(v: *Vec&lt;T&gt;) u64
 </code></pre>
 <h2 id="vec_cap"><a class="header" href="#vec_cap"><code>vec_cap</code></a></h2>
-<pre><code class="language-nr">proc vec_cap&lt;T&gt;(v: *Vec&lt;T&gt;) u64
+<pre><code class="language-hv">proc vec_cap&lt;T&gt;(v: *Vec&lt;T&gt;) u64
 </code></pre>
 <h2 id="vec_is_empty"><a class="header" href="#vec_is_empty"><code>vec_is_empty</code></a></h2>
-<pre><code class="language-nr">proc vec_is_empty&lt;T&gt;(v: *Vec&lt;T&gt;) bool
+<pre><code class="language-hv">proc vec_is_empty&lt;T&gt;(v: *Vec&lt;T&gt;) bool
 </code></pre>
 <h2 id="vec_reserve"><a class="header" href="#vec_reserve"><code>vec_reserve</code></a></h2>
-<pre><code class="language-nr">proc vec_reserve&lt;T&gt;(v: *Vec&lt;T&gt;, needed: u64) void
+<pre><code class="language-hv">proc vec_reserve&lt;T&gt;(v: *Vec&lt;T&gt;, needed: u64) void
 </code></pre>
 <p>Ensure the buffer can hold at least <code>needed</code> elements, reallocating (and
 doubling) if it currently cannot. Does nothing when there is already room.</p>
 <h2 id="vec_push"><a class="header" href="#vec_push"><code>vec_push</code></a></h2>
-<pre><code class="language-nr">proc vec_push&lt;T&gt;(v: *Vec&lt;T&gt;, value: T) void
+<pre><code class="language-hv">proc vec_push&lt;T&gt;(v: *Vec&lt;T&gt;, value: T) void
 </code></pre>
 <p>Append <code>value</code> to the end, growing the buffer if it is full.</p>
 <h2 id="vec_get"><a class="header" href="#vec_get"><code>vec_get</code></a></h2>
-<pre><code class="language-nr">proc vec_get&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) T
+<pre><code class="language-hv">proc vec_get&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) T
 </code></pre>
 <p>Read the element at <code>i</code> by value. Out-of-bounds is undefined; guard with len.</p>
 <h2 id="vec_get_ptr"><a class="header" href="#vec_get_ptr"><code>vec_get_ptr</code></a></h2>
-<pre><code class="language-nr">proc vec_get_ptr&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) *T
+<pre><code class="language-hv">proc vec_get_ptr&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64) *T
 </code></pre>
 <p>A pointer to the element at <code>i</code>, for in-place mutation of the slot.</p>
 <h2 id="vec_set"><a class="header" href="#vec_set"><code>vec_set</code></a></h2>
-<pre><code class="language-nr">proc vec_set&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64, value: T) void
+<pre><code class="language-hv">proc vec_set&lt;T&gt;(v: *Vec&lt;T&gt;, i: u64, value: T) void
 </code></pre>
 <p>Overwrite the element at <code>i</code>. Out-of-bounds is undefined; guard with len.</p>
 <h2 id="vec_pop"><a class="header" href="#vec_pop"><code>vec_pop</code></a></h2>
-<pre><code class="language-nr">proc vec_pop&lt;T&gt;(v: *Vec&lt;T&gt;) Option&lt;*T&gt;
+<pre><code class="language-hv">proc vec_pop&lt;T&gt;(v: *Vec&lt;T&gt;) Option&lt;*T&gt;
 </code></pre>
 <p>Remove and return the last element. Returns <code>Option&lt;*T&gt;</code>: <code>some</code> pointing at
 the (now logically dead but still resident) slot, or <code>none</code> when empty.
 The pointer is valid until the next push or free.</p>
 <h2 id="vec_clear"><a class="header" href="#vec_clear"><code>vec_clear</code></a></h2>
-<pre><code class="language-nr">proc vec_clear&lt;T&gt;(v: *Vec&lt;T&gt;) void
+<pre><code class="language-hv">proc vec_clear&lt;T&gt;(v: *Vec&lt;T&gt;) void
 </code></pre>
 <p>Logically empty the Vec without touching its capacity or freeing memory.</p>
 <h2 id="vec_free"><a class="header" href="#vec_free"><code>vec_free</code></a></h2>
-<pre><code class="language-nr">proc vec_free&lt;T&gt;(v: *Vec&lt;T&gt;) void
+<pre><code class="language-hv">proc vec_free&lt;T&gt;(v: *Vec&lt;T&gt;) void
 </code></pre>
 <p>Release the backing allocation and reset to the empty, unallocated state.</p>
 <h2 id="vec_for_each"><a class="header" href="#vec_for_each"><code>vec_for_each</code></a></h2>
-<pre><code class="language-nr">proc vec_for_each&lt;T&gt;(v: *Vec&lt;T&gt;, f: proc(*T) void) void
+<pre><code class="language-hv">proc vec_for_each&lt;T&gt;(v: *Vec&lt;T&gt;, f: proc(*T) void) void
 </code></pre>
 <p>Iterate over the Vec, calling <code>f</code> on each element by pointer.</p>
 <h2 id="vec_map"><a class="header" href="#vec_map"><code>vec_map</code></a></h2>
-<pre><code class="language-nr">proc vec_map&lt;T, U&gt;(v: *Vec&lt;T&gt;, f: proc(*T) U) Vec&lt;U&gt;
+<pre><code class="language-hv">proc vec_map&lt;T, U&gt;(v: *Vec&lt;T&gt;, f: proc(*T) U) Vec&lt;U&gt;
 </code></pre>
 <p>Map each element of the Vec to a new Vec by calling <code>f</code> on each element by pointer.</p>
 

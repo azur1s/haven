@@ -1,6 +1,6 @@
-# noir
+# haven
 
-`noir` is a statically typed programming language and compiler, built specifically for DSP and audio plugin development.
+`haven` is a statically typed programming language and compiler, built specifically for DSP and audio plugin development.
 
 > [!NOTE]
 > This is very alpha and work in progress, codebase can be messy and bugs may arise, please report if you find one.
@@ -15,15 +15,15 @@
 ## Usage
 ```shell
 # compile to an executable
-$ noirc program.nr
+$ havenc program.hv
 $ ./output
 
 # or, compile to a library
-$ noirc lib.nr --shared
+$ havenc lib.hv --shared
 $ clang host.c output.lib -o output
 
 # use the help flag for more info
-$ noirc -h
+$ havenc -h
 ```
 
 ## License

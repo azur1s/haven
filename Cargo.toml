@@ -1,20 +1,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/noir_common",
-    "crates/noir_front",
-    "crates/noir_mid",
-    "crates/noir_back",
-    "bins/noirc",
-    "bins/noirdoc",
+    "crates/haven_common",
+    "crates/haven_front",
+    "crates/haven_mid",
+    "crates/haven_back",
+    "bins/havenc",
+    "bins/havendoc",
 ]
 
 # Shared dependency versions, inherited by members via `{ workspace = true }`.
 [workspace.dependencies]
-noir_common = { path = "crates/noir_common" }
-noir_front = { path = "crates/noir_front" }
-noir_mid = { path = "crates/noir_mid" }
-noir_back = { path = "crates/noir_back" }
+haven_common = { path = "crates/haven_common" }
+haven_front = { path = "crates/haven_front" }
+haven_mid = { path = "crates/haven_mid" }
+haven_back = { path = "crates/haven_back" }
 
 ariadne = "0.6.0"
 bumpalo = "3.20.3"
