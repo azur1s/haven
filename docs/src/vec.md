@@ -2,14 +2,14 @@
 
 std/vec: a growable, heap-backed array.
 
-Layout is a three-word triple: a raw `*T` buffer plus the number of live
-elements (`len`) and the number the buffer can hold (`cap`). Growth is
-amortized O(1): when `len` would exceed `cap` we double the capacity via
-`realloc`, so N pushes cost O(N) total.
+`Vec<T>` is a dynamic array: push elements and it grows its backing buffer
+for you, in amortized O(1) per push. Create one with `vec_new` (or
+`vec_with_capacity` to pre-size), append with `vec_push`, read with
+`vec_get`/`vec_get_ptr`, and walk it with `vec_for_each`/`vec_map`.
 
-A freshly `vec_new`'d Vec allocates nothing. `data` is null and `cap` is 0.
-Because rt_realloc(null, n) behaves like malloc(n), the first push allocates
-lazily. Call `vec_free` when done, a Vec does not free itself.
+A `Vec` owns a heap allocation and does not free itself, call `vec_free`
+when you are done with it. A fresh `vec_new` allocates nothing, so an empty
+Vec is cheap and the first push performs the initial allocation.
 
 ## `Vec`
 

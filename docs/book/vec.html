@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d158feb5.js";
+            window.path_to_searchindex_js = "searchindex-031d866c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -176,13 +176,13 @@
                     <main>
                         <h1 id="vec"><a class="header" href="#vec"><code>vec</code></a></h1>
 <p>std/vec: a growable, heap-backed array.</p>
-<p>Layout is a three-word triple: a raw <code>*T</code> buffer plus the number of live
-elements (<code>len</code>) and the number the buffer can hold (<code>cap</code>). Growth is
-amortized O(1): when <code>len</code> would exceed <code>cap</code> we double the capacity via
-<code>realloc</code>, so N pushes cost O(N) total.</p>
-<p>A freshly <code>vec_new</code>’d Vec allocates nothing. <code>data</code> is null and <code>cap</code> is 0.
-Because rt_realloc(null, n) behaves like malloc(n), the first push allocates
-lazily. Call <code>vec_free</code> when done, a Vec does not free itself.</p>
+<p><code>Vec&lt;T&gt;</code> is a dynamic array: push elements and it grows its backing buffer
+for you, in amortized O(1) per push. Create one with <code>vec_new</code> (or
+<code>vec_with_capacity</code> to pre-size), append with <code>vec_push</code>, read with
+<code>vec_get</code>/<code>vec_get_ptr</code>, and walk it with <code>vec_for_each</code>/<code>vec_map</code>.</p>
+<p>A <code>Vec</code> owns a heap allocation and does not free itself, call <code>vec_free</code>
+when you are done with it. A fresh <code>vec_new</code> allocates nothing, so an empty
+Vec is cheap and the first push performs the initial allocation.</p>
 <h2 id="vec-1"><a class="header" href="#vec-1"><code>Vec</code></a></h2>
 <pre><code class="language-nr">struct Vec&lt;T&gt; {
     data: *T,  /// heap buffer, or null when cap == 0

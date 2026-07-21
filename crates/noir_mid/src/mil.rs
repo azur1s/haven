@@ -1644,7 +1644,7 @@ pub fn lower<'a>(
             TopLevelNode::Struct { name, fields, .. } => {
                 structs.push((*name, fields.clone()));
             }
-            TopLevelNode::Global { name, attributes, ty, value } => {
+            TopLevelNode::Global { name, attributes, ty, value, .. } => {
                 let init = lower_const_init(&mut cx, value);
                 globals.push(Global {
                     name,

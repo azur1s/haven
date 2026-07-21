@@ -1078,7 +1078,7 @@ fn check_toplevel<'a>(
     node: &TopLevel<'a>,
 ) -> Result<(), Error> {
     match &node.value {
-        TopLevelNode::Function { name, attributes, generics, params, return_type, body } => {
+        TopLevelNode::Function { name, attributes, generics, params, return_type, body, .. } => {
             if attributes.iter().any(|a| a.value.name == "export") {
                 // monomorphization isn't implemented yet, so a generic function
                 // has no single concrete ABI to export

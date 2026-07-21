@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d158feb5.js";
+            window.path_to_searchindex_js = "../searchindex-031d866c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9f74e925.js"></script>
@@ -175,6 +175,15 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="dspfilters"><a class="header" href="#dspfilters"><code>dsp/filters</code></a></h1>
+<p>std/dsp/filters: audio filters.</p>
+<p>Three drop-in filter types, from cheapest to most capable: a one-pole
+lowpass, a general-purpose biquad with the standard RBJ EQ responses
+(lowpass, highpass, bandpass, notch, peaking, shelves), and a
+state-variable filter that produces lowpass/highpass/bandpass/notch at once.</p>
+<p>The usage pattern is the same for all three: build one with a constructor
+(<code>cutoff</code>/<code>q</code>/<code>sr</code> in hertz), then call its <code>*_process</code> function once per
+input sample. State lives in the filter struct, so keep it between samples.
+All single precision.</p>
 <h2 id="onepole"><a class="header" href="#onepole"><code>OnePole</code></a></h2>
 <pre><code class="language-nr">struct OnePole {
     a0: f32,
@@ -185,13 +194,16 @@
 <h2 id="onepole_lowpass"><a class="header" href="#onepole_lowpass"><code>onepole_lowpass</code></a></h2>
 <pre><code class="language-nr">proc onepole_lowpass(cutoff: f32, sr: f32) OnePole
 </code></pre>
+<p>A one-pole lowpass with corner frequency <code>cutoff</code> hertz at sample rate <code>sr</code>.</p>
 <h2 id="onepole_set_cutoff"><a class="header" href="#onepole_set_cutoff"><code>onepole_set_cutoff</code></a></h2>
 <pre><code class="language-nr">proc onepole_set_cutoff(f: *OnePole, cutoff: f32, sr: f32) void
 </code></pre>
+<p>Retune an existing one-pole to corner frequency <code>cutoff</code> at sample rate <code>sr</code>.</p>
 <h2 id="onepole_process"><a class="header" href="#onepole_process"><code>onepole_process</code></a></h2>
 <pre><code class="language-nr">@alloc(false)
 proc onepole_process(f: *OnePole, x: f32) f32
 </code></pre>
+<p>Filter one input sample <code>x</code>, returning the filtered output.</p>
 <h2 id="biquad"><a class="header" href="#biquad"><code>Biquad</code></a></h2>
 <pre><code class="language-nr">struct Biquad {
     b0: f32,
@@ -206,42 +218,55 @@ proc onepole_process(f: *OnePole, x: f32) f32
 <h2 id="biquad_from"><a class="header" href="#biquad_from"><code>biquad_from</code></a></h2>
 <pre><code class="language-nr">proc biquad_from(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) Biquad
 </code></pre>
-<p>Normalize raw (b0..a2) by a0 and return a zero-state section.</p>
+<p>Build a biquad from raw coefficients <code>b0..a2</code>, normalizing by <code>a0</code> and
+starting from zero state. The response constructors below are built on this.</p>
 <h2 id="biquad_lowpass"><a class="header" href="#biquad_lowpass"><code>biquad_lowpass</code></a></h2>
 <pre><code class="language-nr">proc biquad_lowpass(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
+<p>Lowpass at <code>cutoff</code> hertz with resonance <code>q</code>, for sample rate <code>sr</code>.</p>
 <h2 id="biquad_highpass"><a class="header" href="#biquad_highpass"><code>biquad_highpass</code></a></h2>
 <pre><code class="language-nr">proc biquad_highpass(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
+<p>Highpass at <code>cutoff</code> hertz with resonance <code>q</code>, for sample rate <code>sr</code>.</p>
 <h2 id="biquad_bandpass"><a class="header" href="#biquad_bandpass"><code>biquad_bandpass</code></a></h2>
 <pre><code class="language-nr">proc biquad_bandpass(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
-<p>Constant 0 dB peak-gain bandpass.</p>
+<p>Bandpass centered at <code>cutoff</code> hertz with <code>q</code> setting the width, normalized to
+0 dB peak gain, for sample rate <code>sr</code>.</p>
 <h2 id="biquad_notch"><a class="header" href="#biquad_notch"><code>biquad_notch</code></a></h2>
 <pre><code class="language-nr">proc biquad_notch(cutoff: f32, q: f32, sr: f32) Biquad
 </code></pre>
+<p>Notch (band-reject) at <code>cutoff</code> hertz with <code>q</code> setting the width, for sample
+rate <code>sr</code>.</p>
 <h2 id="biquad_peak"><a class="header" href="#biquad_peak"><code>biquad_peak</code></a></h2>
 <pre><code class="language-nr">proc biquad_peak(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 </code></pre>
-<p>Peaking EQ: <code>gain_db</code> boost/cut at <code>cutoff</code>, bandwidth set by <code>q</code>.</p>
+<p>Peaking EQ: <code>gain_db</code> boost (or cut) at <code>cutoff</code> hertz, bandwidth set by <code>q</code>,
+for sample rate <code>sr</code>.</p>
 <h2 id="biquad_lowshelf"><a class="header" href="#biquad_lowshelf"><code>biquad_lowshelf</code></a></h2>
 <pre><code class="language-nr">proc biquad_lowshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 </code></pre>
+<p>Low shelf: <code>gain_db</code> boost (or cut) below <code>cutoff</code> hertz, slope set by <code>q</code>,
+for sample rate <code>sr</code>.</p>
 <h2 id="biquad_highshelf"><a class="header" href="#biquad_highshelf"><code>biquad_highshelf</code></a></h2>
 <pre><code class="language-nr">proc biquad_highshelf(cutoff: f32, q: f32, gain_db: f32, sr: f32) Biquad
 </code></pre>
+<p>High shelf: <code>gain_db</code> boost (or cut) above <code>cutoff</code> hertz, slope set by <code>q</code>,
+for sample rate <code>sr</code>.</p>
 <h2 id="biquad_process"><a class="header" href="#biquad_process"><code>biquad_process</code></a></h2>
 <pre><code class="language-nr">@alloc(false)
 proc biquad_process(f: *Biquad, x: f32) f32
 </code></pre>
+<p>Filter one input sample <code>x</code>, returning the filtered output.</p>
 <h2 id="svfout"><a class="header" href="#svfout"><code>SvfOut</code></a></h2>
 <pre><code class="language-nr">struct SvfOut {
-    lp: f32,
-    hp: f32,
-    bp: f32,
-    notch: f32,
+    lp: f32,  /// lowpass output
+    hp: f32,  /// highpass output
+    bp: f32,  /// bandpass output
+    notch: f32,  /// notch (lowpass + highpass) output
 }
 </code></pre>
+<p>The four simultaneous outputs of a state-variable filter for one sample.</p>
 <h2 id="statevariable"><a class="header" href="#statevariable"><code>StateVariable</code></a></h2>
 <pre><code class="language-nr">struct StateVariable {
     g: f32,
@@ -256,13 +281,18 @@ proc biquad_process(f: *Biquad, x: f32) f32
 <h2 id="svf_new"><a class="header" href="#svf_new"><code>svf_new</code></a></h2>
 <pre><code class="language-nr">proc svf_new(cutoff: f32, q: f32, sr: f32) StateVariable
 </code></pre>
+<p>A state-variable filter at <code>cutoff</code> hertz with resonance <code>q</code>, for sample
+rate <code>sr</code>.</p>
 <h2 id="svf_set"><a class="header" href="#svf_set"><code>svf_set</code></a></h2>
 <pre><code class="language-nr">proc svf_set(f: *StateVariable, cutoff: f32, q: f32, sr: f32) void
 </code></pre>
+<p>Retune an existing state-variable filter to <code>cutoff</code> hertz and resonance <code>q</code>,
+for sample rate <code>sr</code>, keeping its running state.</p>
 <h2 id="svf_process"><a class="header" href="#svf_process"><code>svf_process</code></a></h2>
 <pre><code class="language-nr">@alloc(false)
 proc svf_process(f: *StateVariable, x: f32) SvfOut
 </code></pre>
+<p>Filter one input sample <code>x</code>, returning all four responses as an <code>SvfOut</code>.</p>
 
                     </main>
 

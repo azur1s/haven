@@ -24,15 +24,25 @@
 //! * `import std/math { sinf }`   - selective, the named symbols visible
 //!   unqualified as `sinf`.
 //!
-//! the prelude is an implicit import into every user module, with its symbols
-//! visible unqualified (it has no qualifier spelling).
+//! the prelude is an implicit import into every user module, with its `pub`
+//! symbols visible unqualified (it has no qualifier spelling).
+//!
+//! ## visibility
+//!
+//! top-level items are module-private by default; prefix an item with `pub` to
+//! make it importable by other modules. privacy is enforced purely at import
+//! resolution: a non-`pub` item never enters another module's `SymTab`, so it
+//! can't be named through a whole-module (`qual::sym`) or selective import, nor
+//! pulled in by the implicit prelude import. a module always sees all of its own
+//! items regardless of `pub`. `pub` is orthogonal to the `@export` attribute,
+//! which controls LLVM linkage / name mangling, not cross-module visibility.
 //!
 //! ## known v1 limitations
 //!
 //! * only call targets, struct literals and struct *types* get rewritten. a
 //!   top-level function used as a first-class value (not called directly) isn't
 //!   rewritten across modules - same limitation the monomorphizer has.
-//! * no `pub`; every top-level item is public.
+//! * visibility is item-level only; struct *fields* are always public.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -77,14 +87,24 @@ struct Module<'a> {
     items: Vec<TopLevel<'a>>,
 }
 
+/// One entry in a module's symbol table: the final (post-mangling) emitted name
+/// plus whether the item is `pub` (importable by other modules). A module always
+/// sees all of its own symbols; the `is_pub` flag only gates *cross-module*
+/// imports.
+#[derive(Clone, Copy)]
+struct Sym<'a> {
+    name: &'a str,
+    is_pub: bool,
+}
+
 /// The final (post-mangling) name a module exposes per symbol, split by namespace
 /// so call sites and type positions look in the right place.
 #[derive(Default)]
 struct SymTab<'a> {
-    /// Callable names: functions and externs. `sym -> final name`.
-    fns: HashMap<&'a str, &'a str>,
-    /// Struct type names. `sym -> final name`.
-    structs: HashMap<&'a str, &'a str>,
+    /// Callable names: functions and externs. `sym -> (final name, is_pub)`.
+    fns: HashMap<&'a str, Sym<'a>>,
+    /// Struct type names. `sym -> (final name, is_pub)`.
+    structs: HashMap<&'a str, Sym<'a>>,
 }
 
 fn is_export(attrs: &[Attribute]) -> bool {
@@ -417,18 +437,18 @@ fn build_symtab<'a>(m: &Module<'a>, arena: &'a Bump) -> SymTab<'a> {
     let mut st = SymTab::default();
     for tl in &m.items {
         match &tl.value {
-            TopLevelNode::Function { name, attributes, .. } => {
-                st.fns.insert(name, final_fn_name(m, name, attributes, false, arena));
+            TopLevelNode::Function { name, is_pub, attributes, .. } => {
+                st.fns.insert(name, Sym { name: final_fn_name(m, name, attributes, false, arena), is_pub: *is_pub });
             }
-            TopLevelNode::Extern { name, attributes, .. } => {
-                st.fns.insert(name, final_fn_name(m, name, attributes, true, arena));
+            TopLevelNode::Extern { name, is_pub, attributes, .. } => {
+                st.fns.insert(name, Sym { name: final_fn_name(m, name, attributes, true, arena), is_pub: *is_pub });
             }
-            TopLevelNode::Struct { name, attributes, .. } => {
-                st.structs.insert(name, final_struct_name(m, name, attributes, arena));
+            TopLevelNode::Struct { name, is_pub, attributes, .. } => {
+                st.structs.insert(name, Sym { name: final_struct_name(m, name, attributes, arena), is_pub: *is_pub });
             }
             // globals live in the callable/value namespace (referenced as vars).
-            TopLevelNode::Global { name, attributes, .. } => {
-                st.fns.insert(name, final_global_name(m, name, attributes, arena));
+            TopLevelNode::Global { name, is_pub, attributes, .. } => {
+                st.fns.insert(name, Sym { name: final_global_name(m, name, attributes, arena), is_pub: *is_pub });
             }
         }
     }
@@ -567,11 +587,13 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
     for (id, m) in modules.iter().enumerate() {
         let mut scopes = Scopes::default();
 
-        // 1. implicit prelude whole-module import (except into the prelude itself)
+        // 1. implicit prelude whole-module import (except into the prelude itself).
+        //    only `pub` prelude items are pulled in, a private prelude helper
+        //    stays local to the prelude.
         if let Some(pid) = prelude_id {
             if id != pid {
-                for (&k, &v) in &symtabs[pid].fns { scopes.calls.insert(k, v); }
-                for (&k, &v) in &symtabs[pid].structs { scopes.types.insert(k, v); }
+                for (&k, v) in &symtabs[pid].fns { if v.is_pub { scopes.calls.insert(k, v.name); } }
+                for (&k, v) in &symtabs[pid].structs { if v.is_pub { scopes.types.insert(k, v.name); } }
             }
         }
 
@@ -598,46 +620,56 @@ pub fn load_and_merge<'a>(entry: &Path, prelude_src: Option<&'a str>, arena: &'a
                     }
                     qual_owner.insert(qualifier, target_id);
                     let map = scopes.quals.entry(qualifier).or_default();
-                    for (&k, &v) in &target.fns { map.insert(k, v); }
-                    for (&k, &v) in &target.structs { map.insert(k, v); }
+                    // only `pub` items are importable; private ones are invisible
+                    // outside their own module.
+                    for (&k, v) in &target.fns { if v.is_pub { map.insert(k, v.name); } }
+                    for (&k, v) in &target.structs { if v.is_pub { map.insert(k, v.name); } }
                 }
                 Some(syms) => {
                     // selective: the named symbols visible unqualified. a name that
                     // is both a callable and a struct exists in both namespaces, so
                     // it lands in whichever the reference position asks for.
                     for sym in syms {
-                        let mut found = false;
-                        if let Some(&f) = target.fns.get(sym) {
-                            found = true;
-                            if from_import_calls.contains(sym) && scopes.calls.get(sym).copied() != Some(f) {
+                        // a symbol may exist in the target but be private; keep the
+                        // two cases apart so the diagnostic is actionable.
+                        let exists = target.fns.contains_key(sym) || target.structs.contains_key(sym);
+                        let mut imported = false;
+                        if let Some(f) = target.fns.get(sym).filter(|f| f.is_pub) {
+                            imported = true;
+                            if from_import_calls.contains(sym) && scopes.calls.get(sym).copied() != Some(f.name) {
                                 errs.push(Error::new(imp.span.clone(), format!(
                                     "'{}' is imported from more than one module; qualify it with a \
                                      whole-module `import` instead", sym)));
                             }
-                            scopes.calls.insert(sym, f);
+                            scopes.calls.insert(sym, f.name);
                             from_import_calls.insert(sym);
                         }
-                        if let Some(&f) = target.structs.get(sym) {
-                            found = true;
-                            if from_import_types.contains(sym) && scopes.types.get(sym).copied() != Some(f) {
+                        if let Some(f) = target.structs.get(sym).filter(|f| f.is_pub) {
+                            imported = true;
+                            if from_import_types.contains(sym) && scopes.types.get(sym).copied() != Some(f.name) {
                                 errs.push(Error::new(imp.span.clone(), format!(
                                     "struct '{}' is imported from more than one module", sym)));
                             }
-                            scopes.types.insert(sym, f);
+                            scopes.types.insert(sym, f.name);
                             from_import_types.insert(sym);
                         }
-                        if !found {
-                            errs.push(Error::new(imp.span.clone(), format!(
-                                "module '{}' has no exported symbol '{}'", imp.path.join("/"), sym)));
+                        if !imported {
+                            errs.push(Error::new(imp.span.clone(), if exists {
+                                format!("symbol '{}' of module '{}' is private; add `pub` to export it",
+                                    sym, imp.path.join("/"))
+                            } else {
+                                format!("module '{}' has no exported symbol '{}'", imp.path.join("/"), sym)
+                            }));
                         }
                     }
                 }
             }
         }
 
-        // 3. this module's own defs win over imports (inserted last)
-        for (&k, &v) in &symtabs[id].fns { scopes.calls.insert(k, v); }
-        for (&k, &v) in &symtabs[id].structs { scopes.types.insert(k, v); }
+        // 3. this module's own defs win over imports (inserted last). a module
+        //    always sees all of its own symbols, `pub` or not.
+        for (&k, v) in &symtabs[id].fns { scopes.calls.insert(k, v.name); }
+        for (&k, v) in &symtabs[id].structs { scopes.types.insert(k, v.name); }
 
         all_scopes.push(scopes);
     }

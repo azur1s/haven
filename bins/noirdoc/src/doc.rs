@@ -195,10 +195,25 @@ fn render_file(title: &str, file: &Path) -> Result<String, ()> {
     }
 
     for item in &items {
+        // docs describe a module's public surface; private (non-`pub`) items are
+        // implementation details and are omitted entirely.
+        if !item_is_pub(&item.value) {
+            continue;
+        }
         render_item(&mut md, item, &src, &lines);
     }
 
     Ok(md)
+}
+
+/// Whether a top-level item is `pub` (part of the module's public API).
+fn item_is_pub(node: &TopLevelNode) -> bool {
+    match node {
+        TopLevelNode::Function { is_pub, .. }
+        | TopLevelNode::Extern { is_pub, .. }
+        | TopLevelNode::Struct { is_pub, .. }
+        | TopLevelNode::Global { is_pub, .. } => *is_pub,
+    }
 }
 
 fn render_item(md: &mut String, item: &TopLevel, src: &str, lines: &LineIndex) {
@@ -242,7 +257,7 @@ fn signature(node: &TopLevelNode, src: &str, start: usize, end: usize) -> String
             ));
             s
         }
-        TopLevelNode::Extern { name, attributes, generics, params, return_type } => {
+        TopLevelNode::Extern { name, attributes, generics, params, return_type, .. } => {
             let mut s = attr_prefix(attributes);
             s.push_str(&format!(
                 "extern {}{}({}) {};",
@@ -268,7 +283,7 @@ fn signature(node: &TopLevelNode, src: &str, start: usize, end: usize) -> String
             s.push('}');
             s
         }
-        TopLevelNode::Global { name, attributes, ty, value } => {
+        TopLevelNode::Global { name, attributes, ty, value, .. } => {
             let mut s = attr_prefix(attributes);
             s.push_str(&format!("const {}: {} = {};", name, ty, value.value));
             s

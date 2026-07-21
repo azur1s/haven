@@ -448,7 +448,7 @@ impl<'p, 'a> Mono<'p, 'a> {
         b: &Bindings<'a>,
         name_override: Option<&'a str>,
     ) -> TopLevel<'a> {
-        let TopLevelNode::Function { name, attributes, params, return_type, body, .. } = &tl.value
+        let TopLevelNode::Function { name, is_pub, attributes, params, return_type, body, .. } = &tl.value
         else { unreachable!("rebuild_function called on a non-function") };
 
         // any struct instance requested while substituting this function's types
@@ -462,6 +462,7 @@ impl<'p, 'a> Mono<'p, 'a> {
         Metadata::new(
             TopLevelNode::Function {
                 name: name_override.unwrap_or(name),
+                is_pub: *is_pub,
                 attributes: attributes.clone(),
                 generics: Vec::new(),
                 params: new_params,
@@ -606,7 +607,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
             });
         }
         let tl = m.struct_templates[inst.base];
-        let TopLevelNode::Struct { generics, fields, attributes, .. } = &tl.value
+        let TopLevelNode::Struct { generics, fields, attributes, is_pub, .. } = &tl.value
         else { unreachable!() };
         // bind each declared param to its concrete arg (positional): type params to
         // types, const params to values (so `[T; N]` fields substitute both).
@@ -630,6 +631,7 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
         let s = Metadata::new(
             TopLevelNode::Struct {
                 name: inst.mangled,
+                is_pub: *is_pub,
                 attributes: attributes.clone(),
                 generics: Vec::new(),
                 fields: new_fields,

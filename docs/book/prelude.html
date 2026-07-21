@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d158feb5.js";
+            window.path_to_searchindex_js = "searchindex-031d866c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -175,30 +175,33 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="prelude"><a class="header" href="#prelude"><code>prelude</code></a></h1>
-<h2 id="strlen"><a class="header" href="#strlen"><code>strlen</code></a></h2>
-<pre><code class="language-nr">extern strlen(s: str) u64;
-</code></pre>
+<p>std/prelude: the automatically imported module.</p>
+<p>The prelude is imported implicitly into every module, so these items are in
+scope everywhere without an <code>import</code>. It is deliberately tiny.</p>
 <h2 id="printf"><a class="header" href="#printf"><code>printf</code></a></h2>
 <pre><code class="language-nr">extern printf&lt;T&gt;(fmt: str, arg: T) void;
 </code></pre>
-<h2 id="rt_slice_len"><a class="header" href="#rt_slice_len"><code>rt_slice_len</code></a></h2>
-<pre><code class="language-nr">extern rt_slice_len&lt;T&gt;(slice: *[T]) u64;
-</code></pre>
-<h2 id="rt_slice_from_raw_parts"><a class="header" href="#rt_slice_from_raw_parts"><code>rt_slice_from_raw_parts</code></a></h2>
-<pre><code class="language-nr">extern rt_slice_from_raw_parts&lt;T&gt;(ptr: *T, len: u64) *[T];
-</code></pre>
+<p>Print <code>arg</code> to stdout using the C <code>printf</code> format string <code>fmt</code>
+(e.g. <code>printf::&lt;i32&gt;("%d\n", 42)</code>). Exactly one argument is supported, and
+<code>T</code> must match the conversion specifier in <code>fmt</code>.</p>
 <h2 id="print"><a class="header" href="#print"><code>print</code></a></h2>
 <pre><code class="language-nr">proc print(s: str) void
 </code></pre>
+<p>Write <code>s</code> to stdout with no trailing newline.</p>
 <h2 id="println"><a class="header" href="#println"><code>println</code></a></h2>
 <pre><code class="language-nr">proc println(s: str) void
 </code></pre>
+<p>Write <code>s</code> to stdout followed by a newline.</p>
 <h2 id="printf32"><a class="header" href="#printf32"><code>printf32</code></a></h2>
 <pre><code class="language-nr">proc printf32(fmt: str, arg: f32) void
 </code></pre>
+<p>Print a single <code>f32</code> using the <code>printf</code> format <code>fmt</code> (e.g. <code>"%f\n"</code>). Use
+this rather than <code>printf</code> for <code>f32</code> values, which variadics can’t pass
+correctly on their own.</p>
 <h2 id="slice_len"><a class="header" href="#slice_len"><code>slice_len</code></a></h2>
 <pre><code class="language-nr">proc slice_len&lt;T&gt;(slice: *[T]) u64
 </code></pre>
+<p>The number of elements in the runtime slice <code>slice</code>.</p>
 
                     </main>
 

@@ -1,29 +1,13 @@
 # `alloc`
 
-std/alloc: heap allocation.
+std/alloc: typed heap allocation.
 
-Backed by rt_alloc/rt_realloc/rt_free in crt/rt.c (always linked in). The raw
-externs below deal in untyped `*void`; the generic wrappers hand back a typed
-`*T` sized by `sizeof::<T>()`. Reach for these to build growable buffers
-(e.g. a future `Vec<T>`).
-
-## `rt_alloc`
-
-```nr
-extern rt_alloc(size: u64) *void;
-```
-
-## `rt_realloc`
-
-```nr
-extern rt_realloc(ptr: *void, size: u64) *void;
-```
-
-## `rt_free`
-
-```nr
-extern rt_free(ptr: *void) void;
-```
+`alloc`, `realloc` and `dealloc` manage raw heap buffers of `count` values of
+a type `T`, sized automatically from `sizeof::<T>()`. Allocation can fail, so
+each returns an `Option<*T>` that is `none` on failure, unwrap it (or use
+`unwrap_or`) before dereferencing. Memory is not freed for you; pass every
+buffer you allocate to `dealloc` when done. These are the primitives higher
+level containers like `Vec<T>` are built on.
 
 ## `alloc`
 
@@ -32,7 +16,8 @@ extern rt_free(ptr: *void) void;
 proc alloc<T>(count: u64) Option<*T>
 ```
 
-Allocate room for `count` values of type T, uninitialized. Returns a `*T`.
+Allocate uninitialized room for `count` values of type `T`. Returns `some`
+pointer on success, or `none` if the allocation failed.
 
 ## `realloc`
 
@@ -41,7 +26,9 @@ Allocate room for `count` values of type T, uninitialized. Returns a `*T`.
 proc realloc<T>(ptr: *T, count: u64) Option<*T>
 ```
 
-Resize a prior allocation to hold `count` values of type T.
+Resize the allocation at `ptr` to hold `count` values of type `T`, preserving
+existing contents. Returns `some` new pointer on success, or `none` on
+failure (in which case the original allocation is left untouched).
 
 ## `dealloc`
 
@@ -50,5 +37,6 @@ Resize a prior allocation to hold `count` values of type T.
 proc dealloc<T>(ptr: *T) void
 ```
 
-Free a prior allocation.
+Release an allocation obtained from `alloc`/`realloc`. Using `ptr` afterward
+is undefined.
 

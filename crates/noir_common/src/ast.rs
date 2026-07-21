@@ -102,7 +102,7 @@ pub enum Token<'a> {
     Let, If, Else, Return,
     While, Break, Continue,
     Proc, Extern, Const, Struct,
-    Import,
+    Import, Pub,
 }
 
 impl Display for Token<'_> {
@@ -146,6 +146,7 @@ impl Display for Token<'_> {
             Token::Const        => write!(f, "const"),
             Token::Struct       => write!(f, "struct"),
             Token::Import       => write!(f, "import"),
+            Token::Pub          => write!(f, "pub"),
         }
     }
 }
@@ -564,6 +565,9 @@ pub type Attribute<'a> = Metadata<AttributeNode<'a>>;
 pub enum TopLevelNode<'a> {
     Function {
         name: &'a str,
+        /// `true` if declared `pub`; controls whether other modules may import
+        /// it. Default (no `pub`) is module-private. See `noir_front::module`.
+        is_pub: bool,
         attributes: Vec<Attribute<'a>>,
         generics: Vec<GenericParam<'a>>,
         params: Vec<(&'a str, Type<'a>)>,
@@ -572,6 +576,7 @@ pub enum TopLevelNode<'a> {
     },
     Extern {
         name: &'a str,
+        is_pub: bool,
         attributes: Vec<Attribute<'a>>,
         generics: Vec<GenericParam<'a>>,
         params: Vec<(&'a str, Type<'a>)>,
@@ -580,6 +585,7 @@ pub enum TopLevelNode<'a> {
 
     Struct {
         name: &'a str,
+        is_pub: bool,
         attributes: Vec<Attribute<'a>>,
         generics: Vec<GenericParam<'a>>,
         fields: Vec<(&'a str, Type<'a>)>,
@@ -591,6 +597,7 @@ pub enum TopLevelNode<'a> {
     /// so a host can look the symbol up (see the CLAP `clap_entry` use case).
     Global {
         name: &'a str,
+        is_pub: bool,
         attributes: Vec<Attribute<'a>>,
         ty: Type<'a>,
         value: Expr<'a>,
@@ -600,48 +607,52 @@ pub enum TopLevelNode<'a> {
 impl<'a> Display for TopLevelNode<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TopLevelNode::Function { name, attributes, generics, params, return_type, body } => {
+            TopLevelNode::Function { name, is_pub, attributes, generics, params, return_type, body } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
+                let pub_str = if *is_pub { "pub " } else { "" };
                 let generics_str = fmt_generics(generics);
                 let params_str = params.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect::<Vec<_>>().join(", ");
                 let body_str = body.iter().map(|stmt| format!("    {}\n", stmt.value)).collect::<String>();
 
-                write!(f, "{}proc {}{}({}) {} {{\n{}}}", attrs_str, name, generics_str, params_str, return_type, body_str)
+                write!(f, "{}{}proc {}{}({}) {} {{\n{}}}", attrs_str, pub_str, name, generics_str, params_str, return_type, body_str)
             },
-            TopLevelNode::Extern { name, attributes, generics, params, return_type } => {
+            TopLevelNode::Extern { name, is_pub, attributes, generics, params, return_type } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
+                let pub_str = if *is_pub { "pub " } else { "" };
                 let generics_str = fmt_generics(generics);
                 let params_str = params.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect::<Vec<_>>().join(", ");
 
-                write!(f, "{}extern {}{}({}) {};", attrs_str, name, generics_str, params_str, return_type)
+                write!(f, "{}{}extern {}{}({}) {};", attrs_str, pub_str, name, generics_str, params_str, return_type)
             },
-            TopLevelNode::Struct { name, attributes, generics, fields } => {
+            TopLevelNode::Struct { name, is_pub, attributes, generics, fields } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
+                let pub_str = if *is_pub { "pub " } else { "" };
                 let generics_str = fmt_generics(generics);
                 let fields_str = fields.iter().map(|(name, ty)| format!("    {}: {},\n", name, ty)).collect::<String>();
 
-                write!(f, "{}struct {}{} {{\n{}}}", attrs_str, name, generics_str, fields_str)
+                write!(f, "{}{}struct {}{} {{\n{}}}", attrs_str, pub_str, name, generics_str, fields_str)
             },
-            TopLevelNode::Global { name, attributes, ty, value } => {
+            TopLevelNode::Global { name, is_pub, attributes, ty, value } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
+                let pub_str = if *is_pub { "pub " } else { "" };
 
-                write!(f, "{}const {}: {} = {};", attrs_str, name, ty, value.value)
+                write!(f, "{}{}const {}: {} = {};", attrs_str, pub_str, name, ty, value.value)
             },
         }
     }

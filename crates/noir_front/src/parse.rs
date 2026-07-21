@@ -101,6 +101,7 @@ fn lexer<'a> (
         "const"    => Token::Const,
         "struct"   => Token::Struct,
         "import"   => Token::Import,
+        "pub"      => Token::Pub,
         _ => Token::Var(ident),
     });
 
@@ -761,8 +762,15 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         .map(|g| g.unwrap_or_default())
         .boxed();
 
-    let function = parse_attribute()
+    // every top-level item shares the header `[attrs] [pub] <keyword>`: any
+    // attributes, then an optional `pub` marker, then the item keyword. absent
+    // `pub` => module-private. yields `(attributes, is_pub)`.
+    let item_header = parse_attribute()
         .repeated().collect::<Vec<_>>()
+        .then(just(Token::Pub).or_not().map(|o| o.is_some()))
+        .boxed();
+
+    let function = item_header.clone()
         .then_ignore(just(Token::Proc))
         .then(var)
         .then(generics.clone())
@@ -785,8 +793,9 @@ fn parse_toplevel<'tks, 'src: 'tks>()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace))
         )
-        .map(|(((((attributes, name), generics), params), return_type), body)| TopLevelNode::Function {
+        .map(|((((((attributes, is_pub), name), generics), params), return_type), body)| TopLevelNode::Function {
             name,
+            is_pub,
             attributes,
             generics,
             params,
@@ -794,8 +803,7 @@ fn parse_toplevel<'tks, 'src: 'tks>()
             body,
         });
 
-    let extern_ = parse_attribute()
-        .repeated().collect::<Vec<_>>()
+    let extern_ = item_header.clone()
         .then_ignore(just(Token::Extern))
         .then(var)
         .then(generics.clone())
@@ -810,16 +818,16 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         )
         .then(parse_type().or_not().map(|t| t.unwrap_or(Type::Void)))
         .then_ignore(just(Token::Semicolon))
-        .map(|((((attributes, name), generics), params), return_type)| TopLevelNode::Extern {
+        .map(|(((((attributes, is_pub), name), generics), params), return_type)| TopLevelNode::Extern {
             name,
+            is_pub,
             attributes,
             generics,
             params,
             return_type,
         });
 
-    let struct_ = parse_attribute()
-        .repeated().collect::<Vec<_>>()
+    let struct_ = item_header.clone()
         .then_ignore(just(Token::Struct))
         .then(var)
         .then(generics.clone())
@@ -832,16 +840,16 @@ fn parse_toplevel<'tks, 'src: 'tks>()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace))
         )
-        .map(|(((attributes, name), generics), fields)| TopLevelNode::Struct {
+        .map(|((((attributes, is_pub), name), generics), fields)| TopLevelNode::Struct {
             name,
+            is_pub,
             attributes,
             generics,
             fields,
         });
 
-    // module-level constant: `[attrs] const NAME: Type = <expr>;`
-    let global = parse_attribute()
-        .repeated().collect::<Vec<_>>()
+    // module-level constant: `[attrs] [pub] const NAME: Type = <expr>;`
+    let global = item_header.clone()
         .then_ignore(just(Token::Const))
         .then(var.map(|s| *s))
         .then_ignore(just(Token::Colon))
@@ -849,8 +857,9 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         .then_ignore(just(Token::Assign))
         .then(parse_expr())
         .then_ignore(just(Token::Semicolon))
-        .map(|(((attributes, name), ty), value)| TopLevelNode::Global {
+        .map(|((((attributes, is_pub), name), ty), value)| TopLevelNode::Global {
             name,
+            is_pub,
             attributes,
             ty,
             value,

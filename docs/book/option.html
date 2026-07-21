@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d158feb5.js";
+            window.path_to_searchindex_js = "searchindex-031d866c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9f74e925.js"></script>
@@ -175,6 +175,12 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="option"><a class="header" href="#option"><code>option</code></a></h1>
+<p>std/option: an optional pointer type.</p>
+<p><code>Option&lt;*T&gt;</code> holds either a valid <code>*T</code> (<code>some</code>) or nothing (<code>none</code>).
+Emptiness is represented by a null pointer, so this is the standard way for a
+fallible operation (an allocation, a <code>vec_pop</code>, a lookup, etc.), to signal “no
+value” without a sentinel of its own. Test with <code>is_some</code>/<code>is_none</code>, then
+retrieve with <code>unwrap</code> or <code>unwrap_or</code>.</p>
 <h2 id="option-1"><a class="header" href="#option-1"><code>Option</code></a></h2>
 <pre><code class="language-nr">struct Option&lt;T&gt; {
     value: T,
@@ -183,21 +189,28 @@
 <h2 id="some"><a class="header" href="#some"><code>some</code></a></h2>
 <pre><code class="language-nr">proc some&lt;T&gt;(value: *T) Option&lt;*T&gt;
 </code></pre>
+<p>An <code>Option</code> holding the pointer <code>value</code>.</p>
 <h2 id="none"><a class="header" href="#none"><code>none</code></a></h2>
 <pre><code class="language-nr">proc none&lt;T&gt;() Option&lt;*T&gt;
 </code></pre>
+<p>The empty <code>Option</code>.</p>
 <h2 id="is_some"><a class="header" href="#is_some"><code>is_some</code></a></h2>
 <pre><code class="language-nr">proc is_some&lt;T&gt;(o: Option&lt;*T&gt;) bool
 </code></pre>
+<p>Whether the <code>Option</code> holds a value.</p>
 <h2 id="is_none"><a class="header" href="#is_none"><code>is_none</code></a></h2>
 <pre><code class="language-nr">proc is_none&lt;T&gt;(o: Option&lt;*T&gt;) bool
 </code></pre>
+<p>Whether the <code>Option</code> is empty.</p>
 <h2 id="unwrap"><a class="header" href="#unwrap"><code>unwrap</code></a></h2>
 <pre><code class="language-nr">proc unwrap&lt;T&gt;(o: Option&lt;*T&gt;) *T
 </code></pre>
+<p>The contained pointer. On <code>none</code> this prints an error and returns the null
+pointer rather than aborting, so guard with <code>is_some</code> when <code>none</code> is possible.</p>
 <h2 id="unwrap_or"><a class="header" href="#unwrap_or"><code>unwrap_or</code></a></h2>
 <pre><code class="language-nr">proc unwrap_or&lt;T&gt;(o: Option&lt;*T&gt;, default: *T) *T
 </code></pre>
+<p>The contained pointer, or <code>default</code> when the <code>Option</code> is empty.</p>
 
                     </main>
 

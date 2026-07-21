@@ -1,9 +1,14 @@
-/// std/alloc: heap allocation.
+/// std/alloc: typed heap allocation.
 ///
-/// Backed by rt_alloc/rt_realloc/rt_free in crt/rt.c (always linked in). The raw
-/// externs below deal in untyped `*void`; the generic wrappers hand back a typed
-/// `*T` sized by `sizeof::<T>()`. Reach for these to build growable buffers
-/// (e.g. a future `Vec<T>`).
+/// `alloc`, `realloc` and `dealloc` manage raw heap buffers of `count` values of
+/// a type `T`, sized automatically from `sizeof::<T>()`. Allocation can fail, so
+/// each returns an `Option<*T>` that is `none` on failure, unwrap it (or use
+/// `unwrap_or`) before dereferencing. Memory is not freed for you; pass every
+/// buffer you allocate to `dealloc` when done. These are the primitives higher
+/// level containers like `Vec<T>` are built on.
+
+// backed by rt_alloc/rt_realloc/rt_free in crt/rt.c (always linked in). the raw
+// externs deal in untyped `*void`; the generic wrappers add the typing + sizing.
 
 import std/option { Option, none, some }
 
@@ -11,9 +16,10 @@ extern rt_alloc(size: u64) *void;
 extern rt_realloc(ptr: *void, size: u64) *void;
 extern rt_free(ptr: *void) void;
 
-/// Allocate room for `count` values of type T, uninitialized. Returns a `*T`.
+/// Allocate uninitialized room for `count` values of type `T`. Returns `some`
+/// pointer on success, or `none` if the allocation failed.
 @alloc(true)
-proc alloc<T>(count: u64) Option<*T> {
+pub proc alloc<T>(count: u64) Option<*T> {
     let ptr: *void = rt_alloc(count * sizeof::<T>());
     if (ptr == null::<*void>()) {
         return none::<T>();
@@ -21,9 +27,11 @@ proc alloc<T>(count: u64) Option<*T> {
     return some::<T>(ptr_cast::<*T>(ptr));
 }
 
-/// Resize a prior allocation to hold `count` values of type T.
+/// Resize the allocation at `ptr` to hold `count` values of type `T`, preserving
+/// existing contents. Returns `some` new pointer on success, or `none` on
+/// failure (in which case the original allocation is left untouched).
 @alloc(true)
-proc realloc<T>(ptr: *T, count: u64) Option<*T> {
+pub proc realloc<T>(ptr: *T, count: u64) Option<*T> {
     let new_ptr: *void = rt_realloc(ptr_cast::<*void>(ptr), count * sizeof::<T>());
     if (new_ptr == null::<*void>()) {
         return none::<T>();
@@ -31,8 +39,9 @@ proc realloc<T>(ptr: *T, count: u64) Option<*T> {
     return some::<T>(ptr_cast::<*T>(new_ptr));
 }
 
-/// Free a prior allocation.
+/// Release an allocation obtained from `alloc`/`realloc`. Using `ptr` afterward
+/// is undefined.
 @alloc(true)
-proc dealloc<T>(ptr: *T) void {
+pub proc dealloc<T>(ptr: *T) void {
     rt_free(ptr_cast::<*void>(ptr));
 }
