@@ -613,7 +613,7 @@ fn write_book_toml(out: &Path, title: &str) -> Result<(), ()> {
     // default and the preferred dark theme.
     let toml = format!(
         "[book]\ntitle = \"{}\"\nlanguage = \"en\"\nsrc = \"src\"\n\n\
-         [output.html]\ndefault-theme = \"navy\"\npreferred-dark-theme = \"navy\"\n",
+         [output.html]\ndefault-theme = \"navy\"\npreferred-dark-theme = \"navy\"\nhash-files = false\n",
         title.replace('"', "\\\"")
     );
     let path = out.join("book.toml");
