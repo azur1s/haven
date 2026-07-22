@@ -1,0 +1,13 @@
+//@ error: cannot cross an @export/extern boundary
+// a data-carrying enum can't cross @export yet (deferred to Stage-3 Phase 4).
+enum Msg { Stop, Note(u8, f32) }
+
+@export
+proc take(m: Msg) i32 {
+    return 0;
+}
+
+@export
+proc main() i32 {
+    return 0;
+}

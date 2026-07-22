@@ -714,8 +714,9 @@ fn parse_stmt<'tks, 'src: 'tks>()
                 body: Box::new(body),
             });
 
-        // a match pattern: `Enum::Variant`, an integer literal (opt. negative),
-        // or `_`. Field-less (no binding patterns) for Stage 2.
+        // a match pattern: `Enum::Variant`, a data-variant destructure
+        // `Enum::Variant(binding, ...)`, an integer literal (opt. negative), or
+        // `_`. A binding field is a name (`Bind`) or `_` (ignore the field).
         let int_pat = just(Token::BinaryOp(BinaryOp::Sub)).or_not()
             .then(select_ref! {
                 Token::Int8(n)   => *n as i64,
@@ -726,8 +727,27 @@ fn parse_stmt<'tks, 'src: 'tks>()
                 Token::Uint64(n) => *n as i64,
             })
             .map(|(neg, n)| PatternNode::Int(if neg.is_some() { -n } else { n }));
+        // each payload sub-pattern is Metadata-wrapped so a `Bind` carries a
+        // unique node id (its binding identity, like a `Declare`'s local).
+        let field_pat = var.map_with(|s, e| {
+            let node = if *s == "_" { PatternNode::Wildcard } else { PatternNode::Bind(*s) };
+            Metadata::new(node, e.span())
+        });
+        let variant_tail = field_pat
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
         let path_pat = var.then_ignore(just(Token::ColonColon)).then(var)
-            .map(|(a, b)| PatternNode::Path(leak(format!("{}::{}", a, b))));
+            .then(variant_tail.or_not())
+            .map(|((a, b), fields)| {
+                let path = leak(format!("{}::{}", a, b));
+                match fields {
+                    Some(fields) => PatternNode::Variant { path, fields },
+                    None => PatternNode::Path(path),
+                }
+            });
         let wild_pat = var.try_map(|s, span| if *s == "_" {
             Ok(PatternNode::Wildcard)
         } else {
@@ -938,23 +958,35 @@ fn parse_toplevel<'tks, 'src: 'tks>()
             value,
         });
 
-    // a field-less enum variant: a name with an optional explicit `= <int>`
-    // discriminant (a leading `-` is allowed for negative discriminants).
+    // an enum variant: a name, an optional tuple payload `(T, U, ...)`, and an
+    // optional explicit `= <int>` discriminant (a leading `-` is allowed for
+    // negative discriminants). Tuple-payload field names are synthesized `"0"`,
+    // `"1"`, ...; a discriminant is only meaningful on a unit (payload-less)
+    // variant, which typecheck enforces.
+    let enum_payload = parse_type()
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .map(|tys| tys.into_iter().enumerate()
+            .map(|(i, ty)| (leak(i.to_string()), ty))
+            .collect::<Vec<(&str, Type)>>());
+    let enum_discriminant = just(Token::Assign)
+        .ignore_then(just(Token::BinaryOp(BinaryOp::Sub)).or_not())
+        .then(select_ref! {
+            Token::Int8(n)   => *n as i64,
+            Token::Int32(n)  => *n as i64,
+            Token::Int64(n)  => *n,
+            Token::Uint8(n)  => *n as i64,
+            Token::Uint32(n) => *n as i64,
+            Token::Uint64(n) => *n as i64,
+        })
+        .map(|(neg, n)| if neg.is_some() { -n } else { n });
     let enum_variant = var.map(|s| *s)
-        .then(
-            just(Token::Assign)
-                .ignore_then(just(Token::BinaryOp(BinaryOp::Sub)).or_not())
-                .then(select_ref! {
-                    Token::Int8(n)   => *n as i64,
-                    Token::Int32(n)  => *n as i64,
-                    Token::Int64(n)  => *n,
-                    Token::Uint8(n)  => *n as i64,
-                    Token::Uint32(n) => *n as i64,
-                    Token::Uint64(n) => *n as i64,
-                })
-                .map(|(neg, n)| if neg.is_some() { -n } else { n })
-                .or_not()
-        );
+        .then(enum_payload.or_not().map(|p| p.unwrap_or_default()))
+        .then(enum_discriminant.or_not())
+        .map(|((name, payload), disc)| (name, disc, payload));
 
     let enum_ = item_header.clone()
         .then_ignore(just(Token::Enum))

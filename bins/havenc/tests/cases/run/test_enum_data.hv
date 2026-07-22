@@ -1,0 +1,49 @@
+// Data-carrying enums (ADTs / sum types), Stage-3 Phase 1: unit + tuple
+// variants, constructing them, `match` binding the payload, a mixed-alignment
+// payload (`u8` then `f32`), and passing/returning a data enum by value
+// (by-pointer param + sret) across a non-export call.
+
+enum Msg {
+    Stop,            // unit variant of a data enum (aggregate, tag only)
+    Note(u8, f32),   // tuple variant, mixed-align payload
+    Vol(i32),        // single-field tuple variant
+}
+
+// destructure the payload with a `match`; exhaustive, so no trailing return.
+proc pitch_of(m: Msg) i32 {
+    match (m) {
+        Msg::Note(p, v) -> { return numerical_cast::<i32>(p); }
+        Msg::Vol(x)     -> { return x; }
+        Msg::Stop       -> { return -1; }
+    }
+}
+
+// take a data enum by value and return one by value (sret round-trip).
+proc bump(m: Msg) Msg {
+    match (m) {
+        Msg::Vol(x) -> { return Msg::Vol(x + 1); }
+        _           -> { return m; }
+    }
+}
+
+@export
+proc main() i32 {
+    let a: Msg = Msg::Note(60u8, 1.5f32);
+    let b: Msg = Msg::Vol(7);
+    let c: Msg = Msg::Stop;
+
+    printf::<i32>("%d\n", pitch_of(a)); // 60
+    printf::<i32>("%d\n", pitch_of(b)); // 7
+    printf::<i32>("%d\n", pitch_of(c)); // -1
+
+    // pass by value, return by value
+    let d: Msg = bump(b);               // Vol(8)
+    printf::<i32>("%d\n", pitch_of(d)); // 8
+
+    // the f32 payload field round-trips; cast to int to avoid float printf.
+    match (a) {
+        Msg::Note(p, v) -> { printf::<i32>("%d\n", numerical_cast::<i32>(v)); } // 1
+        _               -> {}
+    }
+    return 0;
+}

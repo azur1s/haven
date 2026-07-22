@@ -1,0 +1,9 @@
+//@ error: carries a payload
+// a tuple variant used bare (no `(...)`) is a missing constructor call.
+enum Msg { Stop, Note(u8, f32) }
+
+@export
+proc main() i32 {
+    let m: Msg = Msg::Note;
+    return 0;
+}

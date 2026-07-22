@@ -1,0 +1,12 @@
+//@ error: has 2 field(s) but the pattern binds 1
+// destructuring a variant with the wrong number of bindings is rejected.
+enum Msg { Stop, Note(u8, f32) }
+
+@export
+proc main() i32 {
+    let m: Msg = Msg::Note(60u8, 1.5f32);
+    match (m) {
+        Msg::Note(p) -> { return numerical_cast::<i32>(p); }
+        Msg::Stop    -> { return 0; }
+    }
+}

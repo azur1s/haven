@@ -263,12 +263,16 @@ pub enum Type<'a> {
     /// instance with a mangled `name` and no `args` (like generic functions). Use
     /// [`Type::plain_struct`] to build the common no-args case.
     Struct { name: &'a str, args: Vec<GenericArg<'a>> },
-    /// A named (field-less, C-style) enum. `repr` is the integer type its
-    /// discriminant is stored as (default `i32`, or set by `@repr(<int>)`). The
-    /// repr is baked into the type so layout/codegen just delegate to it; `name`
-    /// keeps enum values distinct from a plain integer for typechecking. Produced
-    /// by typecheck when a `Struct(name)` resolves to a declared enum.
-    Enum { name: &'a str, repr: Box<Self> },
+    /// A named enum. `repr` is the integer type its discriminant is stored as
+    /// (default `i32`, or set by `@repr(<int>)`). `has_payload` is `false` for a
+    /// field-less C-style enum - a bare scalar discriminant, zero overhead - and
+    /// `true` for a data-carrying (ADT / sum-type) enum, which is an aggregate
+    /// `{ tag: repr, payload: [P x i8] }` laid out via a synthetic struct of the
+    /// same `name` (see the mid end's forward-declaration pass). The repr is baked
+    /// into the type so scalar layout/codegen just delegate to it; `name` keeps
+    /// enum values distinct from a plain integer for typechecking. Produced by
+    /// typecheck when a `Struct(name)` resolves to a declared enum.
+    Enum { name: &'a str, repr: Box<Self>, has_payload: bool },
     /// A generic type parameter, e.g. `T`.
     /// Produced during typechecking by resolving a `Struct(name)` where the name
     /// matches a type param in scope. It is abstract and must never survive to
@@ -525,18 +529,42 @@ pub enum StmtNode<'a> {
     Return(Expr<'a>),
 }
 
-/// A `match` arm pattern (field-less, Stage 2).
+/// A `match` arm pattern.
 #[derive(Clone, Debug)]
 pub enum PatternNode<'a> {
-    /// `_` - matches anything; the default arm.
+    /// `_` - matches anything; the default arm. Also used as a field position in a
+    /// `Variant` pattern to ignore that payload field.
     Wildcard,
     /// an integer-literal pattern, e.g. `5` or `-1`.
     Int(i64),
-    /// an enum-variant pattern, e.g. `Status::Continue` (stored joined).
+    /// a field-less enum-variant pattern, e.g. `Status::Continue` (stored joined).
     Path(&'a str),
+    /// a data-carrying enum-variant pattern that destructures the payload, e.g.
+    /// `Msg::Note(pitch, vel)`. `path` is the joined `Enum::Variant`; `fields` is
+    /// one sub-pattern per payload field (`Bind` to name it, `Wildcard` to ignore).
+    Variant { path: &'a str, fields: Vec<Pattern<'a>> },
+    /// a binding introduced by a `Variant` field, e.g. the `pitch` in
+    /// `Msg::Note(pitch, vel)`. Metadata-wrapped so each binding has a unique node
+    /// id (its binding identity, mirroring how a `Declare` keys its local).
+    Bind(&'a str),
 }
 
 pub type Pattern<'a> = Metadata<PatternNode<'a>>;
+
+impl<'a> Display for PatternNode<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PatternNode::Wildcard => write!(f, "_"),
+            PatternNode::Int(n) => write!(f, "{}", n),
+            PatternNode::Path(s) => write!(f, "{}", s),
+            PatternNode::Bind(name) => write!(f, "{}", name),
+            PatternNode::Variant { path, fields } => {
+                let inner = fields.iter().map(|p| p.value.to_string()).collect::<Vec<_>>().join(", ");
+                write!(f, "{}({})", path, inner)
+            }
+        }
+    }
+}
 
 impl<'a> Display for StmtNode<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -559,12 +587,7 @@ impl<'a> Display for StmtNode<'a> {
             StmtNode::While { condition, body } => write!(f, "while ({}) {}", condition.value, body.value),
             StmtNode::Match { scrutinee, arms } => {
                 let arms_str = arms.iter().map(|(p, body)| {
-                    let pat = match &p.value {
-                        PatternNode::Wildcard => "_".to_string(),
-                        PatternNode::Int(n) => n.to_string(),
-                        PatternNode::Path(s) => s.to_string(),
-                    };
-                    format!("    {} -> {}", pat, body.value)
+                    format!("    {} -> {}", p.value, body.value)
                 }).collect::<Vec<_>>().join("\n");
                 write!(f, "match ({}) {{\n{}\n}}", scrutinee.value, arms_str)
             },
@@ -641,15 +664,19 @@ pub enum TopLevelNode<'a> {
     },
 
     /// A field-less, C-style enum: `enum Status { Continue, Sleep = 5, Error }`.
-    /// Each variant is a name with an optional explicit discriminant; unspecified
-    /// discriminants continue from the previous one + 1 (starting at 0), as in C.
-    /// The discriminant's integer type is set by `@repr(<int>)` in `attributes`
-    /// (default `i32`). Field-less only for now (no payloads / no `match`).
+    /// Each variant is `(name, optional explicit discriminant, payload fields)`.
+    /// Unspecified discriminants continue from the previous one + 1 (starting at
+    /// 0), as in C. The discriminant's integer type is set by `@repr(<int>)` in
+    /// `attributes` (default `i32`). A variant's payload is a list of `(field
+    /// name, type)`: empty for a unit variant (`Stop`); for a tuple variant
+    /// (`Note(u8, f32)`) the fields get synthesized names `"0"`, `"1"`, ...; for a
+    /// struct variant (`Cc { id: u32 }`, Stage-3 Phase 2) the real names. A carried
+    /// discriminant is only meaningful on a unit variant.
     Enum {
         name: &'a str,
         is_pub: bool,
         attributes: Vec<Attribute<'a>>,
-        variants: Vec<(&'a str, Option<i64>)>,
+        variants: Vec<(&'a str, Option<i64>, Vec<(&'a str, Type<'a>)>)>,
     },
 
     /// A module-level constant, e.g. `const SR: f32 = 48000.0;`. The initializer
@@ -722,9 +749,16 @@ impl<'a> Display for TopLevelNode<'a> {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
                 let pub_str = if *is_pub { "pub " } else { "" };
-                let variants_str = variants.iter().map(|(vname, val)| match val {
-                    Some(v) => format!("    {} = {},\n", vname, v),
-                    None => format!("    {},\n", vname),
+                let variants_str = variants.iter().map(|(vname, val, payload)| {
+                    let payload_str = if payload.is_empty() {
+                        String::new()
+                    } else {
+                        format!("({})", payload.iter().map(|(_, ty)| ty.to_string()).collect::<Vec<_>>().join(", "))
+                    };
+                    match val {
+                        Some(v) => format!("    {}{} = {},\n", vname, payload_str, v),
+                        None => format!("    {}{},\n", vname, payload_str),
+                    }
                 }).collect::<String>();
 
                 write!(f, "{}{}enum {} {{\n{}}}", attrs_str, pub_str, name, variants_str)

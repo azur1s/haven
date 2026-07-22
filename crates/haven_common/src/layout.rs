@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use haven_common::ast::Type;
+use crate::ast::Type;
 
 /// Struct definitions, keyed by name: each maps to its ordered `(field, type)`
 /// list. This is the same shape `LowerCtx.structs` already carries (see
@@ -52,8 +52,12 @@ pub fn size_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
         Slice(_) => aggregate_layout(fat_pointer_fields().iter(), structs).0,
         // `str` is a raw `*const u8` - a single machine pointer.
         Str => POINTER_SIZE,
-        // an enum is stored as its integer discriminant repr.
-        Enum { repr, .. } => size_of(repr, structs),
+        // a field-less enum is stored as its integer discriminant repr; a
+        // data-carrying enum is the aggregate `{ tag, payload }` registered as a
+        // synthetic struct of the same name (see typecheck's forward-decl pass).
+        Enum { has_payload: false, repr, .. } => size_of(repr, structs),
+        Enum { has_payload: true, name, .. } =>
+            aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).0,
 
         Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).0,
 
@@ -84,7 +88,9 @@ pub fn align_of<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> usize {
 
         Slice(_) => aggregate_layout(fat_pointer_fields().iter(), structs).1,
         Str => POINTER_ALIGN,
-        Enum { repr, .. } => align_of(repr, structs),
+        Enum { has_payload: false, repr, .. } => align_of(repr, structs),
+        Enum { has_payload: true, name, .. } =>
+            aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).1,
 
         Struct { name, .. } => aggregate_layout(struct_fields(name, structs).iter().map(|(_, t)| t), structs).1,
 
@@ -225,17 +231,39 @@ mod tests {
         assert_eq!((size_of(&outer, &s), align_of(&outer, &s)), (12, 4));
 
         // [Inner; 3] is 24 bytes, align 4.
-        let arr = Type::Array(Box::new(Type::plain_struct("Inner")), haven_common::ast::ConstVal::Lit(3));
+        let arr = Type::Array(Box::new(Type::plain_struct("Inner")), crate::ast::ConstVal::Lit(3));
         assert_eq!((size_of(&arr, &s), align_of(&arr, &s)), (24, 4));
+    }
+
+    #[test]
+    fn data_enum_aggregate() {
+        // enum Msg { Note(u8, f32) }: the payload struct {u8@0, f32@4} is 8/4
+        // (mixed alignment), and the aggregate { tag: i32, payload: [8 x i8] } is
+        // 12/4 with the payload blob right after the tag at offset 4.
+        let s = table(&[
+            ("Msg$Note", vec![("0", Type::Uint8), ("1", Type::Float32)]),
+            ("Msg", vec![
+                ("$tag", Type::Int32),
+                ("$payload", Type::Array(Box::new(Type::Int8), crate::ast::ConstVal::Lit(8))),
+            ]),
+        ]);
+        let note = Type::plain_struct("Msg$Note");
+        assert_eq!((size_of(&note, &s), align_of(&note, &s)), (8, 4));
+        assert_eq!(field_offset("Msg$Note", 1, &s), 4); // f32 padded past the u8
+
+        // a data-carrying enum sizes via its synthetic aggregate struct.
+        let msg = Type::Enum { name: "Msg", repr: Box::new(Type::Int32), has_payload: true };
+        assert_eq!((size_of(&msg, &s), align_of(&msg, &s)), (12, 4));
+        assert_eq!(field_offset("Msg", 1, &s), 4); // payload blob after the tag
     }
 
     #[test]
     fn simd_and_fat_pointers() {
         let s = table(&[]);
         // <2 x f32> -> 8 bytes, align 8; <4 x f32> -> 16 bytes, align 16.
-        let v2 = Type::Simd(Box::new(Type::Float32), haven_common::ast::ConstVal::Lit(2));
+        let v2 = Type::Simd(Box::new(Type::Float32), crate::ast::ConstVal::Lit(2));
         assert_eq!((size_of(&v2, &s), align_of(&v2, &s)), (8, 8));
-        let v4 = Type::Simd(Box::new(Type::Float32), haven_common::ast::ConstVal::Lit(4));
+        let v4 = Type::Simd(Box::new(Type::Float32), crate::ast::ConstVal::Lit(4));
         assert_eq!((size_of(&v4, &s), align_of(&v4, &s)), (16, 16));
 
         // slice fat pointer: { ptr@0, i32@8 } -> 16 bytes, align 8.

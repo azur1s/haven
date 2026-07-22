@@ -1,0 +1,9 @@
+//@ error: Expected u8, got i32
+// a constructor argument whose type doesn't match the payload field is rejected.
+enum Msg { Stop, Note(u8, f32) }
+
+@export
+proc main() i32 {
+    let m: Msg = Msg::Note(1000i32, 1.5f32);
+    return 0;
+}

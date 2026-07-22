@@ -1,0 +1,9 @@
+//@ error: expects 2 field(s), got 1
+// constructing a tuple variant with the wrong number of fields is rejected.
+enum Msg { Stop, Note(u8, f32) }
+
+@export
+proc main() i32 {
+    let m: Msg = Msg::Note(60u8);
+    return 0;
+}

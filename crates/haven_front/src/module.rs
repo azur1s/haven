@@ -284,6 +284,16 @@ impl<'x, 'a> Rewriter<'x, 'a> {
     /// intrinsics, or errors caught later).
     fn call_name(&mut self, name: &mut &'a str, span: &Span) {
         let full: &str = *name;
+        if let Some((qual, _sym)) = full.split_once("::") {
+            // a data-enum constructor `Enum::Variant(...)` parses as a call whose
+            // callee is `Var("Enum::Variant")`. `Enum` names a type (enums live in
+            // the type namespace), not a module qualifier - so leave the whole name
+            // untouched for typecheck's constructor path instead of erroring on an
+            // "unknown module qualifier".
+            if self.scopes.types.contains_key(qual) {
+                return;
+            }
+        }
         if let Some((qual, sym)) = full.split_once("::") {
             match self.scopes.quals.get(qual) {
                 Some(map) => match map.get(sym) {

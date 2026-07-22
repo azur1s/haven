@@ -299,10 +299,15 @@ fn signature(node: &TopLevelNode, src: &str, start: usize, end: usize) -> String
         TopLevelNode::Enum { name, attributes, variants, .. } => {
             let mut s = attr_prefix(attributes);
             s.push_str(&format!("enum {} {{\n", name));
-            for (vname, val) in variants {
+            for (vname, val, payload) in variants {
+                let payload_str = if payload.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", payload.iter().map(|(_, ty)| ty.to_string()).collect::<Vec<_>>().join(", "))
+                };
                 match val {
-                    Some(v) => s.push_str(&format!("    {} = {},\n", vname, v)),
-                    None => s.push_str(&format!("    {},\n", vname)),
+                    Some(v) => s.push_str(&format!("    {}{} = {},\n", vname, payload_str, v)),
+                    None => s.push_str(&format!("    {}{},\n", vname, payload_str)),
                 }
             }
             s.push('}');

@@ -1,6 +1,27 @@
 use std::collections::{HashMap, HashSet};
 use haven_common::ast::*;
+use haven_common::layout;
 use crate::intrinsics::{Intrinsic, IntrinsicSig, TyConstraint, ConstBound};
+
+/// Field index of the discriminant tag in a data-enum aggregate's synthetic
+/// struct, and of the payload byte-blob. Referenced by name in the struct table
+/// and by index in MIL lowering (`FieldPtr`).
+pub const ENUM_TAG_FIELD: &str = "$tag";
+pub const ENUM_PAYLOAD_FIELD: &str = "$payload";
+
+/// The synthetic payload-struct name for a data variant, e.g. `Msg::Note` ->
+/// `Msg$Note`. `$` can't appear in a source identifier, so this never collides
+/// with a user type. Leaked to `'static` (coerces to any `'a`), as elsewhere in
+/// the pipeline - the compiler is a short-lived process.
+pub fn enum_payload_struct_name(enum_name: &str, variant: &str) -> &'static str {
+    Box::leak(format!("{}${}", enum_name, variant).into_boxed_str())
+}
+
+/// Leak a `String` to `'static` (coerces to any `'a`). Used for synthesized
+/// tuple-payload field names (`"0"`, `"1"`, ...).
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
 
 /// A generic function's signature, in terms of its own type params. param/return
 /// types hold `Type::Param`. Used to typecheck calls before mono materializes the
@@ -58,11 +79,18 @@ pub struct Context<'a> {
     pub enums: HashMap<&'a str, EnumDef<'a>>,
 }
 
-/// A field-less enum's definition: the discriminant repr and variant values.
+/// A declared enum's definition: the discriminant repr, variant discriminant
+/// values, and (for data-carrying variants) their payload field types.
 #[derive(Clone, Debug)]
 pub struct EnumDef<'a> {
     pub repr: Type<'a>,
     pub variants: HashMap<&'a str, i64>,
+    /// Payload field types per variant, keyed by variant name. A unit variant has
+    /// an empty vec (or no entry). Resolved (enum names rewritten to `Type::Enum`).
+    pub payloads: HashMap<&'a str, Vec<Type<'a>>>,
+    /// `true` if any variant carries a payload - the enum is then an aggregate
+    /// (`Type::Enum { has_payload: true }`) rather than a bare scalar discriminant.
+    pub has_payload: bool,
 }
 
 impl<'a> Context<'a> {
@@ -529,10 +557,19 @@ fn infer<'a>(
         ExprNode::Str(_)     => Type::Str,
 
         ExprNode::Var(name) => {
-            // an `Enum::Variant` reference is an enum-typed constant (its value is
-            // the discriminant; MIL emits the literal). No local binding to record.
+            // an `Enum::Variant` reference. A unit variant is a value: a field-less
+            // enum's scalar discriminant, or (for a data enum) an aggregate with no
+            // payload. A tuple/struct variant used bare is a missing constructor
+            // call - `Msg::Note` needs `Msg::Note(...)`.
             if let Some((ename, _val, repr)) = enum_variant(cx, name) {
-                Type::Enum { name: ename, repr: Box::new(repr) }
+                let variant = name.split_once("::").unwrap().1;
+                if cx.enums[ename].payloads.get(variant).is_some_and(|p| !p.is_empty()) {
+                    return Err(Error {
+                        msg: format!("variant '{}' carries a payload; construct it with `{}(...)`", name, name),
+                        span,
+                    });
+                }
+                Type::Enum { name: ename, repr: Box::new(repr), has_payload: cx.enums[ename].has_payload }
             } else {
                 let Some((binding, ty)) = cx.lookup(name) else {
                     let msg = format!("Undefined variable '{}'", name);
@@ -826,6 +863,33 @@ fn infer<'a>(
             typecheck_intrinsic(cx, intrinsic, type_args, args, span, metadata.id)?
         },
         ExprNode::Call { func, type_args, args } => {
+            // a data-enum constructor `E::V(args...)` looks like a call but names
+            // no function; check arity + each arg against the payload field types
+            // and yield the aggregate enum type. Guarded before ordinary dispatch.
+            if let ExprNode::Var(cname) = &func.value {
+                if let Some((ename, payload_tys)) = enum_variant_ctor(cx, cname) {
+                    if !type_args.is_empty() {
+                        return Err(Error {
+                            msg: format!("enum constructor '{}' takes no type arguments", cname),
+                            span,
+                        });
+                    }
+                    if args.len() != payload_tys.len() {
+                        return Err(Error {
+                            msg: format!("variant '{}' expects {} field(s), got {}",
+                                cname, payload_tys.len(), args.len()),
+                            span,
+                        });
+                    }
+                    for (pty, arg) in payload_tys.iter().zip(args.iter()) {
+                        check_expr(cx, pty, arg)?;
+                    }
+                    let repr = cx.enums[ename].repr.clone();
+                    let ty = Type::Enum { name: ename, repr: Box::new(repr), has_payload: cx.enums[ename].has_payload };
+                    cx.node_types.insert(expr.id, ty.clone());
+                    return Ok(ty);
+                }
+            }
             // user generic call (`foo::<T>(...)`) check against the generic sig
             // mono emits the instance later.
             // TODO: `.cloned()` copies the whole sig on every generic call site
@@ -1011,6 +1075,8 @@ fn check_stmt<'a>(
                 if has_wildcard {
                     return Err(Error { msg: "unreachable match arm after `_`".into(), span: pat.span.clone() });
                 }
+                // payload bindings this arm introduces into its own scope.
+                let mut arm_bindings: Vec<(&'a str, Binding<'a>, Type<'a>)> = Vec::new();
                 match &pat.value {
                     PatternNode::Wildcard => has_wildcard = true,
                     PatternNode::Int(n) => {
@@ -1025,20 +1091,59 @@ fn check_stmt<'a>(
                         let Some(en) = enum_name else {
                             return Err(Error { msg: format!("enum-variant pattern `{}` in a match on integer type", p), span: pat.span.clone() });
                         };
-                        let (pat_enum, variant) = p.split_once("::")
-                            .ok_or_else(|| Error { msg: format!("invalid enum pattern `{}`", p), span: pat.span.clone() })?;
-                        if pat_enum != en {
-                            return Err(Error { msg: format!("pattern `{}` is not a variant of enum '{}'", p, en), span: pat.span.clone() });
-                        }
-                        if !cx.enums[en].variants.contains_key(variant) {
-                            return Err(Error { msg: format!("enum '{}' has no variant '{}'", en, variant), span: pat.span.clone() });
+                        let variant = check_variant_pattern(cx, en, *p, &pat.span)?;
+                        // a bare `E::V` on a data variant would leave the payload
+                        // unbound - require the destructuring form `E::V(..)`.
+                        let arity = cx.enums[en].payloads.get(variant).map_or(0, |p| p.len());
+                        if arity != 0 {
+                            return Err(Error {
+                                msg: format!("variant `{}` carries {} field(s); destructure it as `{}(..)`", p, arity, p),
+                                span: pat.span.clone(),
+                            });
                         }
                         if !covered_variants.insert(variant) {
                             return Err(Error { msg: format!("duplicate match arm for `{}`", p), span: pat.span.clone() });
                         }
                     }
+                    PatternNode::Variant { path, fields } => {
+                        let Some(en) = enum_name else {
+                            return Err(Error { msg: format!("enum-variant pattern `{}` in a match on integer type", path), span: pat.span.clone() });
+                        };
+                        let variant = check_variant_pattern(cx, en, *path, &pat.span)?;
+                        let payload = cx.enums[en].payloads.get(variant).cloned().unwrap_or_default();
+                        if fields.len() != payload.len() {
+                            return Err(Error {
+                                msg: format!("variant `{}` has {} field(s) but the pattern binds {}",
+                                    path, payload.len(), fields.len()),
+                                span: pat.span.clone(),
+                            });
+                        }
+                        if !covered_variants.insert(variant) {
+                            return Err(Error { msg: format!("duplicate match arm for `{}`", path), span: pat.span.clone() });
+                        }
+                        for (fpat, fty) in fields.iter().zip(payload.iter()) {
+                            match &fpat.value {
+                                PatternNode::Wildcard => {}
+                                // each `Bind` is keyed by its own node id (its
+                                // binding identity), so shadowing/reuse is distinct.
+                                PatternNode::Bind(bname) =>
+                                    arm_bindings.push((*bname, Binding::Local(fpat.id), fty.clone())),
+                                other => return Err(Error {
+                                    msg: format!("unsupported payload sub-pattern `{}`", other),
+                                    span: fpat.span.clone(),
+                                }),
+                            }
+                        }
+                    }
+                    PatternNode::Bind(name) => return Err(Error {
+                        msg: format!("bare binding `{}` is not a valid match pattern; bindings appear inside a variant destructure", name),
+                        span: pat.span.clone(),
+                    }),
                 }
                 cx.push_scope();
+                for (bname, binding, bty) in &arm_bindings {
+                    cx.insert(bname, Some(*binding), bty.clone());
+                }
                 check_stmt(cx, return_ty, body)?;
                 cx.pop_scope();
             }
@@ -1129,8 +1234,12 @@ fn check_export_type<'a>(
         }
         Type::Param(_) =>
             Err("generic type parameters are not allowed in @export functions".into()),
-        // an enum is its integer repr across FFI - a plain C enum / integer.
-        Type::Enum { .. } => Ok(()),
+        // a field-less enum is its integer repr across FFI - a plain C enum. A
+        // data-carrying enum's `@repr(C)` tagged-union ABI is deferred (Stage-3
+        // Phase 4), so it can't cross `@export`/`extern` yet.
+        Type::Enum { has_payload: false, .. } => Ok(()),
+        Type::Enum { has_payload: true, name, .. } =>
+            Err(format!("data-carrying enum '{}' cannot cross an @export/extern boundary yet", name)),
         // these are all fine across FFI
         Type::Void | Type::Bool
         | Type::Int8 | Type::Int32 | Type::Int64
@@ -1423,6 +1532,32 @@ fn enum_variant<'a>(cx: &Context<'a>, name: &str) -> Option<(&'a str, i64, Type<
     Some((ekey, val, def.repr.clone()))
 }
 
+/// Validate that `path` (a joined `E::V`) names a variant of enum `en`; returns
+/// the variant name. Shared by the field-less `Path` and the destructuring
+/// `Variant` match-arm patterns.
+fn check_variant_pattern<'a>(cx: &Context<'a>, en: &'a str, path: &'a str, span: &Span)
+-> Result<&'a str, Error> {
+    let (pat_enum, variant) = path.split_once("::")
+        .ok_or_else(|| Error { msg: format!("invalid enum pattern `{}`", path), span: span.clone() })?;
+    if pat_enum != en {
+        return Err(Error { msg: format!("pattern `{}` is not a variant of enum '{}'", path, en), span: span.clone() });
+    }
+    if !cx.enums[en].variants.contains_key(variant) {
+        return Err(Error { msg: format!("enum '{}' has no variant '{}'", en, variant), span: span.clone() });
+    }
+    Ok(variant)
+}
+
+/// If `name` is `E::V` naming a variant of a declared enum, returns the enum's
+/// name and the variant's payload field types (empty for a unit variant). Used
+/// to recognize a constructor call `E::V(...)` in `infer`/`lower_expr`.
+fn enum_variant_ctor<'a>(cx: &Context<'a>, name: &str) -> Option<(&'a str, Vec<Type<'a>>)> {
+    let (ename, variant) = name.split_once("::")?;
+    let (&ekey, def) = cx.enums.get_key_value(ename)?;
+    if !def.variants.contains_key(variant) { return None; }
+    Some((ekey, def.payloads.get(variant).cloned().unwrap_or_default()))
+}
+
 /// Rewrites a bare named type into a `Type::Param` (generic param in scope),
 /// `Type::Enum` (declared enum), or leaves it a `Type::Struct`, recursing
 /// through compound types. The parser can't tell these apart (all bare idents),
@@ -1436,7 +1571,7 @@ fn resolve_type<'a>(generics: &[&'a str], enums: &HashMap<&'a str, EnumDef<'a>>,
         // a bare name that is a declared enum becomes `Type::Enum`, with the
         // discriminant repr baked in so later stages need no enum table.
         Type::Struct { name, args } if args.is_empty() && enums.contains_key(name) =>
-            Type::Enum { name, repr: Box::new(enums[name].repr.clone()) },
+            Type::Enum { name, repr: Box::new(enums[name].repr.clone()), has_payload: enums[name].has_payload },
         Type::Struct { name, args } => Type::Struct {
             name,
             // only type args can name a type param; const args pass through.
@@ -1763,11 +1898,15 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 Err(msg) => { errors.push(Error { msg, span: node.span.clone() }); continue; }
             };
             // C-style discriminants: an unspecified variant is the previous one
-            // plus one, starting at 0.
+            // plus one, starting at 0. Payload field types are collected here but
+            // resolved against the enum table in a later pass (below), once every
+            // enum is known.
             let mut vmap = HashMap::new();
+            let mut payloads: HashMap<&str, Vec<Type>> = HashMap::new();
             let mut next: i64 = 0;
             let mut dup = false;
-            for (vname, explicit) in variants {
+            let mut has_payload = false;
+            for (vname, explicit, payload) in variants {
                 let val = explicit.unwrap_or(next);
                 if vmap.insert(*vname, val).is_some() {
                     errors.push(Error {
@@ -1777,10 +1916,14 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                     dup = true;
                     break;
                 }
+                if !payload.is_empty() {
+                    has_payload = true;
+                    payloads.insert(*vname, payload.iter().map(|(_, ty)| ty.clone()).collect());
+                }
                 next = val + 1;
             }
             if dup { continue; }
-            cx.enums.insert(name, EnumDef { repr, variants: vmap });
+            cx.enums.insert(name, EnumDef { repr, variants: vmap, payloads, has_payload });
         }
     }
 
@@ -1810,6 +1953,44 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 cx.generic_structs.insert(name, generics.clone());
             }
         }
+    }
+
+    // data enums: now that every enum and struct is declared, resolve payload
+    // field types and register the synthetic structs that back the aggregate.
+    // For `enum Msg { Note(u8, f32) }` this registers a payload struct
+    // `Msg$Note = { "0": u8, "1": f32 }` and the aggregate `Msg = { $tag: repr,
+    // $payload: [P x i8] }` where P is the largest variant payload. These reuse
+    // the whole struct machinery (layout, FieldPtr, AllocaStruct, copy_struct,
+    // sret) so the backend needs almost no new aggregate code.
+    let data_enums: Vec<&'a str> = cx.enums.iter()
+        .filter(|(_, d)| d.has_payload).map(|(n, _)| *n).collect();
+    // pass 1: register every payload struct and stash the resolved payloads.
+    for ename in &data_enums {
+        let raw: Vec<(&'a str, Vec<Type<'a>>)> = cx.enums[ename].payloads.iter()
+            .map(|(v, tys)| (*v, tys.clone())).collect();
+        let mut resolved: HashMap<&'a str, Vec<Type<'a>>> = HashMap::new();
+        for (vname, tys) in raw {
+            let rtys: Vec<Type<'a>> = tys.iter().map(|t| resolve_type(&[], &cx.enums, t)).collect();
+            let fields: Vec<(&'a str, Type<'a>)> = rtys.iter().enumerate()
+                .map(|(i, t)| (leak_str(i.to_string()), t.clone()))
+                .collect();
+            cx.structs.insert(enum_payload_struct_name(ename, vname), fields);
+            resolved.insert(vname, rtys);
+        }
+        if let Some(def) = cx.enums.get_mut(ename) { def.payloads = resolved; }
+    }
+    // pass 2: register each aggregate, sizing its byte blob from the (now present)
+    // payload structs. Separate pass so a payload struct is always in the table.
+    for ename in &data_enums {
+        let repr = cx.enums[ename].repr.clone();
+        let payload_bytes = cx.enums[ename].payloads.keys()
+            .map(|v| layout::size_of(&Type::plain_struct(enum_payload_struct_name(ename, v)), &cx.structs))
+            .max().unwrap_or(0);
+        let agg_fields = vec![
+            (ENUM_TAG_FIELD, repr),
+            (ENUM_PAYLOAD_FIELD, Type::Array(Box::new(Type::Int8), ConstVal::Lit(payload_bytes))),
+        ];
+        cx.structs.insert(ename, agg_fields);
     }
 
     // forward declare functions so that they can be called before their definition

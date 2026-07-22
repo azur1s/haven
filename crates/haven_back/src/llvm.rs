@@ -34,8 +34,10 @@ fn emit_type(ty: &Type) -> String {
         Slice(_) => "{ ptr, i32 }".to_string(), // struct { ptr, len }
         // `str` is a raw NUL-terminated `*const u8` (a C string), so a bare `ptr`
         Str => "ptr".to_string(),
-        // an enum lowers to its integer discriminant repr.
-        Enum { repr, .. } => emit_type(repr),
+        // a field-less enum lowers to its integer discriminant repr; a data enum
+        // is an aggregate, referenced (like a struct) by opaque pointer.
+        Enum { has_payload: false, repr, .. } => emit_type(repr),
+        Enum { has_payload: true, .. } => "ptr".to_string(),
         // <size x element_type>
         Simd(ty, size) => format!("<{} x {}>", size.expect_lit(), emit_type(ty)),
         // a function pointer is a plain opaque pointer
@@ -57,6 +59,9 @@ fn emit_type(ty: &Type) -> String {
 fn emit_field_type(ty: &Type) -> String {
     match ty {
         Type::Struct { name, .. } => format!("%{name}"),
+        // a data enum inlined as a field is its named aggregate `%Name`; a
+        // field-less enum is just its scalar repr (falls through to emit_type).
+        Type::Enum { name, has_payload: true, .. } => format!("%{name}"),
         Type::Array(t, n) => format!("[{} x {}]", n.expect_lit(), emit_field_type(t)),
         Type::Simd(t, n) => format!("<{} x {}>", n.expect_lit(), emit_field_type(t)),
         _ => emit_type(ty),

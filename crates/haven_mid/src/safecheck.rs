@@ -40,9 +40,12 @@ fn dirty_calls_expr<'a>(clean: &CleanMap<'a>, locals: &[&'a str], e: &Expr<'a>) 
                 .flat_map(|a| dirty_calls_expr(clean, locals, a))
                 .collect();
 
-            // then the callee itself (intrinsics are always clean)
+            // then the callee itself (intrinsics are always clean). a name with
+            // `::` is a data-enum constructor (`Enum::Variant(...)`) - module
+            // qualifiers are already resolved away by this post-mono stage - which
+            // only stores into stack storage, so it is always clean, never a callee.
             match &func.value {
-                ExprNode::Var(name) if !locals.contains(name) => {
+                ExprNode::Var(name) if !locals.contains(name) && !name.contains("::") => {
                     if Intrinsic::lookup(name).is_none()
                         && !clean.get(name).copied().unwrap_or(false)
                     {
@@ -120,7 +123,9 @@ fn collect_calls_expr<'a>(calls: &mut HashSet<&'a str>, locals: &[&'a str], e: &
     match &e.value {
         ExprNode::Call { func, args, .. } => {
             match &func.value {
-                ExprNode::Var(name) if !locals.contains(name) => {
+                // skip data-enum constructors (`Enum::Variant(...)`): they call
+                // nothing (see `dirty_calls_expr`), so they're not graph edges.
+                ExprNode::Var(name) if !locals.contains(name) && !name.contains("::") => {
                     if Intrinsic::lookup(name).is_none() {
                         calls.insert(*name);
                     }
