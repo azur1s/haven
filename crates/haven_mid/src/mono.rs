@@ -36,6 +36,17 @@ struct StructInstantiation<'a> {
     span: Span,
 }
 
+/// one requested generic-enum instantiation: `enum Option<T>` at `args` (`[i32]`),
+/// emitted as the concrete `enum Option$i32`. Mirrors `StructInstantiation` - a
+/// data-carrying enum is lowered as a struct-shaped aggregate, so once
+/// monomorphized it goes through exactly the same downstream machinery.
+struct EnumInstantiation<'a> {
+    base: &'a str,
+    args: Vec<ConcreteArg<'a>>,
+    mangled: &'a str,
+    span: Span,
+}
+
 /// cap on distinct instantiations. backstop for combinatorial blowup (not
 /// depth-growing); real programs are nowhere near this.
 const INSTANTIATION_LIMIT: usize = 10_000;
@@ -79,9 +90,16 @@ struct Mono<'p, 'a> {
     /// mangled name per struct instance already requested, keyed by the mangled
     /// string, so every concrete `Option$i32` use shares one emitted struct.
     struct_seen: HashMap<String, &'a str>,
-    /// best-effort span for the context currently being rebuilt, so a struct
-    /// instance requested deep inside `subst_ty` (which has no span of its own)
-    /// still gets a source location for the depth-limit error.
+    /// generic enum templates, by name (`Option` -> `enum Option<T> {...}`).
+    enum_templates: HashMap<&'a str, &'p TopLevel<'a>>,
+    /// generic-enum instantiations still to build.
+    enum_queue: VecDeque<EnumInstantiation<'a>>,
+    /// mangled name per enum instance already requested, keyed by the mangled
+    /// string, so every concrete `Option$i32` use shares one emitted enum.
+    enum_seen: HashMap<String, &'a str>,
+    /// best-effort span for the context currently being rebuilt, so a struct or
+    /// enum instance requested deep inside `subst_ty` (which has no span of its
+    /// own) still gets a source location for the depth-limit error.
     cur_span: Span,
     /// mangled instance name -> its human-readable spelling (`m2_alloc$alloc$Vec2`
     /// -> `alloc::<Vec2>`). handed back to the caller so post-mono passes can
@@ -261,6 +279,24 @@ impl<'p, 'a> Mono<'p, 'a> {
         mangled
     }
 
+    /// Record a generic-enum instantiation request, return its mangled name
+    /// (`Option` + `[i32]` -> `Option$i32`). de-dupes so each concrete instance is
+    /// built once. Enqueues onto the enum queue, drained (interleaved with the
+    /// struct queue, since either can request the other) after all functions.
+    fn request_enum(&mut self, base: &'a str, args: Vec<ConcreteArg<'a>>) -> &'a str {
+        let key = mangle_name(base, &args);
+        if let Some(&m) = self.enum_seen.get(&key) {
+            return m;
+        }
+        let mangled: &'a str = self.arena.alloc_str(&key);
+        self.enum_seen.insert(key, mangled);
+        self.display.insert(mangled, display_name(base, &args));
+        self.enum_queue.push_back(EnumInstantiation {
+            base, args, mangled, span: self.cur_span.clone(),
+        });
+        mangled
+    }
+
     /// Substitute bound type and const params in `ty` with their concrete
     /// bindings. In the raw pre-typecheck AST a type param looks like
     /// `Type::Struct(name)` (parser can't tell it from a real struct), so both
@@ -282,13 +318,23 @@ impl<'p, 'a> Mono<'p, 'a> {
                 b.types[name].clone(),
             // a concrete generic-struct instance: substitute inside its args
             // (types and const values), then mangle + request it, collapsing to the
-            // flat instance name.
+            // flat instance name. The raw (pre-typecheck) AST never distinguishes a
+            // struct name from an enum name - both parse as `Type::Struct{name,args}`
+            // (see the front end's own comment on this) - so which queue to request
+            // from is decided here by template-table membership. Either way the
+            // result stays `Type::plain_struct(mangled)`: the SECOND typecheck pass
+            // (post-mono) re-derives `Type::Enum` from this bare form via its own
+            // `resolve_type`, once it sees the concrete instance's own declaration.
             Type::Struct { name, args } if !args.is_empty() => {
                 let cargs: Vec<ConcreteArg<'a>> = args.iter().map(|a| match a {
                     GenericArg::Type(t) => ConcreteArg::Type(self.subst_ty(t, b)),
                     GenericArg::Const(cv) => ConcreteArg::Const(subst_cv(cv, b).expect_lit()),
                 }).collect();
-                let mangled = self.request_struct(name, cargs);
+                let mangled = if self.enum_templates.contains_key(name) {
+                    self.request_enum(name, cargs)
+                } else {
+                    self.request_struct(name, cargs)
+                };
                 Type::plain_struct(mangled)
             }
             // an ordinary (non-generic) struct: copy through.
@@ -347,8 +393,32 @@ impl<'p, 'a> Mono<'p, 'a> {
                             type_args: Vec::new(),
                             args: new_args,
                         }
+                    } else if let Some((ename, vname)) = name.split_once("::")
+                        .filter(|(en, _)| self.enum_templates.contains_key(en))
+                    {
+                        // a generic-enum tuple/unit variant constructor with
+                        // turbofish (`Option::Some::<i32>(5)`, `Option::None::<i32>()`):
+                        // mangle to the concrete instance and rewrite the qualified
+                        // callee name to it (`Option$i32::Some`), dropping the
+                        // turbofish. Unlike a plain function call, the base name to
+                        // request against is `ename`, not the whole qualified `name`.
+                        let concrete: Vec<ConcreteArg<'a>> = subst_targs.iter().map(|ga| match ga {
+                            GenericArg::Type(t) => ConcreteArg::Type(t.clone()),
+                            GenericArg::Const(cv) => ConcreteArg::Const(cv.expect_lit()),
+                        }).collect();
+                        let mangled = self.request_enum(ename, concrete);
+                        let new_name: &'a str = self.arena.alloc_str(&format!("{}::{}", mangled, vname));
+                        let new_func = Metadata::new(ExprNode::Var(new_name), func.span.clone());
+                        ExprNode::Call {
+                            func: Box::new(new_func),
+                            type_args: Vec::new(),
+                            args: new_args,
+                        }
                     } else {
-                        // intrinsic or ordinary call: keep the (substituted) turbofish
+                        // intrinsic, non-generic enum-variant constructor, or
+                        // ordinary call: keep the (substituted) turbofish - for a
+                        // non-generic constructor it's always empty (Phase 1/2
+                        // behavior, unchanged).
                         let new_func = self.rebuild_expr(func, b);
                         ExprNode::Call { func: Box::new(new_func), type_args: subst_targs, args: new_args }
                     }
@@ -364,6 +434,22 @@ impl<'p, 'a> Mono<'p, 'a> {
                     fields.iter().map(|(f, e)| (*f, self.rebuild_expr(e, b))).collect();
                 if type_args.is_empty() {
                     ExprNode::Struct { name, type_args: Vec::new(), fields: new_fields }
+                } else if let Some((ename, vname)) = name.split_once("::")
+                    .filter(|(en, _)| self.enum_templates.contains_key(en))
+                {
+                    // a generic-enum struct-style variant literal with turbofish
+                    // (`Result::Ok::<i32, str> { val: x }`): mangle to the concrete
+                    // instance and rewrite the qualified literal name to it
+                    // (`Result$i32$str::Ok`), dropping the turbofish. The base name
+                    // to request against is `ename` (the enum), not the whole
+                    // qualified `name`.
+                    let cargs: Vec<ConcreteArg<'a>> = type_args.iter().map(|ga| match ga {
+                        GenericArg::Type(t) => ConcreteArg::Type(self.subst_ty(t, b)),
+                        GenericArg::Const(cv) => ConcreteArg::Const(subst_cv(cv, b).expect_lit()),
+                    }).collect();
+                    let mangled = self.request_enum(ename, cargs);
+                    let new_name: &'a str = self.arena.alloc_str(&format!("{}::{}", mangled, vname));
+                    ExprNode::Struct { name: new_name, type_args: Vec::new(), fields: new_fields }
                 } else {
                     // a generic struct literal -> its concrete instance. mangle
                     // exactly like the generic *type* `Option<i32>`: substitute the
@@ -508,10 +594,19 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
         })
         .collect();
 
+    let enum_templates: HashMap<&'a str, &TopLevel<'a>> = program.iter()
+        .filter_map(|tl| match &tl.value {
+            TopLevelNode::Enum { name, generics, .. } if !generics.is_empty() =>
+                Some((*name, tl)),
+            _ => None,
+        })
+        .collect();
+
     let mut m = Mono {
-        arena, templates, struct_templates,
+        arena, templates, struct_templates, enum_templates,
         queue: VecDeque::new(), seen: HashMap::new(),
         struct_queue: VecDeque::new(), struct_seen: HashMap::new(),
+        enum_queue: VecDeque::new(), enum_seen: HashMap::new(),
         cur_span: Span::new(String::new(), 0, 0),
         display: HashMap::new(),
     };
@@ -582,71 +677,142 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
         instances.entry(inst.base).or_default().push(f);
     }
 
-    // build each requested generic-struct instance. substituting a field type can
-    // request further instances (`Box<Option<i32>>` needs `Option$i32` too), so
-    // drain to fixpoint. the same depth/count guards backstop growing recursion
-    // (`struct Bad<T> { p: *Bad<*T> }`). fn instances above already seeded this
-    // queue via their param/return/body types.
+    // build each requested generic-struct/enum instance. substituting a field or
+    // payload type can request further instances of EITHER kind (`Box<Option<i32>>`
+    // needs `Option$i32`; `Option<Buf<i32,4>>` needs `Buf$i32$4`), so drain BOTH
+    // queues together to a fixpoint - whichever has a pending item goes next. the
+    // same depth/count guards backstop growing recursion (`struct Bad<T> { p:
+    // *Bad<*T> }`). fn instances above already seeded these queues via their
+    // param/return/body types.
     let mut struct_instances: HashMap<&'a str, Vec<TopLevel<'a>>> = HashMap::new();
-    let mut struct_materialized = 0usize;
-    while let Some(inst) = m.struct_queue.pop_front() {
-        struct_materialized += 1;
-        if let Some(deep) = inst.args.iter().find_map(|a| match a {
-            ConcreteArg::Type(t) if type_depth(t) > TYPE_DEPTH_LIMIT => Some(t),
-            _ => None,
-        }) {
-            return Err(Error {
-                msg: format!(
-                    "monomorphization of struct '{}' produced a type argument nested \
-                     deeper than {} (`{}`); this usually means an unbounded generic \
-                     struct (one whose field mentions itself at an ever-growing type)",
-                    inst.base, TYPE_DEPTH_LIMIT, deep,
-                ),
-                span: inst.span,
-            });
-        }
-        if struct_materialized > INSTANTIATION_LIMIT {
-            return Err(Error {
-                msg: format!(
-                    "monomorphization exceeded {} struct instantiations at '{}'",
-                    INSTANTIATION_LIMIT, inst.base,
-                ),
-                span: inst.span,
-            });
-        }
-        let tl = m.struct_templates[inst.base];
-        let TopLevelNode::Struct { generics, fields, attributes, is_pub, .. } = &tl.value
-        else { unreachable!() };
-        // bind each declared param to its concrete arg (positional): type params to
-        // types, const params to values (so `[T; N]` fields substitute both).
-        let mut bindings = Bindings::empty();
-        for (gp, arg) in generics.iter().zip(&inst.args) {
-            match (gp, arg) {
-                (GenericParam::Type(n), ConcreteArg::Type(t)) => {
-                    bindings.types.insert(n, t.clone());
-                }
-                (GenericParam::Const(n, ty), ConcreteArg::Const(v)) => {
-                    bindings.consts.insert(n, ConstBind { val: *v, ty: ty.clone() });
-                }
-                _ => unreachable!("struct generic param/arg kind mismatch - validated in typecheck"),
+    let mut enum_instances: HashMap<&'a str, Vec<TopLevel<'a>>> = HashMap::new();
+    let mut materialized = 0usize;
+    loop {
+        if let Some(inst) = m.struct_queue.pop_front() {
+            materialized += 1;
+            if let Some(deep) = inst.args.iter().find_map(|a| match a {
+                ConcreteArg::Type(t) if type_depth(t) > TYPE_DEPTH_LIMIT => Some(t),
+                _ => None,
+            }) {
+                return Err(Error {
+                    msg: format!(
+                        "monomorphization of struct '{}' produced a type argument nested \
+                         deeper than {} (`{}`); this usually means an unbounded generic \
+                         struct (one whose field mentions itself at an ever-growing type)",
+                        inst.base, TYPE_DEPTH_LIMIT, deep,
+                    ),
+                    span: inst.span,
+                });
             }
+            if materialized > INSTANTIATION_LIMIT {
+                return Err(Error {
+                    msg: format!(
+                        "monomorphization exceeded {} struct/enum instantiations at '{}'",
+                        INSTANTIATION_LIMIT, inst.base,
+                    ),
+                    span: inst.span,
+                });
+            }
+            let tl = m.struct_templates[inst.base];
+            let TopLevelNode::Struct { generics, fields, attributes, is_pub, .. } = &tl.value
+            else { unreachable!() };
+            // bind each declared param to its concrete arg (positional): type params
+            // to types, const params to values (so `[T; N]` fields substitute both).
+            let mut bindings = Bindings::empty();
+            for (gp, arg) in generics.iter().zip(&inst.args) {
+                match (gp, arg) {
+                    (GenericParam::Type(n), ConcreteArg::Type(t)) => {
+                        bindings.types.insert(n, t.clone());
+                    }
+                    (GenericParam::Const(n, ty), ConcreteArg::Const(v)) => {
+                        bindings.consts.insert(n, ConstBind { val: *v, ty: ty.clone() });
+                    }
+                    _ => unreachable!("struct generic param/arg kind mismatch - validated in typecheck"),
+                }
+            }
+            // field types report against this instance's span while being substituted.
+            m.cur_span = inst.span.clone();
+            let new_fields: Vec<(&'a str, Type<'a>)> = fields.iter()
+                .map(|(fname, fty)| (*fname, m.subst_ty(fty, &bindings)))
+                .collect();
+            let s = Metadata::new(
+                TopLevelNode::Struct {
+                    name: inst.mangled,
+                    is_pub: *is_pub,
+                    attributes: attributes.clone(),
+                    generics: Vec::new(),
+                    fields: new_fields,
+                },
+                tl.span.clone(),
+            );
+            struct_instances.entry(inst.base).or_default().push(s);
+            continue;
         }
-        // field types report against this instance's span while being substituted.
-        m.cur_span = inst.span.clone();
-        let new_fields: Vec<(&'a str, Type<'a>)> = fields.iter()
-            .map(|(fname, fty)| (*fname, m.subst_ty(fty, &bindings)))
-            .collect();
-        let s = Metadata::new(
-            TopLevelNode::Struct {
-                name: inst.mangled,
-                is_pub: *is_pub,
-                attributes: attributes.clone(),
-                generics: Vec::new(),
-                fields: new_fields,
-            },
-            tl.span.clone(),
-        );
-        struct_instances.entry(inst.base).or_default().push(s);
+        if let Some(inst) = m.enum_queue.pop_front() {
+            materialized += 1;
+            if let Some(deep) = inst.args.iter().find_map(|a| match a {
+                ConcreteArg::Type(t) if type_depth(t) > TYPE_DEPTH_LIMIT => Some(t),
+                _ => None,
+            }) {
+                return Err(Error {
+                    msg: format!(
+                        "monomorphization of enum '{}' produced a type argument nested \
+                         deeper than {} (`{}`); this usually means an unbounded generic \
+                         enum (one whose payload mentions itself at an ever-growing type)",
+                        inst.base, TYPE_DEPTH_LIMIT, deep,
+                    ),
+                    span: inst.span,
+                });
+            }
+            if materialized > INSTANTIATION_LIMIT {
+                return Err(Error {
+                    msg: format!(
+                        "monomorphization exceeded {} struct/enum instantiations at '{}'",
+                        INSTANTIATION_LIMIT, inst.base,
+                    ),
+                    span: inst.span,
+                });
+            }
+            let tl = m.enum_templates[inst.base];
+            let TopLevelNode::Enum { generics, variants, attributes, is_pub, .. } = &tl.value
+            else { unreachable!() };
+            let mut bindings = Bindings::empty();
+            for (gp, arg) in generics.iter().zip(&inst.args) {
+                match (gp, arg) {
+                    (GenericParam::Type(n), ConcreteArg::Type(t)) => {
+                        bindings.types.insert(n, t.clone());
+                    }
+                    (GenericParam::Const(n, ty), ConcreteArg::Const(v)) => {
+                        bindings.consts.insert(n, ConstBind { val: *v, ty: ty.clone() });
+                    }
+                    _ => unreachable!("enum generic param/arg kind mismatch - validated in typecheck"),
+                }
+            }
+            // discriminants don't depend on the bound params - only payload field
+            // types are substituted; field names (real or synthesized "0"/"1") and
+            // discriminant values pass through unchanged.
+            m.cur_span = inst.span.clone();
+            let new_variants: Vec<(&'a str, Option<i64>, Vec<(&'a str, Type<'a>)>)> = variants.iter()
+                .map(|(vname, disc, payload)| (
+                    *vname,
+                    *disc,
+                    payload.iter().map(|(fname, fty)| (*fname, m.subst_ty(fty, &bindings))).collect(),
+                ))
+                .collect();
+            let e = Metadata::new(
+                TopLevelNode::Enum {
+                    name: inst.mangled,
+                    is_pub: *is_pub,
+                    attributes: attributes.clone(),
+                    generics: Vec::new(),
+                    variants: new_variants,
+                },
+                tl.span.clone(),
+            );
+            enum_instances.entry(inst.base).or_default().push(e);
+            continue;
+        }
+        break;
     }
 
     // reassemble in source order: each template -> its instances (or nothing if
@@ -664,6 +830,15 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
             // out), replaced by its concrete instances - emitted here, next to it.
             TopLevelNode::Struct { name, generics, .. } if !generics.is_empty() => {
                 if let Some(insts) = struct_instances.remove(name) {
+                    output.extend(insts);
+                }
+            }
+            // same story for a generic enum template: dropped, replaced by its
+            // concrete instances (each a plain, fully-substituted data enum - the
+            // typecheck/mil/backend pipeline handles it exactly like a hand-written
+            // one, per the field-less/data-enum machinery already in place).
+            TopLevelNode::Enum { name, generics, .. } if !generics.is_empty() => {
+                if let Some(insts) = enum_instances.remove(name) {
                     output.extend(insts);
                 }
             }

@@ -1,0 +1,8 @@
+//@ error: expects 1 field(s), got 2
+enum Option<T> { None, Some(T) }
+
+@export
+proc main() i32 {
+    let a: Option<i32> = Option::Some::<i32>(5, 6);
+    return 0;
+}

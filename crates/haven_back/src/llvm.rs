@@ -1,3 +1,4 @@
+
 use haven_common::ast::*;
 use haven_mid::mil::*;
 use crate::abi::{self, Abi, Reg};
@@ -274,9 +275,9 @@ fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
         Call { dst, callee, args, return_type, sret } => {
             // %result = call <return_type> <callee>(<arg_type> <arg_val>, ...)
             // where <callee> is either a function symbol @name or a fn-pointer %reg
-            let callee_str = match callee {
+            let callee_str = match &callee {
                 Callee::Direct(name) => format!("@{name}"),
-                Callee::Indirect(val) => emit_value(val),
+                Callee::Indirect(val) => emit_value(val.clone()),
             };
             // Expand arguments, coercing Direct-class by-value structs into their
             // eightbyte registers (the loads land before the call, above).
@@ -332,7 +333,8 @@ fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
                 },
                 None => {
                     let dst_prefix = dst.map(|dst| format!("{dst} = ")).unwrap_or_default();
-                    emitln!(cx, "    {dst_prefix}call {} {callee_str}({args_str})", emit_type(&return_type));
+                    let call_ty = emit_type(&return_type);
+                    emitln!(cx, "    {dst_prefix}call {call_ty} {callee_str}({args_str})");
                 }
             }
         }

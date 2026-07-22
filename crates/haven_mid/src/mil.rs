@@ -25,14 +25,30 @@ fn enum_const<'a>(enums: &HashMap<&'a str, EnumDef<'a>>, name: &str) -> Option<C
     Some(int_const(&def.repr, *def.variants.get(variant)?))
 }
 
+/// The discriminant const for a match PATTERN's variant, looked up against
+/// `ename` - the scrutinee's own (possibly monomorphized) enum name - rather
+/// than the pattern's own textual qualifier. A pattern is always written against
+/// the ORIGINAL generic enum name (`Option::Some`), since mono has no type info
+/// to rewrite match patterns to a mangled instance (`Option$i32::Some`) the way
+/// it rewrites construction call/struct-literal sites; only the variant part
+/// (after `::`) of `path` is trustworthy here. See `check_variant_pattern`'s
+/// matching base-name relaxation on the typecheck side of this same problem.
+fn pattern_variant_const<'a>(enums: &HashMap<&'a str, EnumDef<'a>>, ename: &'a str, path: &str) -> Const {
+    let variant = path.split_once("::").expect("enum pattern validated in typecheck").1;
+    let def = &enums[ename];
+    int_const(&def.repr, def.variants[variant])
+}
+
 /// Rewrites a declared type's `Struct(name)` into `Type::Enum` for any declared
 /// enum, recursing through compound types. Struct field types arrive already
 /// resolved (via typecheck's `cx.structs`), but declared param/return/local
 /// types are the raw parser types, so lowering resolves them here.
 fn resolve_enum_ty<'a>(enums: &HashMap<&'a str, EnumDef<'a>>, ty: &Type<'a>) -> Type<'a> {
     match ty {
+        // by the time MIL runs, mono has already flattened every generic enum
+        // instance to a concrete (args-empty) name, so `args` is always empty here.
         Type::Struct { name, args } if args.is_empty() && enums.contains_key(name) =>
-            Type::Enum { name, repr: Box::new(enums[name].repr.clone()), has_payload: enums[name].has_payload },
+            Type::Enum { name, repr: Box::new(enums[name].repr.clone()), has_payload: enums[name].has_payload, args: Vec::new() },
         Type::Pointer(i) => Type::Pointer(Box::new(resolve_enum_ty(enums, i))),
         Type::Array(i, n) => Type::Array(Box::new(resolve_enum_ty(enums, i)), n.clone()),
         Type::Slice(i)    => Type::Slice(Box::new(resolve_enum_ty(enums, i))),
@@ -1475,9 +1491,15 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
             // A data enum lowers to a pointer to its aggregate: the switch runs on
             // the tag (field 0), and payload bindings read off field 1. A field-less
             // enum / integer lowers to the scalar value directly.
+            // the scrutinee's OWN (possibly monomorphized, e.g. "Option$i32") enum
+            // name - patterns are matched against this, not their own textual
+            // qualifier, since mono never rewrites match-pattern text (see
+            // `pattern_variant_const`). Named distinctly from the `ename` bound
+            // below by destructuring `agg` (same value, different scope/purpose).
+            let switch_ename: Option<&'a str> = match &scrut_ty { Type::Enum { name, .. } => Some(*name), _ => None };
             let (switch_val, value_ty, agg): (Value, Type<'a>, Option<(&'a str, Register)>) =
                 match &scrut_ty {
-                    Type::Enum { repr, has_payload: true, name } => {
+                    Type::Enum { repr, has_payload: true, name, .. } => {
                         let ptr = match scrut_val { Value::Reg(r) => r, _ => unreachable!() };
                         let tag_ptr = cx.fresh_reg();
                         cx.emit(Inst::FieldPtr { dst: tag_ptr, struct_name: name, base: ptr, field_index: 0 });
@@ -1501,11 +1523,11 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                     PatternNode::Wildcard => wildcard_block = Some(block),
                     PatternNode::Int(n) => cases.push((int_const(&value_ty, *n), block)),
                     PatternNode::Path(p) => {
-                        let c = enum_const(&cx.enums, p).expect("enum pattern validated in typecheck");
+                        let c = pattern_variant_const(&cx.enums, switch_ename.expect("enum pattern validated in typecheck"), p);
                         cases.push((c, block));
                     }
                     PatternNode::Variant { path, .. } | PatternNode::StructVariant { path, .. } => {
-                        let c = enum_const(&cx.enums, path).expect("enum pattern validated in typecheck");
+                        let c = pattern_variant_const(&cx.enums, switch_ename.expect("enum pattern validated in typecheck"), path);
                         cases.push((c, block));
                     }
                     PatternNode::Bind(_) => unreachable!("bare binding rejected in typecheck"),
@@ -1863,7 +1885,7 @@ fn lower_function<'a>(cx: &mut LowerCtx<'a>, func: &TopLevel<'a>)
 
 /// Whether `ty` is a bare reference to one of `type_params` (an unresolved
 /// generic slot like `T`, which parses as `Type::Struct { name: "T", args: [] }`).
-/// Used to erase a generic extern's type-param params into a variadic `...`.
+/// Used to erase a generic extern's type-param params from the declaration.
 fn is_generic_type(type_params: &[&str], ty: &Type<'_>) -> bool {
     matches!(ty, Type::Struct { name, args } if args.is_empty() && type_params.contains(name))
 }
@@ -1937,7 +1959,7 @@ pub fn lower<'a>(
                     GenericParam::Type(n) => Some(*n),
                     GenericParam::Const(_, _) => None,
                 }).collect();
-                let concrete_params = params.iter()
+                let concrete_params: Vec<Type<'a>> = params.iter()
                     .filter(|(_, ty)| !is_generic_type(&type_params, ty))
                     .map(|(_, ty)| resolve_enum_ty(&cx.enums, ty))
                     .collect();

@@ -1,0 +1,21 @@
+// Stage-3 Phase 3: a generic enum mixing a unit variant with a struct-style
+// (named-field) variant. Construction via `Name::<Args> { field: .. }` and via
+// the unit-variant call form `Name::<Args>()`, and by-name match destructuring.
+
+enum Pair<A, B> { Empty, Both { first: A, second: B } }
+
+proc sum(p: Pair<i32, i32>) i32 {
+    match (p) {
+        Pair::Both { first, second } -> { return first + second; }
+        Pair::Empty -> { return -1; }
+    }
+}
+
+@export
+proc main() i32 {
+    let p: Pair<i32, i32> = Pair::Both::<i32, i32> { first: 3, second: 4 };
+    let e: Pair<i32, i32> = Pair::Empty::<i32, i32>();
+    printf::<i32>("%d\n", sum(p)); // 7
+    printf::<i32>("%d\n", sum(e)); // -1
+    return 0;
+}

@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(field_offset("Msg$Note", 1, &s), 4); // f32 padded past the u8
 
         // a data-carrying enum sizes via its synthetic aggregate struct.
-        let msg = Type::Enum { name: "Msg", repr: Box::new(Type::Int32), has_payload: true };
+        let msg = Type::Enum { name: "Msg", repr: Box::new(Type::Int32), has_payload: true, args: Vec::new() };
         assert_eq!((size_of(&msg, &s), align_of(&msg, &s)), (12, 4));
         assert_eq!(field_offset("Msg", 1, &s), 4); // payload blob after the tag
     }

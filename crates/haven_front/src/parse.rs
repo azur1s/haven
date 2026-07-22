@@ -1031,6 +1031,7 @@ fn parse_toplevel<'tks, 'src: 'tks>()
     let enum_ = item_header.clone()
         .then_ignore(just(Token::Enum))
         .then(var.map(|s| *s))
+        .then(generics.clone())
         .then(
             enum_variant
                 .separated_by(just(Token::Comma))
@@ -1038,10 +1039,11 @@ fn parse_toplevel<'tks, 'src: 'tks>()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace))
         )
-        .map(|(((attributes, is_pub), name), variants)| TopLevelNode::Enum {
+        .map(|((((attributes, is_pub), name), generics), variants)| TopLevelNode::Enum {
             name,
             is_pub,
             attributes,
+            generics,
             variants,
         });
 

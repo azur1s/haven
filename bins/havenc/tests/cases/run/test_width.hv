@@ -11,7 +11,7 @@ proc main() i32 {
 
     // int -> float
     printf32("%f\n", numerical_cast::<f32>(5i32));   // 5.000000
-    printf::<f64>("%f\n", numerical_cast::<f64>(-3i32)); // -3.000000
+    printf_f64("%f\n", numerical_cast::<f64>(-3i32)); // -3.000000
 
     // widen then narrow, back to the start: i32 -> i64 -> i32
     printf::<i32>("%d\n", numerical_cast::<i32>(numerical_cast::<i64>(7i32))); // 7

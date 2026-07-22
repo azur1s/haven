@@ -7,12 +7,25 @@
 // plumbing, kept private; call the `pub` wrappers below instead.
 extern strlen(s: str) u64;
 
-// fixed to one format arg + one value for now.
-// TODO: real variadics, or a `format!`-style macro like Rust's.
+// fixed to one format arg + one value.
+// TODO: a `Display`-style trait or a `format!`-style macro like Rust's.
+// NOTE: this generic path only works for integer/pointer/`str` args. A float
+// arg does NOT print correctly through it - the erased type-param slot forces a
+// variadic C callee, but the language emits a plain fixed-arity call, so the
+// float never reaches the callee (it prints 0). Print floats with the dedicated
+// `printf_f64`/`printf32` procs below, which use a fixed-prototype C helper.
+extern rt_printf<T>(fmt: str, arg: T) void;
 /// Print `arg` to stdout using the C `printf` format string `fmt`
 /// (e.g. `printf::<i32>("%d\n", 42)`). Exactly one argument is supported, and
-/// `T` must match the conversion specifier in `fmt`.
-pub extern printf<T>(fmt: str, arg: T) void;
+/// `T` must match the conversion specifier in `fmt`. For floats, use
+/// `printf_f64`/`printf32` instead.
+pub proc printf<T>(fmt: str, arg: T) void {
+    rt_printf::<T>(fmt, arg);
+}
+
+// Fixed-prototype float printer: a concrete `double` param travels in an XMM
+// register the callee reads directly, so it needs no variadic-call ABI.
+extern rt_printf_f64(fmt: str, arg: f64) void;
 
 extern rt_slice_len<T>(slice: *[T]) u64;
 extern rt_slice_from_raw_parts<T>(ptr: *T, len: u64) *[T];
@@ -22,14 +35,15 @@ pub proc print(s: str) void { printf::<str>("%s", s); }
 /// Write `s` to stdout followed by a newline.
 pub proc println(s: str) void { printf::<str>("%s\n", s); }
 
-// a bare f32 handed to the variadic `printf` is read back as an f64 and
-// misaligns, printing 0. widen to f64 up front until we have trait-based
-// promotion or real variadics.
-/// Print a single `f32` using the `printf` format `fmt` (e.g. `"%f\n"`). Use
-/// this rather than `printf` for `f32` values, which variadics can't pass
-/// correctly on their own.
+/// Print a single `f64` using the `printf` format `fmt` (e.g. `"%f\n"`).
+pub proc printf_f64(fmt: str, arg: f64) void {
+    rt_printf_f64(fmt, arg);
+}
+
+/// Print a single `f32` using the `printf` format `fmt` (e.g. `"%f\n"`). Widened
+/// to `f64` because C's `%f` conversion reads a `double`.
 pub proc printf32(fmt: str, arg: f32) void {
-    printf::<f64>(fmt, numerical_cast::<f64>(arg));
+    rt_printf_f64(fmt, numerical_cast::<f64>(arg));
 }
 
 /// The number of elements in the runtime slice `slice`.

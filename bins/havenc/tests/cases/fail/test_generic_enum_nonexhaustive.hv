@@ -1,0 +1,12 @@
+//@ error: non-exhaustive match on enum 'Option'
+// exhaustiveness still applies to a monomorphized generic-enum instance.
+enum Option<T> { None, Some(T) }
+
+proc f(o: Option<i32>) i32 {
+    match (o) {
+        Option::Some(v) -> { return v; }
+    }
+}
+
+@export
+proc main() i32 { return 0; }

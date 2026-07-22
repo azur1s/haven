@@ -1,0 +1,16 @@
+import std/alloc { alloc, dealloc }
+import std/option { Option, unwrap }
+
+@export
+proc main() i32 {
+    let x: Option<*f32> = alloc::<f32>(1u64);
+    let x1: *f32 = unwrap::<f32>(x);
+
+    *x1 = 42.0;
+
+    printf32("%.1f\n", *x1);
+
+    dealloc::<f32>(x1);
+
+    return 0;
+}

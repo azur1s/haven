@@ -71,6 +71,11 @@ pub struct Context<'a> {
     /// mapped to their discriminant values. Used to resolve a `Struct(name)` type
     /// to `Type::Enum` and an `E::V` variant reference to its constant.
     pub enums: HashMap<&'a str, EnumDef<'a>>,
+    /// Enums declared with generic parameters (`enum Option<T>`), mapped to their
+    /// declared params in order - mirrors `generic_structs`. A variant constructor
+    /// or destructuring pattern binds these positionally via turbofish; monomorphization
+    /// rewrites a concrete use to a flat instance before codegen.
+    pub generic_enums: std::collections::HashMap<&'a str, Vec<GenericParam<'a>>>,
 }
 
 /// A declared enum's definition: the discriminant repr, variant discriminant
@@ -102,6 +107,7 @@ impl<'a> Context<'a> {
             generic_fns: HashMap::new(),
             global_consts: std::collections::HashSet::new(),
             enums: HashMap::new(),
+            generic_enums: std::collections::HashMap::new(),
         }
     }
 
@@ -565,7 +571,19 @@ fn infer<'a>(
                         span,
                     });
                 }
-                Type::Enum { name: ename, repr: Box::new(repr), has_payload: cx.enums[ename].has_payload }
+                // a generic enum's variant can never be used bare - a bare `Var`
+                // has no syntax to attach a turbofish, so even a unit variant needs
+                // the call form: `Option::None::<i32>()`.
+                if cx.generic_enums.contains_key(ename) {
+                    return Err(Error {
+                        msg: format!(
+                            "enum '{}' is generic; construct '{}' with explicit type arguments, e.g. `{}::<...>()`",
+                            ename, name, name,
+                        ),
+                        span,
+                    });
+                }
+                Type::Enum { name: ename, repr: Box::new(repr), has_payload: cx.enums[ename].has_payload, args: Vec::new() }
             } else {
                 let Some((binding, ty)) = cx.lookup(name) else {
                     let msg = format!("Undefined variable '{}'", name);
@@ -728,12 +746,32 @@ fn infer<'a>(
             // against the variant's payload struct and yield the aggregate enum
             // type. Guarded before ordinary struct-literal handling.
             if let Some((ename, variant)) = split_enum_variant(cx, name) {
-                if !type_args.is_empty() {
-                    return Err(Error {
-                        msg: format!("enum constructor '{}' takes no type arguments", name),
-                        span,
-                    });
-                }
+                // a generic enum's struct-style variant needs turbofish (no context
+                // inference yet, matching plain generic-struct construction); a
+                // non-generic one must NOT have any.
+                let (type_subst, const_subst, resolved_args) = match cx.generic_enums.get(ename).cloned() {
+                    Some(params) => {
+                        if type_args.is_empty() {
+                            return Err(Error {
+                                msg: format!(
+                                    "enum '{}' is generic; construct '{}' with type arguments, e.g. `{}::<...> {{ ... }}`",
+                                    ename, name, name,
+                                ),
+                                span,
+                            });
+                        }
+                        bind_struct_generics(cx, ename, &params, type_args, &span)?
+                    }
+                    None => {
+                        if !type_args.is_empty() {
+                            return Err(Error {
+                                msg: format!("enum constructor '{}' takes no type arguments", name),
+                                span,
+                            });
+                        }
+                        (HashMap::new(), HashMap::new(), Vec::new())
+                    }
+                };
                 let pstruct = enum_payload_struct_name(ename, variant);
                 let pdef = match cx.structs.get(pstruct) {
                     Some(d) if !d.is_empty() => d.clone(),
@@ -758,7 +796,8 @@ fn infer<'a>(
                     });
                 }
                 // field order must match the declaration (same rule as a struct
-                // literal); each field checks against its declared payload type.
+                // literal); each field checks against its (param-substituted)
+                // declared payload type.
                 for ((def_name, def_ty), (lit_name, lit_value)) in pdef.iter().zip(fields.iter()) {
                     if def_name != lit_name {
                         return Err(Error {
@@ -767,10 +806,11 @@ fn infer<'a>(
                             span: lit_value.span.clone(),
                         });
                     }
-                    check_expr(cx, def_ty, lit_value)?;
+                    let expected = subst_param_type(&type_subst, &const_subst, def_ty);
+                    check_expr(cx, &expected, lit_value)?;
                 }
                 let repr = cx.enums[ename].repr.clone();
-                let ty = Type::Enum { name: ename, repr: Box::new(repr), has_payload: true };
+                let ty = Type::Enum { name: ename, repr: Box::new(repr), has_payload: true, args: resolved_args };
                 cx.node_types.insert(expr.id, ty.clone());
                 return Ok(ty);
             }
@@ -916,12 +956,32 @@ fn infer<'a>(
             // and yield the aggregate enum type. Guarded before ordinary dispatch.
             if let ExprNode::Var(cname) = &func.value {
                 if let Some((ename, payload_tys)) = enum_variant_ctor(cx, cname) {
-                    if !type_args.is_empty() {
-                        return Err(Error {
-                            msg: format!("enum constructor '{}' takes no type arguments", cname),
-                            span,
-                        });
-                    }
+                    // a generic enum's tuple/unit variant needs turbofish (no
+                    // context inference yet, matching plain generic-struct
+                    // construction); a non-generic one must NOT have any.
+                    let (type_subst, const_subst, resolved_args) = match cx.generic_enums.get(ename).cloned() {
+                        Some(params) => {
+                            if type_args.is_empty() {
+                                return Err(Error {
+                                    msg: format!(
+                                        "enum '{}' is generic; construct '{}' with type arguments, e.g. `{}::<...>(...)`",
+                                        ename, cname, cname,
+                                    ),
+                                    span,
+                                });
+                            }
+                            bind_struct_generics(cx, ename, &params, type_args, &span)?
+                        }
+                        None => {
+                            if !type_args.is_empty() {
+                                return Err(Error {
+                                    msg: format!("enum constructor '{}' takes no type arguments", cname),
+                                    span,
+                                });
+                            }
+                            (HashMap::new(), HashMap::new(), Vec::new())
+                        }
+                    };
                     if args.len() != payload_tys.len() {
                         return Err(Error {
                             msg: format!("variant '{}' expects {} field(s), got {}",
@@ -930,10 +990,11 @@ fn infer<'a>(
                         });
                     }
                     for (pty, arg) in payload_tys.iter().zip(args.iter()) {
-                        check_expr(cx, pty, arg)?;
+                        let expected = subst_param_type(&type_subst, &const_subst, pty);
+                        check_expr(cx, &expected, arg)?;
                     }
                     let repr = cx.enums[ename].repr.clone();
-                    let ty = Type::Enum { name: ename, repr: Box::new(repr), has_payload: cx.enums[ename].has_payload };
+                    let ty = Type::Enum { name: ename, repr: Box::new(repr), has_payload: cx.enums[ename].has_payload, args: resolved_args };
                     cx.node_types.insert(expr.id, ty.clone());
                     return Ok(ty);
                 }
@@ -1114,6 +1175,30 @@ fn check_stmt<'a>(
                     span: scrutinee.span.clone(),
                 }),
             };
+            // `cx.enums[en].payloads` holds the enum's OWN declared payload types
+            // (`Type::Param("T")` for a generic enum's field) - if the scrutinee is
+            // a concrete instance of a generic enum (`Option<i32>`, args non-empty),
+            // substitute those params with the scrutinee's actual args before using
+            // any payload type below, mirroring how struct field access substitutes
+            // a generic struct's `Param` fields via its own `args`.
+            let (type_subst, const_subst): (HashMap<&'a str, Type<'a>>, HashMap<&'a str, usize>) =
+                match &scrut_ty {
+                    Type::Enum { name, args, .. } if !args.is_empty() => {
+                        let mut ts = HashMap::new();
+                        let mut cs = HashMap::new();
+                        if let Some(params) = cx.generic_enums.get(name) {
+                            for (gp, ga) in params.iter().zip(args.iter()) {
+                                match (gp, ga) {
+                                    (GenericParam::Type(n), GenericArg::Type(t)) => { ts.insert(*n, t.clone()); }
+                                    (GenericParam::Const(n, _), GenericArg::Const(ConstVal::Lit(v))) => { cs.insert(*n, *v); }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        (ts, cs)
+                    }
+                    _ => (HashMap::new(), HashMap::new()),
+                };
 
             let mut has_wildcard = false;
             let mut covered_variants: HashSet<&'a str> = HashSet::new();
@@ -1174,8 +1259,10 @@ fn check_stmt<'a>(
                                 PatternNode::Wildcard => {}
                                 // each `Bind` is keyed by its own node id (its
                                 // binding identity), so shadowing/reuse is distinct.
-                                PatternNode::Bind(bname) =>
-                                    arm_bindings.push((*bname, Binding::Local(fpat.id), fty.clone())),
+                                PatternNode::Bind(bname) => arm_bindings.push((
+                                    *bname, Binding::Local(fpat.id),
+                                    subst_param_type(&type_subst, &const_subst, fty),
+                                )),
                                 other => return Err(Error {
                                     msg: format!("unsupported payload sub-pattern `{}`", other),
                                     span: fpat.span.clone(),
@@ -1223,8 +1310,10 @@ fn check_stmt<'a>(
                             }
                             match &fpat.value {
                                 PatternNode::Wildcard => {}
-                                PatternNode::Bind(bname) =>
-                                    arm_bindings.push((*bname, Binding::Local(fpat.id), fty.clone())),
+                                PatternNode::Bind(bname) => arm_bindings.push((
+                                    *bname, Binding::Local(fpat.id),
+                                    subst_param_type(&type_subst, &const_subst, fty),
+                                )),
                                 other => return Err(Error {
                                     msg: format!("unsupported payload sub-pattern `{}`", other),
                                     span: fpat.span.clone(),
@@ -1597,6 +1686,30 @@ fn check_toplevel<'a>(
     Ok(())
 }
 
+/// Whether every aggregate (struct, or data-enum) that `ename`'s payload fields
+/// reference is already registered in `structs` - i.e. whether it's safe to call
+/// `layout::size_of` on `ename`'s payload structs yet. Used to sequence data-enum
+/// "pass 2" (aggregate registration) into a fixpoint: a data enum's payload can
+/// itself be another (unregistered) data enum (`Option<Option<i32>>`).
+fn enum_agg_deps_ready<'a>(
+    ename: &str,
+    enums: &HashMap<&'a str, EnumDef<'a>>,
+    structs: &HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
+) -> bool {
+    fn ty_ready<'a>(ty: &Type<'a>, structs: &HashMap<&'a str, Vec<(&'a str, Type<'a>)>>) -> bool {
+        match ty {
+            Type::Struct { name, .. } => structs.contains_key(name),
+            Type::Enum { name, has_payload: true, .. } => structs.contains_key(name),
+            // a pointer is a fixed-size opaque handle: doesn't need its pointee's
+            // own layout, so it never blocks readiness.
+            Type::Pointer(_) => true,
+            Type::Array(inner, _) | Type::Slice(inner) | Type::Simd(inner, _) => ty_ready(inner, structs),
+            _ => true,
+        }
+    }
+    enums[ename].payloads.values().all(|fields| fields.iter().all(|(_, ty)| ty_ready(ty, structs)))
+}
+
 /// The discriminant repr type for an enum, from its `@repr(<int>)` attribute.
 /// Defaults to `i32` (C `int`); `@repr(C)` is an explicit spelling of that.
 /// haven has no 16-bit integer, so `u16`/`i16` are not accepted yet.
@@ -1636,7 +1749,15 @@ fn check_variant_pattern<'a>(cx: &Context<'a>, en: &'a str, path: &'a str, span:
 -> Result<&'a str, Error> {
     let (pat_enum, variant) = path.split_once("::")
         .ok_or_else(|| Error { msg: format!("invalid enum pattern `{}`", path), span: span.clone() })?;
-    if pat_enum != en {
+    // `en` may be a monomorphized instance name (`Option$i32`): the surface
+    // pattern is written against the ORIGINAL generic enum name (`Option::Some`),
+    // never the mangled one - mono rewrites construction call/struct-literal sites
+    // to the mangled name, but never touches match-pattern text (it has no type
+    // info to know which instantiation a bare pattern refers to; see mono.rs).
+    // `$` can't appear in a source identifier (mangling's own injectivity
+    // invariant), so stripping at the first `$` recovers the declared base name.
+    let en_base = en.split('$').next().unwrap_or(en);
+    if pat_enum != en_base {
         return Err(Error { msg: format!("pattern `{}` is not a variant of enum '{}'", path, en), span: span.clone() });
     }
     if !cx.enums[en].variants.contains_key(variant) {
@@ -1678,10 +1799,20 @@ fn resolve_type<'a>(generics: &[&'a str], enums: &HashMap<&'a str, EnumDef<'a>>,
         // type keeps its name but has its generic args resolved recursively (a
         // struct arg can itself mention `T`, e.g. `Option<T>`).
         Type::Struct { name, args } if args.is_empty() && generics.contains(name) => Type::Param(name),
-        // a bare name that is a declared enum becomes `Type::Enum`, with the
-        // discriminant repr baked in so later stages need no enum table.
-        Type::Struct { name, args } if args.is_empty() && enums.contains_key(name) =>
-            Type::Enum { name, repr: Box::new(enums[name].repr.clone()), has_payload: enums[name].has_payload },
+        // a name that is a declared enum becomes `Type::Enum`, with the
+        // discriminant repr baked in so later stages need no enum table. Fires
+        // regardless of `args` (empty for a plain enum, populated for a generic
+        // one like `Option<i32>`) - args are resolved recursively, mirroring the
+        // `Struct` arg-resolution arm below; monomorphization flattens them later.
+        Type::Struct { name, args } if enums.contains_key(name) => Type::Enum {
+            name,
+            repr: Box::new(enums[name].repr.clone()),
+            has_payload: enums[name].has_payload,
+            args: args.iter().map(|a| match a {
+                GenericArg::Type(t) => GenericArg::Type(resolve_type(generics, enums, t)),
+                GenericArg::Const(_) => a.clone(),
+            }).collect(),
+        },
         Type::Struct { name, args } => Type::Struct {
             name,
             // only type args can name a type param; const args pass through.
@@ -1724,6 +1855,17 @@ fn subst_param_type<'a>(
         // `Buf<T, N>`); recurse so both type and const args get substituted.
         Type::Struct { name, args } => Type::Struct {
             name,
+            args: args.iter().map(|a| match a {
+                GenericArg::Type(t) => GenericArg::Type(subst_param_type(types, consts, t)),
+                GenericArg::Const(cv) => GenericArg::Const(sub_cv(cv)),
+            }).collect(),
+        },
+        // same story for a generic-enum instance (`Option<T>`, `Result<T, E>`):
+        // its args can mention params too.
+        Type::Enum { name, repr, has_payload, args } => Type::Enum {
+            name,
+            repr: repr.clone(),
+            has_payload: *has_payload,
             args: args.iter().map(|a| match a {
                 GenericArg::Type(t) => GenericArg::Type(subst_param_type(types, consts, t)),
                 GenericArg::Const(cv) => GenericArg::Const(sub_cv(cv)),
@@ -1974,6 +2116,50 @@ fn check_type_resolves<'a>(cx: &Context<'a>, ty: &Type<'a>) -> Result<(), String
             // later stage.
             Ok(())
         }
+        // mirrors the `Struct` arm above: validate arg count/kind against the
+        // enum's declared generics (0 for a plain enum). `resolve_type` only ever
+        // produces a `Type::Enum` for a name already in `cx.enums`, so the
+        // existence check can't actually fail - kept for parity/defensiveness.
+        Type::Enum { name, args, .. } => {
+            if !cx.enums.contains_key(name) {
+                return Err(format!("unknown type '{}'", name));
+            }
+            for a in args {
+                if let GenericArg::Type(t) = a { check_type_resolves(cx, t)?; }
+            }
+            let params = cx.generic_enums.get(name);
+            let arity = params.map_or(0, |p| p.len());
+            if args.len() != arity {
+                return Err(if arity == 0 {
+                    format!("enum '{}' is not generic; no type arguments expected", name)
+                } else {
+                    format!(
+                        "enum '{}' expects {} type argument{}, got {}",
+                        name, arity,
+                        if arity == 1 { "" } else { "s" }, args.len(),
+                    )
+                });
+            }
+            if let Some(params) = params {
+                for (gp, ga) in params.iter().zip(args) {
+                    match (gp, ga) {
+                        (GenericParam::Type(_), GenericArg::Type(_)) => {}
+                        (GenericParam::Const(_, _), GenericArg::Const(ConstVal::Lit(_))) => {}
+                        (GenericParam::Const(pn, _), GenericArg::Const(ConstVal::Param(f))) =>
+                            return Err(format!("enum '{}': forwarding const parameter '{}' to '{}' is not supported yet", name, f, pn)),
+                        (GenericParam::Type(pn), GenericArg::Const(_)) =>
+                            return Err(format!("enum '{}': expected a type argument for '{}', got a const value", name, pn)),
+                        (GenericParam::Const(pn, _), GenericArg::Type(t)) => {
+                            if const_param_name(t).is_some_and(|n| cx.const_generics.contains(&n)) {
+                                return Err(format!("enum '{}': forwarding const parameter '{}' to '{}' is not supported yet", name, const_param_name(t).unwrap(), pn));
+                            }
+                            return Err(format!("enum '{}': expected a const argument for '{}', got a type", name, pn));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
         Type::Pointer(inner)
         | Type::Array(inner, _)
         | Type::Slice(inner)
@@ -1995,7 +2181,7 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
     // type, and `resolve_type` needs the enum table to rewrite `Struct(name)`
     // into `Type::Enum`.
     for node in program {
-        if let TopLevelNode::Enum { name, attributes, variants, .. } = &node.value {
+        if let TopLevelNode::Enum { name, attributes, generics, variants, .. } = &node.value {
             if cx.enums.contains_key(name) || cx.structs.contains_key(name) {
                 errors.push(Error {
                     msg: format!("Duplicate type definition '{}'", name),
@@ -2007,6 +2193,9 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 Ok(r) => r,
                 Err(msg) => { errors.push(Error { msg, span: node.span.clone() }); continue; }
             };
+            if !generics.is_empty() {
+                cx.generic_enums.insert(name, generics.clone());
+            }
             // C-style discriminants: an unspecified variant is the previous one
             // plus one, starting at 0. Payload field types are collected here but
             // resolved against the enum table in a later pass (below), once every
@@ -2079,13 +2268,23 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
     // pass 1: register every payload struct and stash the resolved payloads. The
     // payload struct's field names are exactly the variant's field names, so a
     // struct-style variant's `{ id, val }` is a struct `Msg$Cc = { id, val }`.
+    // A generic enum's own type params (e.g. `Option<T>`) are in scope while
+    // resolving its payloads, so a field naming one becomes `Type::Param`, exactly
+    // like a generic struct's own fields - construction/match-arm checking then
+    // substitutes it via `subst_param_type`, and monomorphization flattens it.
     for ename in &data_enums {
+        let type_params: Vec<&'a str> = cx.generic_enums.get(ename)
+            .map(|params| params.iter().filter_map(|g| match g {
+                GenericParam::Type(n) => Some(*n),
+                GenericParam::Const(_, _) => None,
+            }).collect())
+            .unwrap_or_default();
         let raw: Vec<(&'a str, Vec<(&'a str, Type<'a>)>)> = cx.enums[ename].payloads.iter()
             .map(|(v, fs)| (*v, fs.clone())).collect();
         let mut resolved: HashMap<&'a str, Vec<(&'a str, Type<'a>)>> = HashMap::new();
         for (vname, fields) in raw {
             let rfields: Vec<(&'a str, Type<'a>)> = fields.iter()
-                .map(|(n, t)| (*n, resolve_type(&[], &cx.enums, t)))
+                .map(|(n, t)| (*n, resolve_type(&type_params, &cx.enums, t)))
                 .collect();
             cx.structs.insert(enum_payload_struct_name(ename, vname), rfields.clone());
             resolved.insert(vname, rfields);
@@ -2093,17 +2292,42 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
         if let Some(def) = cx.enums.get_mut(ename) { def.payloads = resolved; }
     }
     // pass 2: register each aggregate, sizing its byte blob from the (now present)
-    // payload structs. Separate pass so a payload struct is always in the table.
-    for ename in &data_enums {
-        let repr = cx.enums[ename].repr.clone();
-        let payload_bytes = cx.enums[ename].payloads.keys()
-            .map(|v| layout::size_of(&Type::plain_struct(enum_payload_struct_name(ename, v)), &cx.structs))
-            .max().unwrap_or(0);
-        let agg_fields = vec![
-            (ENUM_TAG_FIELD, repr),
-            (ENUM_PAYLOAD_FIELD, Type::Array(Box::new(Type::Int8), ConstVal::Lit(payload_bytes))),
-        ];
-        cx.structs.insert(ename, agg_fields);
+    // payload structs. Skips a GENERIC enum template: its payload structs still
+    // hold `Type::Param` fields (no concrete args bound yet), and `layout::size_of`
+    // panics on those - only a concrete instance (monomorphized, or never generic
+    // to begin with) gets laid out and lowered to codegen.
+    //
+    // Iterates to a FIXPOINT rather than a single pass: one data enum's payload
+    // can itself be another data enum (`Option<Option<i32>>`), whose own aggregate
+    // must be registered first so `layout::size_of` can measure it - but
+    // `data_enums`'s order (from a HashMap) is unspecified, so a naive single pass
+    // can reach the outer enum before its dependency is ready. Round-robin: process
+    // whatever's ready, retry the rest, stop when a full round makes no progress
+    // (which - for anything that survived monomorphization's own type-depth limit -
+    // only happens once every enum is done).
+    let mut pending: Vec<&'a str> = data_enums.iter()
+        .filter(|e| !cx.generic_enums.contains_key(*e)).cloned().collect();
+    loop {
+        let mut still_pending = Vec::new();
+        let mut progressed = false;
+        for ename in pending {
+            if !enum_agg_deps_ready(ename, &cx.enums, &cx.structs) {
+                still_pending.push(ename);
+                continue;
+            }
+            let repr = cx.enums[ename].repr.clone();
+            let payload_bytes = cx.enums[ename].payloads.keys()
+                .map(|v| layout::size_of(&Type::plain_struct(enum_payload_struct_name(ename, v)), &cx.structs))
+                .max().unwrap_or(0);
+            let agg_fields = vec![
+                (ENUM_TAG_FIELD, repr),
+                (ENUM_PAYLOAD_FIELD, Type::Array(Box::new(Type::Int8), ConstVal::Lit(payload_bytes))),
+            ];
+            cx.structs.insert(ename, agg_fields);
+            progressed = true;
+        }
+        if still_pending.is_empty() || !progressed { break; }
+        pending = still_pending;
     }
 
     // forward declare functions so that they can be called before their definition

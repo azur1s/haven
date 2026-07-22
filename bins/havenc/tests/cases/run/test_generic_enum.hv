@@ -1,0 +1,70 @@
+// Stage-3 Phase 3: generic data-carrying enums (`enum Option<T> { None, Some(T) }`).
+// Construction (tuple + unit variants, with required turbofish - no context
+// inference yet, matching plain generic structs), `match`-binding both from an
+// ordinary function and from INSIDE a generic function's own body (exercising
+// mono's payload-type substitution and its match-pattern-qualifier handling),
+// distinct monomorphized instances at different type args not colliding, and
+// nesting one instance inside another (`Option<Option<i32>>`).
+
+enum Option<T> { None, Some(T) }
+enum Result<T, E> { Ok(T), Err(E) }
+
+proc unwrap_or(o: Option<i32>, default: i32) i32 {
+    match (o) {
+        Option::Some(v) -> { return v; }
+        Option::None -> { return default; }
+    }
+}
+
+proc describe(r: Result<i32, i32>) i32 {
+    match (r) {
+        Result::Ok(v) -> { return v; }
+        Result::Err(e) -> { return 0 - e; }
+    }
+}
+
+// a GENERIC function that constructs nothing but matches internally: exercises
+// substituting the enum's own `Param` payload type with the caller's bound `T`,
+// and resolving the match pattern's qualifier against the monomorphized instance
+// name (`Option$i32`/`Option$f32`), not the pattern's own unmangled text.
+proc pick<T>(o: Option<T>, default: T) T {
+    match (o) {
+        Option::Some(v) -> { return v; }
+        Option::None -> { return default; }
+    }
+}
+
+@export
+proc main() i32 {
+    let a: Option<i32> = Option::Some::<i32>(42);
+    let b: Option<i32> = Option::None::<i32>();
+    printf::<i32>("%d\n", unwrap_or(a, -1)); // 42
+    printf::<i32>("%d\n", unwrap_or(b, -1)); // -1
+
+    let ok: Result<i32, i32> = Result::Ok::<i32, i32>(7);
+    let err: Result<i32, i32> = Result::Err::<i32, i32>(3);
+    printf::<i32>("%d\n", describe(ok));  // 7
+    printf::<i32>("%d\n", describe(err)); // -3
+
+    printf::<i32>("%d\n", pick::<i32>(a, -1)); // 42
+    printf::<i32>("%d\n", pick::<i32>(b, -1)); // -1
+
+    // a distinct instantiation at a different T (Option$f32 vs Option$i32) must
+    // not collide with the one above.
+    let f: Option<f32> = Option::Some::<f32>(2.5f32);
+    printf::<i32>("%d\n", numerical_cast::<i32>(pick::<f32>(f, 0.0f32))); // 2
+
+    // nesting one instance inside another.
+    let nested: Option<Option<i32>> = Option::Some::<Option<i32>>(Option::Some::<i32>(99));
+    match (nested) {
+        Option::Some(inner) -> {
+            match (inner) {
+                Option::Some(v) -> { printf::<i32>("%d\n", v); } // 99
+                Option::None -> { printf::<i32>("%d\n", -1); }
+            }
+        }
+        Option::None -> { printf::<i32>("%d\n", -2); }
+    }
+
+    return 0;
+}

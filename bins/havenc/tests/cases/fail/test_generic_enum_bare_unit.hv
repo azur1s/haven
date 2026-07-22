@@ -1,0 +1,10 @@
+//@ error: enum 'Option' is generic
+// a bare unit variant of a generic enum can never carry a turbofish (a `Var`
+// has no `::<...>` syntax) - must use the call form `Option::None::<i32>()`.
+enum Option<T> { None, Some(T) }
+
+@export
+proc main() i32 {
+    let a: Option<i32> = Option::None;
+    return 0;
+}

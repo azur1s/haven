@@ -263,16 +263,19 @@ pub enum Type<'a> {
     /// instance with a mangled `name` and no `args` (like generic functions). Use
     /// [`Type::plain_struct`] to build the common no-args case.
     Struct { name: &'a str, args: Vec<GenericArg<'a>> },
-    /// A named enum. `repr` is the integer type its discriminant is stored as
-    /// (default `i32`, or set by `@repr(<int>)`). `has_payload` is `false` for a
-    /// field-less C-style enum - a bare scalar discriminant, zero overhead - and
-    /// `true` for a data-carrying (ADT / sum-type) enum, which is an aggregate
-    /// `{ tag: repr, payload: [P x i8] }` laid out via a synthetic struct of the
-    /// same `name` (see the mid end's forward-declaration pass). The repr is baked
-    /// into the type so scalar layout/codegen just delegate to it; `name` keeps
-    /// enum values distinct from a plain integer for typechecking. Produced by
+    /// A named enum, with any generic arguments applied (mirrors `Struct.args`;
+    /// `args` is always empty after monomorphization - a generic enum type is
+    /// rewritten to a concrete instance with a mangled `name`, like a generic
+    /// struct). `repr` is the integer type its discriminant is stored as (default
+    /// `i32`, or set by `@repr(<int>)`). `has_payload` is `false` for a field-less
+    /// C-style enum - a bare scalar discriminant, zero overhead - and `true` for a
+    /// data-carrying (ADT / sum-type) enum, which is an aggregate `{ tag: repr,
+    /// payload: [P x i8] }` laid out via a synthetic struct of the same `name`
+    /// (see the mid end's forward-declaration pass). The repr is baked into the
+    /// type so scalar layout/codegen just delegate to it; `name` keeps enum
+    /// values distinct from a plain integer for typechecking. Produced by
     /// typecheck when a `Struct(name)` resolves to a declared enum.
-    Enum { name: &'a str, repr: Box<Self>, has_payload: bool },
+    Enum { name: &'a str, repr: Box<Self>, has_payload: bool, args: Vec<GenericArg<'a>> },
     /// A generic type parameter, e.g. `T`.
     /// Produced during typechecking by resolving a `Struct(name)` where the name
     /// matches a type param in scope. It is abstract and must never survive to
@@ -328,7 +331,11 @@ impl<'a> Display for Type<'a> {
                 let args_str = args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "{}<{}>", name, args_str)
             },
-            Enum { name, .. } => write!(f, "{}", name),
+            Enum { name, args, .. } if args.is_empty() => write!(f, "{}", name),
+            Enum { name, args, .. } => {
+                let args_str = args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
+                write!(f, "{}<{}>", name, args_str)
+            },
             Param(name) => write!(f, "{}", name),
         }
     }
@@ -682,11 +689,14 @@ pub enum TopLevelNode<'a> {
     /// name, type)`: empty for a unit variant (`Stop`); for a tuple variant
     /// (`Note(u8, f32)`) the fields get synthesized names `"0"`, `"1"`, ...; for a
     /// struct variant (`Cc { id: u32 }`, Stage-3 Phase 2) the real names. A carried
-    /// discriminant is only meaningful on a unit variant.
+    /// discriminant is only meaningful on a unit variant. `generics` (Stage-3
+    /// Phase 3) declares type/const params in scope for every variant's payload
+    /// field types, e.g. `enum Option<T> { None, Some(T) }`; empty for a plain enum.
     Enum {
         name: &'a str,
         is_pub: bool,
         attributes: Vec<Attribute<'a>>,
+        generics: Vec<GenericParam<'a>>,
         variants: Vec<(&'a str, Option<i64>, Vec<(&'a str, Type<'a>)>)>,
     },
 
@@ -753,13 +763,14 @@ impl<'a> Display for TopLevelNode<'a> {
 
                 write!(f, "{}{}const {}: {} = {};", attrs_str, pub_str, name, ty, value.value)
             },
-            TopLevelNode::Enum { name, is_pub, attributes, variants } => {
+            TopLevelNode::Enum { name, is_pub, attributes, generics, variants } => {
                 let attrs_str = if attributes.is_empty() {
                     String::new()
                 } else {
                     attributes.iter().map(|attr| attr.value.to_string()).collect::<Vec<_>>().join("\n") + "\n"
                 };
                 let pub_str = if *is_pub { "pub " } else { "" };
+                let generics_str = fmt_generics(generics);
                 let variants_str = variants.iter().map(|(vname, val, payload)| {
                     let payload_str = if payload.is_empty() {
                         String::new()
@@ -772,7 +783,7 @@ impl<'a> Display for TopLevelNode<'a> {
                     }
                 }).collect::<String>();
 
-                write!(f, "{}{}enum {} {{\n{}}}", attrs_str, pub_str, name, variants_str)
+                write!(f, "{}{}enum {}{} {{\n{}}}", attrs_str, pub_str, name, generics_str, variants_str)
             },
         }
     }
