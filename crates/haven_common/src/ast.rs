@@ -543,6 +543,11 @@ pub enum PatternNode<'a> {
     /// `Msg::Note(pitch, vel)`. `path` is the joined `Enum::Variant`; `fields` is
     /// one sub-pattern per payload field (`Bind` to name it, `Wildcard` to ignore).
     Variant { path: &'a str, fields: Vec<Pattern<'a>> },
+    /// a struct-style variant pattern that destructures a named payload by field,
+    /// e.g. `Msg::Cc { id, val }` or `Msg::Cc { id: x, val: _ }`. Each entry is
+    /// `(field_name, sub_pattern)`; binding is by field name, so order is free.
+    /// The shorthand `{ id }` desugars to `(id, Bind(id))` at parse time.
+    StructVariant { path: &'a str, fields: Vec<(&'a str, Pattern<'a>)> },
     /// a binding introduced by a `Variant` field, e.g. the `pitch` in
     /// `Msg::Note(pitch, vel)`. Metadata-wrapped so each binding has a unique node
     /// id (its binding identity, mirroring how a `Declare` keys its local).
@@ -561,6 +566,12 @@ impl<'a> Display for PatternNode<'a> {
             PatternNode::Variant { path, fields } => {
                 let inner = fields.iter().map(|p| p.value.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "{}({})", path, inner)
+            }
+            PatternNode::StructVariant { path, fields } => {
+                let inner = fields.iter()
+                    .map(|(name, p)| format!("{}: {}", name, p.value))
+                    .collect::<Vec<_>>().join(", ");
+                write!(f, "{} {{ {} }}", path, inner)
             }
         }
     }

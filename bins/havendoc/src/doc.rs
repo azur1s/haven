@@ -300,10 +300,17 @@ fn signature(node: &TopLevelNode, src: &str, start: usize, end: usize) -> String
             let mut s = attr_prefix(attributes);
             s.push_str(&format!("enum {} {{\n", name));
             for (vname, val, payload) in variants {
+                // tuple variants carry synthesized names "0", "1", ...; render them
+                // positionally as `(T, U)`. Struct-style variants keep real field
+                // names and render as `{ id: T, val: U }`.
+                let is_tuple = payload.first()
+                    .is_some_and(|(n, _)| n.bytes().all(|b| b.is_ascii_digit()));
                 let payload_str = if payload.is_empty() {
                     String::new()
-                } else {
+                } else if is_tuple {
                     format!("({})", payload.iter().map(|(_, ty)| ty.to_string()).collect::<Vec<_>>().join(", "))
+                } else {
+                    format!(" {{ {} }}", payload.iter().map(|(n, ty)| format!("{}: {}", n, ty)).collect::<Vec<_>>().join(", "))
                 };
                 match val {
                     Some(v) => s.push_str(&format!("    {}{} = {},\n", vname, payload_str, v)),

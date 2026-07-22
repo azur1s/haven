@@ -741,6 +741,20 @@ fn lower_expr<'a>(cx: &mut LowerCtx<'a>, expr: &Expr<'a>) -> Value {
         }
 
         ExprNode::Struct { name, fields, .. } => {
+            // a struct-style data-enum constructor `Msg::Cc { id, val }` reuses the
+            // struct-literal syntax but builds the aggregate in place. Detected by
+            // the node's inferred aggregate-enum type; construction requires
+            // declaration order (typecheck enforced), so the field exprs are already
+            // in payload-struct order and pass positionally to the shared builder.
+            if let Some(Type::Enum { has_payload: true, name: ename, .. }) =
+                cx.node_types.get(&expr.id).cloned().as_ref()
+            {
+                let ename = *ename;
+                let tag = enum_const(&cx.enums, name).expect("variant const validated in typecheck");
+                let args: Vec<Expr<'a>> = fields.iter().map(|(_, e)| e.clone()).collect();
+                return construct_data_variant(cx, ename, name, tag, &args);
+            }
+
             // reuse a hoisted entry-block slot if the caller provided one;
             // otherwise this literal owns a fresh slot. take() so nested field
             // literals don't inherit the target.
@@ -1490,7 +1504,7 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                         let c = enum_const(&cx.enums, p).expect("enum pattern validated in typecheck");
                         cases.push((c, block));
                     }
-                    PatternNode::Variant { path, .. } => {
+                    PatternNode::Variant { path, .. } | PatternNode::StructVariant { path, .. } => {
                         let c = enum_const(&cx.enums, path).expect("enum pattern validated in typecheck");
                         cases.push((c, block));
                     }
@@ -1521,6 +1535,24 @@ fn lower_stmt<'a>(cx: &mut LowerCtx<'a>, stmt: &Stmt<'a>) {
                             let fty = cx.structs[pstruct][i].1.clone();
                             let fp = cx.fresh_reg();
                             cx.emit(Inst::FieldPtr { dst: fp, struct_name: pstruct, base: payload_base, field_index: i });
+                            cx.env.insert(Binding::Local(fpat.id), (fp, fty));
+                        }
+                    }
+                }
+                // struct-style destructure: bind by field name, so the FieldPtr uses
+                // the payload struct's index for that name (order in the pattern is
+                // irrelevant). A `_` field is skipped, a `Bind` becomes a view.
+                if let (PatternNode::StructVariant { path, fields }, Some((ename, ptr))) = (&pat.value, agg) {
+                    let variant = path.split_once("::").unwrap().1;
+                    let pstruct = crate::typecheck::enum_payload_struct_name(ename, variant);
+                    let payload_base = cx.fresh_reg();
+                    cx.emit(Inst::FieldPtr { dst: payload_base, struct_name: ename, base: ptr, field_index: 1 });
+                    for (fname, fpat) in fields {
+                        if let PatternNode::Bind(_) = &fpat.value {
+                            let idx = cx.structs[pstruct].iter().position(|(n, _)| n == fname).unwrap();
+                            let fty = cx.structs[pstruct][idx].1.clone();
+                            let fp = cx.fresh_reg();
+                            cx.emit(Inst::FieldPtr { dst: fp, struct_name: pstruct, base: payload_base, field_index: idx });
                             cx.env.insert(Binding::Local(fpat.id), (fp, fty));
                         }
                     }

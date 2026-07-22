@@ -1,0 +1,52 @@
+// Data-carrying enums, Stage-3 Phase 2: struct-style `{named}` variants.
+// Constructing with `E::V { field: .. }`, `match`-binding by field name
+// (order-independent), field shorthand + `_`, a mixed-align named payload,
+// mixing struct and tuple variants in one enum, and by-value pass/return.
+
+enum Msg {
+    Stop,                       // unit variant
+    Note(u8, f32),              // tuple variant (Phase 1) still works alongside
+    Cc { id: u32, val: i32 },   // struct-style variant, mixed-align named payload
+}
+
+// destructure by field name; binding order need not match declaration order.
+proc score(m: Msg) i32 {
+    match (m) {
+        Msg::Cc { val, id }  -> { return numerical_cast::<i32>(id) + val; }
+        Msg::Note(p, v)      -> { return numerical_cast::<i32>(p); }
+        Msg::Stop            -> { return -1; }
+    }
+}
+
+// `_` ignores a field; shorthand `{ id }` binds `id`.
+proc just_id(m: Msg) i32 {
+    match (m) {
+        Msg::Cc { id, val: _ } -> { return numerical_cast::<i32>(id); }
+        _                      -> { return 0; }
+    }
+}
+
+// take a struct-variant by value and return a rebuilt one (sret round-trip).
+proc retune(m: Msg) Msg {
+    match (m) {
+        Msg::Cc { id, val } -> { return Msg::Cc { id: id, val: val + 100 }; }
+        _                   -> { return m; }
+    }
+}
+
+@export
+proc main() i32 {
+    let a: Msg = Msg::Cc { id: 5u32, val: 10 };
+    let b: Msg = Msg::Note(60u8, 1.5f32);
+    let c: Msg = Msg::Stop;
+
+    printf::<i32>("%d\n", score(a));    // 5 + 10 = 15
+    printf::<i32>("%d\n", score(b));    // 60
+    printf::<i32>("%d\n", score(c));    // -1
+    printf::<i32>("%d\n", just_id(a));  // 5
+
+    // pass a struct-variant by value, return one by value
+    let d: Msg = retune(a);             // Cc { id: 5, val: 110 }
+    printf::<i32>("%d\n", score(d));    // 5 + 110 = 115
+    return 0;
+}

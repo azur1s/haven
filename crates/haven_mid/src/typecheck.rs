@@ -17,12 +17,6 @@ pub fn enum_payload_struct_name(enum_name: &str, variant: &str) -> &'static str 
     Box::leak(format!("{}${}", enum_name, variant).into_boxed_str())
 }
 
-/// Leak a `String` to `'static` (coerces to any `'a`). Used for synthesized
-/// tuple-payload field names (`"0"`, `"1"`, ...).
-fn leak_str(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
-}
-
 /// A generic function's signature, in terms of its own type params. param/return
 /// types hold `Type::Param`. Used to typecheck calls before mono materializes the
 /// concrete instances
@@ -85,9 +79,11 @@ pub struct Context<'a> {
 pub struct EnumDef<'a> {
     pub repr: Type<'a>,
     pub variants: HashMap<&'a str, i64>,
-    /// Payload field types per variant, keyed by variant name. A unit variant has
-    /// an empty vec (or no entry). Resolved (enum names rewritten to `Type::Enum`).
-    pub payloads: HashMap<&'a str, Vec<Type<'a>>>,
+    /// Payload fields per variant, keyed by variant name: `(field_name, type)` in
+    /// declaration order. Tuple variants get synthesized names `"0"`, `"1"`, ...;
+    /// struct-style variants keep their written names. A unit variant has an empty
+    /// vec (or no entry). Types are resolved (enum names rewritten to `Type::Enum`).
+    pub payloads: HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
     /// `true` if any variant carries a payload - the enum is then an aggregate
     /// (`Type::Enum { has_payload: true }`) rather than a bare scalar discriminant.
     pub has_payload: bool,
@@ -727,6 +723,58 @@ fn infer<'a>(
         },
 
         ExprNode::Struct { name, type_args, fields } => {
+            // a struct-style enum-variant constructor `E::V { id: .., val: .. }`
+            // looks like a struct literal but names a variant. Check the literal
+            // against the variant's payload struct and yield the aggregate enum
+            // type. Guarded before ordinary struct-literal handling.
+            if let Some((ename, variant)) = split_enum_variant(cx, name) {
+                if !type_args.is_empty() {
+                    return Err(Error {
+                        msg: format!("enum constructor '{}' takes no type arguments", name),
+                        span,
+                    });
+                }
+                let pstruct = enum_payload_struct_name(ename, variant);
+                let pdef = match cx.structs.get(pstruct) {
+                    Some(d) if !d.is_empty() => d.clone(),
+                    _ => return Err(Error {
+                        msg: format!("variant '{}' has no fields; construct it as `{}`", name, name),
+                        span,
+                    }),
+                };
+                // a tuple variant's fields are named "0", "1", ...; those can't be
+                // written in a `{ }` literal, so point the user at the `( )` form.
+                if pdef.first().is_some_and(|(n, _)| n.bytes().all(|b| b.is_ascii_digit())) {
+                    return Err(Error {
+                        msg: format!("variant '{}' is a tuple variant; construct it with `{}(...)`", name, name),
+                        span,
+                    });
+                }
+                if fields.len() != pdef.len() {
+                    return Err(Error {
+                        msg: format!("variant '{}' expects {} field(s), got {}",
+                            name, pdef.len(), fields.len()),
+                        span,
+                    });
+                }
+                // field order must match the declaration (same rule as a struct
+                // literal); each field checks against its declared payload type.
+                for ((def_name, def_ty), (lit_name, lit_value)) in pdef.iter().zip(fields.iter()) {
+                    if def_name != lit_name {
+                        return Err(Error {
+                            msg: format!("In variant '{}': expected field '{}', got '{}'",
+                                name, def_name, lit_name),
+                            span: lit_value.span.clone(),
+                        });
+                    }
+                    check_expr(cx, def_ty, lit_value)?;
+                }
+                let repr = cx.enums[ename].repr.clone();
+                let ty = Type::Enum { name: ename, repr: Box::new(repr), has_payload: true };
+                cx.node_types.insert(expr.id, ty.clone());
+                return Ok(ty);
+            }
+
             let def = match cx.structs.get(name) {
                 Some(d) => d.clone(),
                 None => return Err(Error {
@@ -1121,11 +1169,60 @@ fn check_stmt<'a>(
                         if !covered_variants.insert(variant) {
                             return Err(Error { msg: format!("duplicate match arm for `{}`", path), span: pat.span.clone() });
                         }
-                        for (fpat, fty) in fields.iter().zip(payload.iter()) {
+                        for (fpat, (_, fty)) in fields.iter().zip(payload.iter()) {
                             match &fpat.value {
                                 PatternNode::Wildcard => {}
                                 // each `Bind` is keyed by its own node id (its
                                 // binding identity), so shadowing/reuse is distinct.
+                                PatternNode::Bind(bname) =>
+                                    arm_bindings.push((*bname, Binding::Local(fpat.id), fty.clone())),
+                                other => return Err(Error {
+                                    msg: format!("unsupported payload sub-pattern `{}`", other),
+                                    span: fpat.span.clone(),
+                                }),
+                            }
+                        }
+                    }
+                    PatternNode::StructVariant { path, fields } => {
+                        let Some(en) = enum_name else {
+                            return Err(Error { msg: format!("enum-variant pattern `{}` in a match on integer type", path), span: pat.span.clone() });
+                        };
+                        let variant = check_variant_pattern(cx, en, *path, &pat.span)?;
+                        let payload = cx.enums[en].payloads.get(variant).cloned().unwrap_or_default();
+                        if payload.is_empty() {
+                            return Err(Error {
+                                msg: format!("variant `{}` has no fields to destructure with `{{ }}`", path),
+                                span: pat.span.clone(),
+                            });
+                        }
+                        if fields.len() != payload.len() {
+                            return Err(Error {
+                                msg: format!("variant `{}` has {} field(s) but the pattern binds {}",
+                                    path, payload.len(), fields.len()),
+                                span: pat.span.clone(),
+                            });
+                        }
+                        if !covered_variants.insert(variant) {
+                            return Err(Error { msg: format!("duplicate match arm for `{}`", path), span: pat.span.clone() });
+                        }
+                        // by-name: each named field must exist on the payload struct;
+                        // a `Bind` view is keyed by its node id, a `_` ignores it.
+                        let mut seen: HashSet<&str> = HashSet::new();
+                        for (fname, fpat) in fields {
+                            let Some((_, fty)) = payload.iter().find(|(n, _)| n == fname) else {
+                                return Err(Error {
+                                    msg: format!("variant `{}` has no field `{}`", path, fname),
+                                    span: fpat.span.clone(),
+                                });
+                            };
+                            if !seen.insert(*fname) {
+                                return Err(Error {
+                                    msg: format!("field `{}` bound more than once in `{}`", fname, path),
+                                    span: fpat.span.clone(),
+                                });
+                            }
+                            match &fpat.value {
+                                PatternNode::Wildcard => {}
                                 PatternNode::Bind(bname) =>
                                     arm_bindings.push((*bname, Binding::Local(fpat.id), fty.clone())),
                                 other => return Err(Error {
@@ -1555,7 +1652,20 @@ fn enum_variant_ctor<'a>(cx: &Context<'a>, name: &str) -> Option<(&'a str, Vec<T
     let (ename, variant) = name.split_once("::")?;
     let (&ekey, def) = cx.enums.get_key_value(ename)?;
     if !def.variants.contains_key(variant) { return None; }
-    Some((ekey, def.payloads.get(variant).cloned().unwrap_or_default()))
+    let tys = def.payloads.get(variant)
+        .map(|fs| fs.iter().map(|(_, t)| t.clone()).collect())
+        .unwrap_or_default();
+    Some((ekey, tys))
+}
+
+/// If `name` is `E::V` naming a variant of a declared enum, returns the (enum,
+/// variant) names carrying the `'a` lifetime from the table keys. Used to route
+/// a struct-literal `E::V { ... }` and a `StructVariant` pattern to the variant.
+fn split_enum_variant<'a>(cx: &Context<'a>, name: &str) -> Option<(&'a str, &'a str)> {
+    let (ename, variant) = name.split_once("::")?;
+    let (&ekey, def) = cx.enums.get_key_value(ename)?;
+    let (&vkey, _) = def.variants.get_key_value(variant)?;
+    Some((ekey, vkey))
 }
 
 /// Rewrites a bare named type into a `Type::Param` (generic param in scope),
@@ -1902,7 +2012,7 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
             // resolved against the enum table in a later pass (below), once every
             // enum is known.
             let mut vmap = HashMap::new();
-            let mut payloads: HashMap<&str, Vec<Type>> = HashMap::new();
+            let mut payloads: HashMap<&str, Vec<(&str, Type)>> = HashMap::new();
             let mut next: i64 = 0;
             let mut dup = false;
             let mut has_payload = false;
@@ -1918,7 +2028,9 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 }
                 if !payload.is_empty() {
                     has_payload = true;
-                    payloads.insert(*vname, payload.iter().map(|(_, ty)| ty.clone()).collect());
+                    // keep the field names (real names for struct variants, "0"/"1"
+                    // for tuple variants); the payload struct is built from them.
+                    payloads.insert(*vname, payload.clone());
                 }
                 next = val + 1;
             }
@@ -1964,18 +2076,19 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
     // sret) so the backend needs almost no new aggregate code.
     let data_enums: Vec<&'a str> = cx.enums.iter()
         .filter(|(_, d)| d.has_payload).map(|(n, _)| *n).collect();
-    // pass 1: register every payload struct and stash the resolved payloads.
+    // pass 1: register every payload struct and stash the resolved payloads. The
+    // payload struct's field names are exactly the variant's field names, so a
+    // struct-style variant's `{ id, val }` is a struct `Msg$Cc = { id, val }`.
     for ename in &data_enums {
-        let raw: Vec<(&'a str, Vec<Type<'a>>)> = cx.enums[ename].payloads.iter()
-            .map(|(v, tys)| (*v, tys.clone())).collect();
-        let mut resolved: HashMap<&'a str, Vec<Type<'a>>> = HashMap::new();
-        for (vname, tys) in raw {
-            let rtys: Vec<Type<'a>> = tys.iter().map(|t| resolve_type(&[], &cx.enums, t)).collect();
-            let fields: Vec<(&'a str, Type<'a>)> = rtys.iter().enumerate()
-                .map(|(i, t)| (leak_str(i.to_string()), t.clone()))
+        let raw: Vec<(&'a str, Vec<(&'a str, Type<'a>)>)> = cx.enums[ename].payloads.iter()
+            .map(|(v, fs)| (*v, fs.clone())).collect();
+        let mut resolved: HashMap<&'a str, Vec<(&'a str, Type<'a>)>> = HashMap::new();
+        for (vname, fields) in raw {
+            let rfields: Vec<(&'a str, Type<'a>)> = fields.iter()
+                .map(|(n, t)| (*n, resolve_type(&[], &cx.enums, t)))
                 .collect();
-            cx.structs.insert(enum_payload_struct_name(ename, vname), fields);
-            resolved.insert(vname, rtys);
+            cx.structs.insert(enum_payload_struct_name(ename, vname), rfields.clone());
+            resolved.insert(vname, rfields);
         }
         if let Some(def) = cx.enums.get_mut(ename) { def.payloads = resolved; }
     }

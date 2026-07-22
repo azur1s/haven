@@ -1,0 +1,9 @@
+//@ error: is a tuple variant
+// a tuple variant can't be constructed with struct `{ }` syntax.
+enum Msg { Stop, Note(u8, f32) }
+
+@export
+proc main() i32 {
+    let m: Msg = Msg::Note { x: 1u8 };
+    return 0;
+}

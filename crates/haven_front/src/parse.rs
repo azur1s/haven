@@ -17,6 +17,14 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
+/// The payload tail of an `Enum::Variant` match pattern: positional `(a, b)` or
+/// by-name `{ id, val }`. Only used to unify the two shapes under one `choice`
+/// in the pattern parser before mapping to the corresponding `PatternNode`.
+enum PatTail<'a> {
+    Tuple(Vec<Pattern<'a>>),
+    Struct(Vec<(&'a str, Pattern<'a>)>),
+}
+
 fn lexer<'a> (
     // Rc should be cheaper to clone per token
     file_path: Rc<str>,
@@ -733,18 +741,39 @@ fn parse_stmt<'tks, 'src: 'tks>()
             let node = if *s == "_" { PatternNode::Wildcard } else { PatternNode::Bind(*s) };
             Metadata::new(node, e.span())
         });
-        let variant_tail = field_pat
+        let variant_tail = field_pat.clone()
             .separated_by(just(Token::Comma))
             .allow_trailing()
             .at_least(1)
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LParen), just(Token::RParen));
+        // a struct-style destructure field: `field` (shorthand, binds `field`),
+        // `field: name`, or `field: _`. The shorthand's `Bind` gets its own node id
+        // (binding identity) from the field-name span.
+        let struct_field_pat = var.map_with(|s, e| (*s, e.span()))
+            .then(just(Token::Colon).ignore_then(field_pat.clone()).or_not())
+            .map(|((fname, fspan), sub)| {
+                let pat = sub.unwrap_or_else(|| Metadata::new(PatternNode::Bind(fname), fspan));
+                (fname, pat)
+            });
+        let struct_variant_tail = struct_field_pat
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace));
+        // after `Enum::Variant`, a `(...)` tail destructures positionally, a `{...}`
+        // tail destructures by field name, and neither is a field-less `Path`.
         let path_pat = var.then_ignore(just(Token::ColonColon)).then(var)
-            .then(variant_tail.or_not())
-            .map(|((a, b), fields)| {
+            .then(choice((
+                variant_tail.map(PatTail::Tuple),
+                struct_variant_tail.map(PatTail::Struct),
+            )).or_not())
+            .map(|((a, b), tail)| {
                 let path = leak(format!("{}::{}", a, b));
-                match fields {
-                    Some(fields) => PatternNode::Variant { path, fields },
+                match tail {
+                    Some(PatTail::Tuple(fields))  => PatternNode::Variant { path, fields },
+                    Some(PatTail::Struct(fields)) => PatternNode::StructVariant { path, fields },
                     None => PatternNode::Path(path),
                 }
             });
@@ -972,6 +1001,17 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         .map(|tys| tys.into_iter().enumerate()
             .map(|(i, ty)| (leak(i.to_string()), ty))
             .collect::<Vec<(&str, Type)>>());
+    // a struct-style variant payload `{ field: T, ... }`: field names are kept as
+    // written (unlike the tuple form's synthesized "0", "1", ...). Reuses the same
+    // synthetic-struct backing; the real names just flow into the payload struct.
+    let enum_struct_payload = var.map(|s| *s)
+        .then_ignore(just(Token::Colon))
+        .then(parse_type())
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .at_least(1)
+        .collect::<Vec<(&str, Type)>>()
+        .delimited_by(just(Token::LBrace), just(Token::RBrace));
     let enum_discriminant = just(Token::Assign)
         .ignore_then(just(Token::BinaryOp(BinaryOp::Sub)).or_not())
         .then(select_ref! {
@@ -984,7 +1024,7 @@ fn parse_toplevel<'tks, 'src: 'tks>()
         })
         .map(|(neg, n)| if neg.is_some() { -n } else { n });
     let enum_variant = var.map(|s| *s)
-        .then(enum_payload.or_not().map(|p| p.unwrap_or_default()))
+        .then(choice((enum_payload, enum_struct_payload)).or_not().map(|p| p.unwrap_or_default()))
         .then(enum_discriminant.or_not())
         .map(|((name, payload), disc)| (name, disc, payload));
 

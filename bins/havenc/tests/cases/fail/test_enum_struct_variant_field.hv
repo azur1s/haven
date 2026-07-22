@@ -1,0 +1,9 @@
+//@ error: expected field 'val', got 'wrong'
+// a struct-style constructor field name that isn't the declared field is rejected.
+enum Msg { Stop, Cc { id: u32, val: i32 } }
+
+@export
+proc main() i32 {
+    let m: Msg = Msg::Cc { id: 5u32, wrong: 10 };
+    return 0;
+}
