@@ -1,0 +1,29 @@
+{
+  "name": "haven-syntax",
+  "displayName": "Haven",
+  "description": "Syntax highlighting for the Haven programming language",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "haven",
+        "aliases": ["Haven", "haven"],
+        "extensions": [".hv", ".haven"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "haven",
+        "scopeName": "source.haven",
+        "path": "./syntaxes/haven.tmLanguage.json"
+      }
+    ]
+  }
+}

@@ -26,5 +26,23 @@ $ clang host.c output.lib -o output
 $ havenc -h
 ```
 
+## Directory Structure
+```
+bins/
+├── havenc/         # compiler
+└── havendoc/       # mdBook documentation generator
+crates/
+├── haven_back/     # backend-related code (LLVM IR, ABI)
+├── haven_common/   # common code & types (AST, Diagnostics, memory layout, etc.)
+├── haven_front/    # frontend-related code (lexer, parser, modules)
+└── haven_mid/      # middle-end code (type checking, semantic analysis, etc.)
+crt/
+└── rt.c            # linked C runtime for the compiler
+extensions/
+└── vscode/         # VSCode extension for syntax highlighting
+std/                # haven standard library
+└── ...
+```
+
 ## License
 This project is dual-licensed under the MIT and Apache 2.0 licenses. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
