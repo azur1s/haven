@@ -201,11 +201,14 @@ pub(crate) fn resolve_type<'a>(generics: &[&'a str], enums: &HashMap<&'a str, En
 // apply to each leaf type
 pub(crate) fn subst_param_type<'a>(
     types: &HashMap<&'a str, Type<'a>>,
-    consts: &HashMap<&'a str, usize>,
+    consts: &HashMap<&'a str, ConstVal<'a>>,
     ty: &Type<'a>,
 ) -> Type<'a> {
+    // a const param binds to either a concrete literal or - when it was forwarded
+    // from an enclosing generic's own `const` param - another symbolic `Param`,
+    // which mono resolves once the outer instance is specialized.
     let sub_cv = |cv: &ConstVal<'a>| match cv {
-        ConstVal::Param(n) => consts.get(n).map(|v| ConstVal::Lit(*v)).unwrap_or_else(|| cv.clone()),
+        ConstVal::Param(n) => consts.get(n).cloned().unwrap_or_else(|| cv.clone()),
         ConstVal::Lit(_) => cv.clone(),
     };
     match ty {
@@ -266,7 +269,7 @@ pub(crate) fn check_generic_call<'a>(
 
     // bind each turbofish arg to its generic param, matched positionally.
     let mut type_bindings: HashMap<&'a str, Type<'a>> = HashMap::new();
-    let mut const_bindings: HashMap<&'a str, usize> = HashMap::new();
+    let mut const_bindings: HashMap<&'a str, ConstVal<'a>> = HashMap::new();
     for (gp, ta) in sig.generics.iter().zip(type_args) {
         match (gp, ta) {
             (GenericParam::Type(pname), GenericArg::Type(ty)) => {
@@ -279,34 +282,37 @@ pub(crate) fn check_generic_call<'a>(
                 type_bindings.insert(pname, ty);
             }
             (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Lit(v))) => {
-                const_bindings.insert(pname, *v);
+                const_bindings.insert(pname, ConstVal::Lit(*v));
             }
-            // forwarding a const generic by name into another generic function
-            // isn't supported yet: const bindings must reduce to a concrete value
-            // here (they're substituted, not kept symbolic like intrinsic args).
-            (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Param(fwd))) => return Err(Error {
-                msg: format!("{}(): forwarding const parameter '{}' to '{}' is not supported yet", name, fwd, pname),
-                span: span.clone(),
-            }),
+            // forwarding an enclosing generic's own `const` param by name: bind it
+            // symbolically. `subst_param_type` keeps the `Param` in the result type,
+            // and mono resolves it to a literal when the outer proc is specialized
+            // (the forwarded name is always concrete by then). Range/kind bounds are
+            // re-checked post-mono, exactly as for the intrinsic turbofish path.
+            (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Param(fwd))) => {
+                if !cx.const_generics.contains(fwd) {
+                    return Err(Error {
+                        msg: format!("{}(): unknown const parameter '{}'", name, fwd),
+                        span: span.clone(),
+                    });
+                }
+                const_bindings.insert(pname, ConstVal::Param(fwd));
+            }
             (GenericParam::Type(pname), GenericArg::Const(_)) => return Err(Error {
                 msg: format!("{}(): expected a type argument for '{}', got a const value", name, pname),
                 span: span.clone(),
             }),
             (GenericParam::Const(pname, _), GenericArg::Type(ty)) => {
-                // a bare-ident turbofish arg that names an in-scope const param is
-                // a (currently unsupported) forward; otherwise it's a real type in
-                // a const slot.
-                if const_param_name(ty).is_some_and(|n| cx.const_generics.contains(&n)) {
-                    return Err(Error {
-                        msg: format!("{}(): forwarding const parameter '{}' to '{}' is not supported yet",
-                            name, const_param_name(ty).unwrap(), pname),
+                // a bare-ident turbofish arg (`N`) parses as a type; if it names an
+                // in-scope const param it's a forward (bind symbolically, as above),
+                // otherwise it's a real type wrongly placed in a const slot.
+                match const_param_name(ty).filter(|n| cx.const_generics.contains(n)) {
+                    Some(fwd) => { const_bindings.insert(pname, ConstVal::Param(fwd)); }
+                    None => return Err(Error {
+                        msg: format!("{}(): expected a const argument for '{}', got a type", name, pname),
                         span: span.clone(),
-                    });
+                    }),
                 }
-                return Err(Error {
-                    msg: format!("{}(): expected a const argument for '{}', got a type", name, pname),
-                    span: span.clone(),
-                });
             }
         }
     }
@@ -341,7 +347,7 @@ pub(crate) fn bind_struct_generics<'a>(
     params: &[GenericParam<'a>],
     args: &[GenericArg<'a>],
     span: &Span,
-) -> Result<(HashMap<&'a str, Type<'a>>, HashMap<&'a str, usize>, Vec<GenericArg<'a>>), Error> {
+) -> Result<(HashMap<&'a str, Type<'a>>, HashMap<&'a str, ConstVal<'a>>, Vec<GenericArg<'a>>), Error> {
     if args.len() != params.len() {
         return Err(Error {
             msg: format!(
@@ -353,7 +359,7 @@ pub(crate) fn bind_struct_generics<'a>(
         });
     }
     let mut type_subst: HashMap<&'a str, Type<'a>> = HashMap::new();
-    let mut const_subst: HashMap<&'a str, usize> = HashMap::new();
+    let mut const_subst: HashMap<&'a str, ConstVal<'a>> = HashMap::new();
     let mut resolved: Vec<GenericArg<'a>> = Vec::with_capacity(params.len());
     for (gp, ga) in params.iter().zip(args) {
         match (gp, ga) {
@@ -366,7 +372,7 @@ pub(crate) fn bind_struct_generics<'a>(
                 resolved.push(GenericArg::Type(ty));
             }
             (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Lit(v))) => {
-                const_subst.insert(pname, *v);
+                const_subst.insert(pname, ConstVal::Lit(*v));
                 resolved.push(GenericArg::Const(ConstVal::Lit(*v)));
             }
             (GenericParam::Const(pname, _), GenericArg::Const(ConstVal::Param(fwd))) => return Err(Error {

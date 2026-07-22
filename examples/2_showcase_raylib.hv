@@ -5,14 +5,15 @@
 // > havenc examples/1_1_showcase_raylib.hv -o showcase -F"-O3 -Wno-override-module $(pkg-config --libs raylib) -lm"
 // > ./showcase
 // Windows, MSVC toolchain (raylib-6.0-win64-msvc16)
-// > havenc examples/2_showcase_raylib.hv -o showcase -F"-O3 -Wno-override-module ./path_to_raylib/raylib.lib\
+// > havenc examples/2_showcase_raylib.hv -o showcase -F"-O3 -Wno-override-module ./path_to_raylib/raylib.lib
 //     -lwinmm -lgdi32 -lopengl32 -lshell32 -luser32 -lkernel32"
 // > ./showcase.exe
 
-import std/dsp/filters // filters::Biquad, filters::biquad_lowpass, ...
-import std/dsp/osc     // osc::Osc, osc::osc_new, osc::osc_square
-import std/alloc       // alloc::alloc, alloc::dealloc
-import std/option      // option::Option, option::unwrap (alloc returns Option<*T>)
+import std/dsp/filters
+import std/dsp/osc
+import std/alloc { alloc, dealloc }
+import std/option { Option, unwrap }
+import std/simd { simd_copy_ptr }
 
 struct Vector2 { x: f32, y: f32 }
 struct Color   { r: u8, g: u8, b: u8, a: u8 }
@@ -46,23 +47,6 @@ proc gen_square_wave(buf_l: *f32, buf_r: *f32, num_samples: i32, phase: f32) {
         let sample: f32 = 0.5 * osc::osc_square(&osc);
         buf_l[i] = sample;
         buf_r[i] = sample;
-        i = i + 1;
-    }
-}
-
-// vector copy: move 8 samples at a time with one load/store pair
-@alloc(false)
-proc copy_simd<const N: u32>(dst: *f32, src: *f32, num_samples: i32) {
-    let i: i32 = 0;
-    while (i < num_samples) {
-        let v: simd<f32, N> = simd_load::<f32, N>(src, i);
-        simd_store::<f32, N>(dst, i, v);
-        i = i + numerical_cast::<i32>(N);
-    }
-    // scalar tail copy for any remaining samples (when num_samples is not a
-    // multiple of 8)
-    while (i < num_samples) {
-        dst[i] = src[i];
         i = i + 1;
     }
 }
@@ -110,10 +94,10 @@ proc main() i32 {
     let num_samples: i32 = 512;
     let count: u64 = numerical_cast::<u64>(num_samples);
 
-    let orig_l: *f32 = option::unwrap::<f32>(alloc::alloc::<f32>(count)); // fresh source
-    let orig_r: *f32 = option::unwrap::<f32>(alloc::alloc::<f32>(count));
-    let work_l: *f32 = option::unwrap::<f32>(alloc::alloc::<f32>(count)); // biquad-filtered copy
-    let work_r: *f32 = option::unwrap::<f32>(alloc::alloc::<f32>(count));
+    let orig_l: *f32 = unwrap::<f32>(alloc::<f32>(count)); // fresh source
+    let orig_r: *f32 = unwrap::<f32>(alloc::<f32>(count));
+    let work_l: *f32 = unwrap::<f32>(alloc::<f32>(count)); // biquad-filtered copy
+    let work_r: *f32 = unwrap::<f32>(alloc::<f32>(count));
 
     let phase: f32 = 0.0;
     gen_square_wave(orig_l, orig_r, num_samples, phase);
@@ -127,8 +111,8 @@ proc main() i32 {
         gen_square_wave(orig_l, orig_r, num_samples, phase);
 
         // fresh copy of the originals each frame, then filter it
-        copy_simd::<8>(work_l, orig_l, num_samples);
-        copy_simd::<8>(work_r, orig_r, num_samples);
+        simd_copy_ptr::<f32, 8>(work_l, orig_l, count);
+        simd_copy_ptr::<f32, 8>(work_r, orig_r, count);
         process_stereo(work_l, work_r, num_samples);
 
         BeginDrawing();
@@ -146,9 +130,9 @@ proc main() i32 {
     }
 
     CloseWindow();
-    alloc::dealloc::<f32>(orig_l);
-    alloc::dealloc::<f32>(orig_r);
-    alloc::dealloc::<f32>(work_l);
-    alloc::dealloc::<f32>(work_r);
+    dealloc::<f32>(orig_l);
+    dealloc::<f32>(orig_r);
+    dealloc::<f32>(work_l);
+    dealloc::<f32>(work_r);
     return 0;
 }

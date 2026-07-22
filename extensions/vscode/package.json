@@ -2,6 +2,11 @@
   "name": "haven-syntax",
   "displayName": "Haven",
   "description": "Syntax highlighting for the Haven programming language",
+  "publisher": "azur1s",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/azur1s/haven.git"
+  },
   "version": "0.1.0",
   "engines": {
     "vscode": "^1.80.0"

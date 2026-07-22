@@ -661,12 +661,12 @@ fn infer<'a>(
                 field_ty
             } else {
                 let mut type_subst: HashMap<&'a str, Type<'a>> = HashMap::new();
-                let mut const_subst: HashMap<&'a str, usize> = HashMap::new();
+                let mut const_subst: HashMap<&'a str, ConstVal<'a>> = HashMap::new();
                 if let Some(params) = cx.generic_structs.get(struct_name) {
                     for (gp, ga) in params.iter().zip(struct_args.iter()) {
                         match (gp, ga) {
                             (GenericParam::Type(n), GenericArg::Type(t)) => { type_subst.insert(*n, t.clone()); }
-                            (GenericParam::Const(n, _), GenericArg::Const(ConstVal::Lit(v))) => { const_subst.insert(*n, *v); }
+                            (GenericParam::Const(n, _), GenericArg::Const(ConstVal::Lit(v))) => { const_subst.insert(*n, ConstVal::Lit(*v)); }
                             _ => {}
                         }
                     }
@@ -913,7 +913,7 @@ pub(crate) fn check_stmt<'a>(
             // substitute those params with the scrutinee's actual args before using
             // any payload type below, mirroring how struct field access substitutes
             // a generic struct's `Param` fields via its own `args`.
-            let (type_subst, const_subst): (HashMap<&'a str, Type<'a>>, HashMap<&'a str, usize>) =
+            let (type_subst, const_subst): (HashMap<&'a str, Type<'a>>, HashMap<&'a str, ConstVal<'a>>) =
                 match &scrut_ty {
                     Type::Enum { name, args, .. } if !args.is_empty() => {
                         let mut ts = HashMap::new();
@@ -922,7 +922,7 @@ pub(crate) fn check_stmt<'a>(
                             for (gp, ga) in params.iter().zip(args.iter()) {
                                 match (gp, ga) {
                                     (GenericParam::Type(n), GenericArg::Type(t)) => { ts.insert(*n, t.clone()); }
-                                    (GenericParam::Const(n, _), GenericArg::Const(ConstVal::Lit(v))) => { cs.insert(*n, *v); }
+                                    (GenericParam::Const(n, _), GenericArg::Const(ConstVal::Lit(v))) => { cs.insert(*n, ConstVal::Lit(*v)); }
                                     _ => {}
                                 }
                             }

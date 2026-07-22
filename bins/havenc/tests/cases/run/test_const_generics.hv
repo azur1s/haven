@@ -1,6 +1,8 @@
 // FIXME: fixed arrays passed *by value* (`[T; N]` params) are a separate,
 // pre-existing codegen gap and are intentionally avoided here.
 
+import std/simd { simd_splat, simd_load, simd_store }
+
 // const param used as an ordinary compile-time value
 proc lane_count<const N: i32>() i32 {
     return N;
@@ -17,12 +19,14 @@ proc id_simd<T, const N: i32>(x: simd<T, N>) simd<T, N> {
     return x;
 }
 
-// const param forwarded by name into intrinsic turbofishes: `simd_load::<f32, N>`
-// and `simd_store::<f32, N>` reuse the enclosing `const N`, which mono bakes into
-// a concrete lane count (here N = 4).
-proc simd_copy<const N: i32>(dst: [f32], src: [f32]) {
-    let v: simd<f32, N> = simd_load::<f32, N>(src, 0);
-    simd_store::<f32, N>(dst, 0, v);
+// const param forwarded by name through the std/simd wrapper procs:
+// `simd_load::<f32, N>` and `simd_store::<f32, N>` reuse the enclosing `const N`,
+// which mono bakes into a concrete lane count (here N = 4). This exercises
+// forwarding a const param *through* a generic proc (the wrapper) whose body then
+// forwards it again into the `__simd_*` intrinsic turbofish.
+proc simd_copy<const N: u64>(dst: [f32], src: [f32]) {
+    let v: simd<f32, N> = simd_load::<f32, N>(src, 0u64);
+    simd_store::<f32, N>(dst, 0u64, v);
 }
 
 @export
@@ -35,10 +39,10 @@ proc main() i32 {
     let buf: [f32] = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
     let v: simd<f32, 4> = simd_splat::<f32, 4>(2.0f32);
     let w: simd<f32, 4> = id_simd::<f32, 4>(v);
-    simd_store::<f32, 4>(buf, 0, w);
+    simd_store::<f32, 4>(buf, 0u64, w);
     printf32("%f\n", buf[0]);            // 2.000000
 
-    // forward the const param through simd_load/simd_store turbofishes
+    // forward the const param through the simd_load/simd_store wrappers
     let src: [f32] = [7.0f32, 8.0f32, 9.0f32, 10.0f32];
     let dst: [f32] = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
     simd_copy::<4>(dst, src);
