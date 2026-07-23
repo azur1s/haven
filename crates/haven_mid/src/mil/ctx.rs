@@ -64,7 +64,7 @@ pub(crate) fn resolve_enum_ty<'a>(enums: &HashMap<&'a str, EnumDef<'a>>, ty: &Ty
 /// registered as a struct of the same name). Every "this is an aggregate, route
 /// it by pointer" site funnels through here so a data enum is never mistaken for
 /// a scalar. A field-less enum returns `None` - it is a bare scalar.
-pub(crate) fn aggregate_struct_name<'a>(ty: &Type<'a>) -> Option<&'a str> {
+pub fn aggregate_struct_name<'a>(ty: &Type<'a>) -> Option<&'a str> {
     match ty {
         Type::Struct { name, .. } => Some(name),
         Type::Enum { name, has_payload: true, .. } => Some(name),

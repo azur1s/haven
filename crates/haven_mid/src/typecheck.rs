@@ -11,7 +11,7 @@ mod infer;
 pub use context::{Context, EnumDef, GenericFnSig, ENUM_TAG_FIELD, ENUM_PAYLOAD_FIELD, enum_payload_struct_name};
 
 use generics::{resolve_type, check_const_scope, check_type_resolves};
-use enums::{enum_variant, enum_repr, enum_agg_deps_ready};
+use enums::{enum_variant, enum_repr, enum_agg_deps_ready, payload_blob_type};
 use infer::{check_stmt, check_expr, always_returns};
 
 /// Check whether a type is allowed in an @export function signature.
@@ -20,6 +20,7 @@ use infer::{check_stmt, check_expr, always_returns};
 fn check_export_type<'a>(
     ty: &Type<'a>,
     structs: &HashMap<&'a str, Vec<(&'a str, Type<'a>)>>,
+    enums: &HashMap<&'a str, EnumDef<'a>>,
 ) -> Result<(), String> {
     match ty {
         // TODO check if this is correct
@@ -44,7 +45,7 @@ fn check_export_type<'a>(
             | Type::Float32 | Type::Float64
             | Type::Str
             | Type::Pointer(_) => Ok(()),
-            _ => check_export_type(inner, structs), // *[]f32, *simd<...> stay banned
+            _ => check_export_type(inner, structs, enums), // *[]f32, *simd<...> stay banned
         },
         Type::Simd(_, _) =>
             Err(format!("SIMD type '{}' is not allowed in @export functions because its calling convention is target-specific and not guaranteed to match the expected caller, or that's what I'm told", ty)),
@@ -57,19 +58,41 @@ fn check_export_type<'a>(
             let fields = structs.get(name)
                 .ok_or_else(|| format!("unknown struct '{}'", name))?;
             for (fname, fty) in fields {
-                check_export_type(fty, structs)
+                check_export_type(fty, structs, enums)
                     .map_err(|e| format!("field '{}' of struct '{}': {}", fname, name, e))?;
             }
             Ok(())
         }
         Type::Param(_) =>
             Err("generic type parameters are not allowed in @export functions".into()),
-        // a field-less enum is its integer repr across FFI - a plain C enum. A
-        // data-carrying enum's `@repr(C)` tagged-union ABI is deferred (Stage-3
-        // Phase 4), so it can't cross `@export`/`extern` yet.
+        // a field-less enum is its integer repr across FFI - a plain C enum.
         Type::Enum { has_payload: false, .. } => Ok(()),
-        Type::Enum { has_payload: true, name, .. } =>
-            Err(format!("data-carrying enum '{}' cannot cross an @export/extern boundary yet", name)),
+        // a data-carrying enum is laid out as a `{ tag: repr, payload: union }`
+        // aggregate (see typecheck's data-enum pass 2), the same shape a C
+        // `struct { <repr> tag; union { ... }; }` tagged union would take -
+        // `haven_back::abi` classifies the payload as a real union of the variant
+        // payload structs (not raw bytes), so it may cross FFI as long as every
+        // variant's fields are themselves export-safe. That layout is identical
+        // whether or not `@repr` was written, but - mirroring Rust's requirement
+        // that `#[repr(C)]` be explicit before an enum is FFI-safe - we still
+        // require the author to have written it, so crossing the boundary is a
+        // deliberate, visible commitment rather than an accident of the default.
+        Type::Enum { has_payload: true, name, .. } => {
+            let def = enums.get(name)
+                .ok_or_else(|| format!("unknown enum '{}'", name))?;
+            if !def.has_explicit_repr {
+                return Err(format!(
+                    "data-carrying enum '{}' needs an explicit `@repr` (e.g. `@repr(C)`) \
+                     to cross an @export/extern boundary", name));
+            }
+            for (vname, fields) in &def.payloads {
+                for (fname, fty) in fields {
+                    check_export_type(fty, structs, enums)
+                        .map_err(|e| format!("field '{}' of variant '{}::{}': {}", fname, name, vname, e))?;
+                }
+            }
+            Ok(())
+        }
         // these are all fine across FFI
         Type::Void | Type::Bool
         | Type::Int8 | Type::Int32 | Type::Int64
@@ -143,7 +166,7 @@ fn check_toplevel<'a>(
                     // resolve enum names first (@export can't be generic) so an
                     // enum param is checked as its integer repr, not an unknown struct.
                     let ty = resolve_type(&[], &cx.enums, ty);
-                    if let Err(msg) = check_export_type(&ty, &cx.structs) {
+                    if let Err(msg) = check_export_type(&ty, &cx.structs, &cx.enums) {
                         return Err(Error {
                             msg: format!("parameter '{}' in @export function '{}': {}", param_name, name, msg),
                             span: node.span.clone(),
@@ -151,7 +174,7 @@ fn check_toplevel<'a>(
                     }
                 }
                 let return_type = resolve_type(&[], &cx.enums, return_type);
-                if let Err(msg) = check_export_type(&return_type, &cx.structs) {
+                if let Err(msg) = check_export_type(&return_type, &cx.structs, &cx.enums) {
                     return Err(Error {
                         msg: format!("return type in @export function '{}': {}", name, msg),
                         span: node.span.clone(),
@@ -347,7 +370,7 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 });
                 continue;
             }
-            let repr = match enum_repr(attributes) {
+            let (repr, has_explicit_repr) = match enum_repr(attributes) {
                 Ok(r) => r,
                 Err(msg) => { errors.push(Error { msg, span: node.span.clone() }); continue; }
             };
@@ -382,7 +405,7 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
                 next = val + 1;
             }
             if dup { continue; }
-            cx.enums.insert(name, EnumDef { repr, variants: vmap, payloads, has_payload });
+            cx.enums.insert(name, EnumDef { repr, variants: vmap, payloads, has_payload, has_explicit_repr });
         }
     }
 
@@ -477,9 +500,12 @@ pub fn typecheck_program<'a>(cx: &mut Context<'a>, program: &[TopLevel<'a>]) -> 
             let payload_bytes = cx.enums[ename].payloads.keys()
                 .map(|v| layout::size_of(&Type::plain_struct(enum_payload_struct_name(ename, v)), &cx.structs))
                 .max().unwrap_or(0);
+            let payload_align = cx.enums[ename].payloads.keys()
+                .map(|v| layout::align_of(&Type::plain_struct(enum_payload_struct_name(ename, v)), &cx.structs))
+                .max().unwrap_or(1);
             let agg_fields = vec![
                 (ENUM_TAG_FIELD, repr),
-                (ENUM_PAYLOAD_FIELD, Type::Array(Box::new(Type::Int8), ConstVal::Lit(payload_bytes))),
+                (ENUM_PAYLOAD_FIELD, payload_blob_type(payload_bytes, payload_align)),
             ];
             cx.structs.insert(ename, agg_fields);
             progressed = true;

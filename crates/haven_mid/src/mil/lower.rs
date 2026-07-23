@@ -605,6 +605,7 @@ pub fn lower<'a>(
     let mut externs = Vec::new();
     let mut structs = Vec::new();
     let mut globals = Vec::new();
+    let mut enum_unions = HashMap::new();
 
     // register every global up front so a function can reference one declared
     // later in the file.
@@ -689,19 +690,22 @@ pub fn lower<'a>(
             TopLevelNode::Enum { name, .. } => {
                 if cx.enums[name].has_payload {
                     let variants: Vec<&'a str> = cx.enums[name].payloads.keys().copied().collect();
+                    let mut pstruct_names = Vec::with_capacity(variants.len());
                     for v in variants {
                         let sname = crate::typecheck::enum_payload_struct_name(name, v);
                         if let Some((k, f)) = cx.structs.get_key_value(sname) {
                             structs.push((*k, f.clone()));
+                            pstruct_names.push(*k);
                         }
                     }
                     if let Some((k, f)) = cx.structs.get_key_value(*name) {
                         structs.push((*k, f.clone()));
                     }
+                    enum_unions.insert(*name, pstruct_names);
                 }
             }
         }
     }
 
-    Module { functions, externs, structs, globals, strings: cx.strings }
+    Module { functions, externs, structs, globals, strings: cx.strings, enum_unions }
 }

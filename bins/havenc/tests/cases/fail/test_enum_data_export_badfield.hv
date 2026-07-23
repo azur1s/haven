@@ -1,0 +1,17 @@
+//@ error: of variant 'Msg::Note'
+// a data enum can cross @export once `@repr` commits its layout (Stage-3 Phase
+// 4), but each variant's payload fields must still be individually
+// export-safe - a slice hiding inside a variant is exactly as banned as one
+// hiding inside a struct field.
+@repr(C)
+enum Msg { Note([f32]) }
+
+@export
+proc take(m: Msg) i32 {
+    return 0;
+}
+
+@export
+proc main() i32 {
+    return 0;
+}

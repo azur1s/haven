@@ -18,8 +18,14 @@
 //! aggregate is passed by reference (`byval`/`sret`). Scalars are unchanged. See
 //! [`classify_win64`].
 
+use std::collections::HashMap;
 use haven_common::ast::Type;
 use crate::layout::{self, StructTable};
+
+/// Data-enum aggregate name -> its variant payload-struct names. Lets
+/// `classify_into` treat an enum's `$payload` byte blob as a real union of the
+/// variant payload structs (see its `Type::Struct` arm) instead of raw bytes.
+pub type UnionTable<'a> = HashMap<&'a str, Vec<&'a str>>;
 
 /// Size of one "eightbyte" register slot.
 const EIGHTBYTE: usize = 8;
@@ -106,16 +112,16 @@ fn merge(a: Class, b: Class) -> Class {
 /// choice is made by `cfg!` - a Windows-hosted compiler uses the Microsoft x64
 /// convention, everything else x86-64 System V. When a real `--target` flag
 /// lands, thread the selector through here instead.
-pub fn classify<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
+pub fn classify<'a>(ty: &Type<'a>, structs: &StructTable<'a>, unions: &UnionTable<'a>) -> Abi {
     if cfg!(target_os = "windows") {
-        classify_win64(ty, structs)
+        classify_win64(ty, structs, unions)
     } else {
-        classify_sysv(ty, structs)
+        classify_sysv(ty, structs, unions)
     }
 }
 
 /// Classify how `ty` is passed/returned on x86-64 System V (Linux, macOS, BSDs).
-pub fn classify_sysv<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
+pub fn classify_sysv<'a>(ty: &Type<'a>, structs: &StructTable<'a>, unions: &UnionTable<'a>) -> Abi {
     let size = layout::size_of(ty, structs);
 
     // Zero-sized: nothing to pass.
@@ -130,7 +136,7 @@ pub fn classify_sysv<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
     let n = size.div_ceil(EIGHTBYTE);
     let mut eb = vec![Eightbyte::default(); n];
 
-    classify_into(ty, 0, structs, &mut eb);
+    classify_into(ty, 0, structs, unions, &mut eb);
 
     // Post-merge: any MEMORY eightbyte poisons the whole aggregate.
     if eb.iter().any(|e| e.class == Class::Memory) {
@@ -170,15 +176,16 @@ pub fn classify_sysv<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
 /// register, exactly as under SysV, so we delegate anything that isn't a struct
 /// or array to [`classify_sysv`]. The downstream pack/unpack glue is bytewise, so
 /// coercing an all-float eightbyte to `i64` needs no other changes.
-pub fn classify_win64<'a>(ty: &Type<'a>, structs: &StructTable<'a>) -> Abi {
+pub fn classify_win64<'a>(ty: &Type<'a>, structs: &StructTable<'a>, unions: &UnionTable<'a>) -> Abi {
     match ty {
-        Type::Struct { .. } | Type::Array(..) => match layout::size_of(ty, structs) {
-            0 => Abi::Direct(vec![]),
-            size @ (1 | 2 | 4 | 8) => Abi::Direct(vec![Reg::Int(size)]),
-            _ => Abi::Memory,
-        },
-        // Scalars/pointers/SIMD are placed identically to SysV.
-        _ => classify_sysv(ty, structs),
+        Type::Struct { .. } | Type::Array(..) | Type::Enum { has_payload: true, .. } =>
+            match layout::size_of(ty, structs) {
+                0 => Abi::Direct(vec![]),
+                size @ (1 | 2 | 4 | 8) => Abi::Direct(vec![Reg::Int(size)]),
+                _ => Abi::Memory,
+            },
+        // Scalars/pointers/SIMD/field-less enums are placed identically to SysV.
+        _ => classify_sysv(ty, structs, unions),
     }
 }
 
@@ -213,25 +220,47 @@ impl Eightbyte {
 
 /// Walk `ty`'s leaf fields, folding each leaf's class into the eightbyte(s) it
 /// occupies at absolute byte `offset`.
-fn classify_into<'a>(ty: &Type<'a>, offset: usize, structs: &StructTable<'a>, eb: &mut [Eightbyte]) {
+fn classify_into<'a>(ty: &Type<'a>, offset: usize, structs: &StructTable<'a>, unions: &UnionTable<'a>, eb: &mut [Eightbyte]) {
     match ty {
         // Aggregates: recurse into members at their real offsets.
         Type::Struct { name, .. } => {
             let fields = structs
                 .get(name)
                 .unwrap_or_else(|| panic!("ABI classify of unknown struct `{name}`"));
+            if let Some(variants) = unions.get(name) {
+                // A data-enum aggregate: field 0 is the tag (an ordinary integer
+                // leaf), field 1 is the `$payload` blob - not literal bytes, but a
+                // union of the variant payload structs. Classify the tag normally,
+                // then classify every variant at the payload's own offset and let
+                // `merge` combine them (SysV union rule: a union's class per
+                // eightbyte is the merge of every member's class there). This is
+                // what lets e.g. an all-float variant land in an SSE register
+                // instead of being forced INTEGER by `$payload`'s placeholder type.
+                let (_, tag_ty) = &fields[0];
+                classify_into(tag_ty, offset, structs, unions, eb);
+                let payload_off = offset + layout::field_offset(name, 1, structs);
+                for variant in variants {
+                    classify_into(&Type::plain_struct(variant), payload_off, structs, unions, eb);
+                }
+                return;
+            }
             for (i, (_, fty)) in fields.iter().enumerate() {
                 let foff = offset + layout::field_offset(name, i, structs);
-                classify_into(fty, foff, structs, eb);
+                classify_into(fty, foff, structs, unions, eb);
             }
         }
+        // A data-carrying enum reached as a nested field (e.g. a struct field, or
+        // a variant payload field, of enum type): classify via its synthetic
+        // aggregate struct, same as a `Type::Struct` of that name.
+        Type::Enum { has_payload: true, name, .. } =>
+            classify_into(&Type::plain_struct(name), offset, structs, unions, eb),
         Type::Array(elem, count) => {
             let stride = layout::size_of(elem, structs);
             for i in 0..count.expect_lit() {
-                classify_into(elem, offset + i * stride, structs, eb);
+                classify_into(elem, offset + i * stride, structs, unions, eb);
             }
         }
-        // Leaf: a scalar / pointer / SIMD vector.
+        // Leaf: a scalar / pointer / SIMD vector / field-less enum.
         _ => {
             let size = layout::size_of(ty, structs);
             let class = leaf_class(ty);
@@ -265,10 +294,12 @@ fn leaf_class(ty: &Type) -> Class {
         // A slice is a two-INTEGER-word fat pointer; FFI bans it, but classify
         // sanely. `str` is a single `*const u8`, handled as a pointer leaf below.
         Type::Slice(_) | Type::Str => Class::Integer,
-        // an enum is its integer discriminant repr - an INTEGER-class leaf.
-        Type::Enum { .. } => Class::Integer,
+        // a field-less enum is its integer discriminant repr - an INTEGER-class
+        // leaf. A data-carrying enum is handled in `classify_into` directly (like
+        // a struct) and never reaches here.
+        Type::Enum { has_payload: false, .. } => Class::Integer,
         Type::Void => Class::NoClass,
-        Type::Struct { .. } | Type::Array(..) => {
+        Type::Struct { .. } | Type::Array(..) | Type::Enum { has_payload: true, .. } => {
             unreachable!("aggregates are handled by classify_into, not leaf_class")
         }
         Type::Param(n) => panic!("type parameter `{n}` survived to ABI classification"),
@@ -309,6 +340,10 @@ mod tests {
         defs.iter().cloned().collect()
     }
 
+    fn unions<'a>(defs: &[(&'a str, Vec<&'a str>)]) -> UnionTable<'a> {
+        defs.iter().cloned().collect()
+    }
+
     fn render(abi: Abi) -> Vec<String> {
         match abi {
             Abi::Memory => vec!["memory".into()],
@@ -318,12 +353,17 @@ mod tests {
 
     /// Classify on SysV and render as the list of LLVM coercion types (or "memory").
     fn llvm<'a>(ty: &Type<'a>, s: &StructTable<'a>) -> Vec<String> {
-        render(classify_sysv(ty, s))
+        render(classify_sysv(ty, s, &HashMap::new()))
+    }
+
+    /// Same, but with an enum-union table in play.
+    fn llvm_u<'a>(ty: &Type<'a>, s: &StructTable<'a>, u: &UnionTable<'a>) -> Vec<String> {
+        render(classify_sysv(ty, s, u))
     }
 
     /// Same, but classify under the Microsoft x64 convention.
     fn llvm_win64<'a>(ty: &Type<'a>, s: &StructTable<'a>) -> Vec<String> {
-        render(classify_win64(ty, s))
+        render(classify_win64(ty, s, &HashMap::new()))
     }
 
     #[test]
@@ -443,6 +483,29 @@ mod tests {
     }
 
     #[test]
+    fn enum_payload_classifies_as_union_not_raw_bytes() {
+        // enum Msg { Note(f64) }: tag i32 (4/4), payload padded to offset 8 (f64
+        // needs align 8), aggregate is 16 bytes / align 8.
+        let s = table(&[
+            ("Msg$Note", vec![("0", Type::Float64)]),
+            ("Msg", vec![
+                ("$tag", Type::Int32),
+                ("$payload", Type::Array(Box::new(Type::Int64), ConstVal::Lit(1))),
+            ]),
+        ]);
+        let u = unions(&[("Msg", vec!["Msg$Note"])]);
+
+        // Without the union table, `$payload`'s placeholder `i64` element
+        // classifies as INTEGER - wrong for a variant that actually holds a double.
+        assert_eq!(llvm(&Type::plain_struct("Msg"), &s), ["i32", "i64"]);
+
+        // With it, the payload eightbyte is classified from the real variant
+        // field and lands in an SSE register, matching what C would do for the
+        // equivalent `struct { int tag; union { double v; } payload; }`.
+        assert_eq!(llvm_u(&Type::plain_struct("Msg"), &s, &u), ["i32", "double"]);
+    }
+
+    #[test]
     fn over_sixteen_bytes_goes_to_memory() {
         // struct { a,b,c,d: f64 } -> 32 bytes -> MEMORY.
         let s = table(&[(
@@ -452,7 +515,7 @@ mod tests {
                 ("c", Type::Float64), ("d", Type::Float64),
             ],
         )]);
-        assert!(classify(&Type::plain_struct("Big"), &s).is_memory());
+        assert!(classify(&Type::plain_struct("Big"), &s, &HashMap::new()).is_memory());
     }
 
     #[test]
@@ -525,7 +588,7 @@ mod tests {
             "Rgb",
             vec![("r", Type::Uint8), ("g", Type::Uint8), ("b", Type::Uint8)],
         )]);
-        assert!(classify_win64(&Type::plain_struct("Rgb"), &s).is_memory());
+        assert!(classify_win64(&Type::plain_struct("Rgb"), &s, &HashMap::new()).is_memory());
     }
 
     #[test]
@@ -539,8 +602,8 @@ mod tests {
                 ("w", Type::Float32), ("h", Type::Float32),
             ]),
         ]);
-        assert!(classify_win64(&Type::plain_struct("Vector3"), &s).is_memory());
-        assert!(classify_win64(&Type::plain_struct("Rectangle"), &s).is_memory());
+        assert!(classify_win64(&Type::plain_struct("Vector3"), &s, &HashMap::new()).is_memory());
+        assert!(classify_win64(&Type::plain_struct("Rectangle"), &s, &HashMap::new()).is_memory());
         // SysV keeps them in registers.
         assert_eq!(llvm(&Type::plain_struct("Vector3"), &s), ["<2 x float>", "float"]);
     }

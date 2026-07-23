@@ -1,7 +1,7 @@
 
 use haven_common::ast::*;
 use haven_mid::mil::*;
-use crate::abi::{self, Abi, Reg};
+use crate::abi::{self, Abi, Reg, UnionTable};
 use crate::layout::{self, StructTable};
 
 fn emit_value(val: Value) -> String {
@@ -114,6 +114,10 @@ struct EmitCtx<'a> {
     current_fast_math_flags: FastMathFlags,
     /// Struct layouts, for on-the-fly SysV ABI classification of by-value structs.
     structs: StructTable<'a>,
+    /// Data-enum aggregate name -> variant payload-struct names, so a by-value
+    /// enum crossing an FFI boundary classifies its payload as a real union
+    /// (see `abi::classify_into`) instead of raw bytes.
+    unions: UnionTable<'a>,
     /// Fresh-name counter for ABI coercion temporaries (`%abi.N`), kept separate
     /// from MIL's `%tN` registers so the two never collide.
     abi_ctr: usize,
@@ -136,9 +140,10 @@ impl<'a> EmitCtx<'a> {
         name
     }
 
-    /// SysV classification of a by-value struct named `name`.
+    /// ABI classification of a by-value aggregate (struct, or data-enum
+    /// aggregate) named `name`.
     fn struct_abi(&self, name: &str) -> Abi {
-        abi::classify(&Type::plain_struct(name), &self.structs)
+        abi::classify(&Type::plain_struct(name), &self.structs, &self.unions)
     }
 
     /// Byte alignment of struct `name`, for `byval`/`sret` attributes.
@@ -284,7 +289,7 @@ fn emit_inst<'a>(cx: &mut EmitCtx<'a>, inst: Inst<'a>) {
             let mut arg_frags: Vec<String> = Vec::new();
             for (val, ty) in args {
                 match &ty {
-                    Type::Struct { name, .. } => match cx.struct_abi(name) {
+                    Type::Struct { name, .. } | Type::Enum { has_payload: true, name, .. } => match cx.struct_abi(name) {
                         Abi::Direct(regs) => {
                             let ptr = emit_value(val);
                             for (t, v) in emit_struct_to_regs(cx, &ptr, &regs) {
@@ -587,7 +592,7 @@ fn emit_function<'a>(cx: &mut EmitCtx<'a>, func: Function<'a>) {
     let mut param_rebuilds: Vec<(Register, &str, Vec<Reg>, Vec<String>)> = Vec::new();
     for (reg, ty) in &func.params {
         match ty {
-            Type::Struct { name, .. } => match cx.struct_abi(name) {
+            Type::Struct { name, .. } | Type::Enum { has_payload: true, name, .. } => match cx.struct_abi(name) {
                 Abi::Direct(regs) => {
                     let names: Vec<String> = regs.iter().map(|_| cx.abi_tmp()).collect();
                     for (r, n) in regs.iter().zip(&names) {
@@ -671,7 +676,7 @@ fn emit_extern<'a>(cx: &mut EmitCtx<'a>, ext: ExternDecl<'a>) {
     // A Memory-class struct return uses a hidden leading sret pointer and returns
     // void - the same shape MIL lowers the matching call to.
     let ret_str = match &ext.return_type {
-        Type::Struct { name, .. } => match cx.struct_abi(name) {
+        Type::Struct { name, .. } | Type::Enum { has_payload: true, name, .. } => match cx.struct_abi(name) {
             Abi::Direct(regs) => coerced_aggregate_ty(&regs),
             Abi::Memory => {
                 params.insert(0, format!("ptr sret(%{name}) align {}", cx.struct_align(name)));
@@ -688,7 +693,7 @@ fn emit_extern<'a>(cx: &mut EmitCtx<'a>, ext: ExternDecl<'a>) {
 /// Memory struct is one `byval` pointer; anything else is one type as usual.
 fn abi_param_types<'a>(cx: &EmitCtx<'a>, ty: &Type<'a>) -> Vec<String> {
     match ty {
-        Type::Struct { name, .. } => match cx.struct_abi(name) {
+        Type::Struct { name, .. } | Type::Enum { has_payload: true, name, .. } => match cx.struct_abi(name) {
             Abi::Direct(regs) => regs.iter().map(|r| r.to_llvm().to_string()).collect(),
             Abi::Memory => vec![format!("ptr byval(%{name}) align {}", cx.struct_align(name))],
         },
@@ -800,11 +805,13 @@ pub fn emit<'a>(module: Module<'a>) -> String {
 
     // Struct layouts, for SysV ABI classification during emission.
     let structs: StructTable = module.structs.iter().cloned().collect();
+    let unions: UnionTable = module.enum_unions.clone();
 
     let mut cx = EmitCtx {
         buf: header,
         current_fast_math_flags: FastMathFlags::None,
         structs,
+        unions,
         abi_ctr: 0,
         sret_direct: None,
     };

@@ -90,6 +90,13 @@ pub struct EnumDef<'a> {
     /// `true` if any variant carries a payload - the enum is then an aggregate
     /// (`Type::Enum { has_payload: true }`) rather than a bare scalar discriminant.
     pub has_payload: bool,
+    /// Whether an `@repr` attribute was actually written on this enum (vs. the
+    /// implicit default `i32` tag). A data-carrying enum must have this set to
+    /// cross an `@export`/`extern` boundary (see `check_export_type`) - mirrors
+    /// Rust's requirement that `#[repr(C)]` be written explicitly before an enum
+    /// is treated as a committed FFI layout, even though the layout itself
+    /// (`{ tag, payload }`) is identical either way.
+    pub has_explicit_repr: bool,
 }
 
 impl<'a> Context<'a> {

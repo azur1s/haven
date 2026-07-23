@@ -26,26 +26,57 @@ pub(crate) fn enum_agg_deps_ready<'a>(
     enums[ename].payloads.values().all(|fields| fields.iter().all(|(_, ty)| ty_ready(ty, structs)))
 }
 
-/// The discriminant repr type for an enum, from its `@repr(<int>)` attribute.
-/// Defaults to `i32` (C `int`); `@repr(C)` is an explicit spelling of that.
-/// haven has no 16-bit integer, so `u16`/`i16` are not accepted yet.
-pub(crate) fn enum_repr<'a>(attributes: &[Attribute<'a>]) -> Result<Type<'a>, String> {
+/// The `$payload` byte-blob type for a data enum's aggregate: an array sized to
+/// hold the largest variant, chunked so the array's own (LLVM/C "natural
+/// layout") alignment matches `needed_align` - the true max alignment any
+/// variant's payload requires. A plain `[N x i8]` is always align 1, which
+/// under-reports the requirement whenever a variant holds something like a
+/// pointer or `f64` (align 8): the tag/payload split would then place the
+/// payload right after a 4-byte `i32` tag at offset 4, misaligned relative to
+/// what an equivalent C `struct { int tag; union { ... }; }` would produce.
+/// Picking `i32`/`i64` chunks instead makes LLVM's own struct layout (and our
+/// `layout::size_of`/`align_of`, which mirrors it) naturally pad and align the
+/// field correctly - with no change needed at the field-access sites, since a
+/// `FieldPtr` into the payload re-bases through the variant's own payload
+/// struct type and never observes `$payload`'s element type. Alignments above
+/// 8 (e.g. a SIMD payload) aren't modeled and stay under-aligned; nothing in
+/// the language currently exercises that.
+pub(crate) fn payload_blob_type<'a>(bytes: usize, needed_align: usize) -> Type<'a> {
+    let (chunk, chunk_size) = if needed_align >= 8 {
+        (Type::Int64, 8)
+    } else if needed_align >= 4 {
+        (Type::Int32, 4)
+    } else {
+        (Type::Int8, 1)
+    };
+    let count = bytes.div_ceil(chunk_size);
+    Type::Array(Box::new(chunk), ConstVal::Lit(count))
+}
+
+/// The discriminant repr type for an enum, from its `@repr(<int>)` attribute,
+/// and whether that attribute was actually written (vs. defaulted). Defaults to
+/// `i32` (C `int`) when absent; `@repr(C)` is an explicit spelling of that same
+/// default. haven has no 16-bit integer, so `u16`/`i16` are not accepted yet.
+/// The explicitness is used to gate a data-carrying enum's `@export`/`extern`
+/// crossing (see `check_export_type`): like Rust's `#[repr(C)]`, the layout is
+/// only a committed FFI contract once the author has written `@repr` themselves.
+pub(crate) fn enum_repr<'a>(attributes: &[Attribute<'a>]) -> Result<(Type<'a>, bool), String> {
     for a in attributes {
         if a.value.name == "repr" {
             return match a.value.value.as_deref() {
-                None | Some("C") | Some("i32") => Ok(Type::Int32),
-                Some("i8")  => Ok(Type::Int8),
-                Some("i64") => Ok(Type::Int64),
-                Some("u8")  => Ok(Type::Uint8),
-                Some("u32") => Ok(Type::Uint32),
-                Some("u64") => Ok(Type::Uint64),
+                None | Some("C") | Some("i32") => Ok((Type::Int32, true)),
+                Some("i8")  => Ok((Type::Int8, true)),
+                Some("i64") => Ok((Type::Int64, true)),
+                Some("u8")  => Ok((Type::Uint8, true)),
+                Some("u32") => Ok((Type::Uint32, true)),
+                Some("u64") => Ok((Type::Uint64, true)),
                 Some(other) => Err(format!(
                     "unknown @repr('{}') on enum; expected an integer type \
                      (i8/i32/i64/u8/u32/u64) or C", other)),
             };
         }
     }
-    Ok(Type::Int32)
+    Ok((Type::Int32, false))
 }
 
 /// If `name` is an `Enum::Variant` reference to a declared enum, return the

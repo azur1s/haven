@@ -34,3 +34,13 @@ void* rt_realloc(void* ptr, uint64_t size) {
     return realloc(ptr, (size_t)size);
 }
 void rt_free(void* ptr) { free(ptr); }
+
+// Bridges between haven's `str` (a NUL-terminated C string) and a `*u8` byte
+// buffer, used by std/string. In haven's type system `str` is its own type: it
+// is neither indexable nor `ptr_cast`-able, even though at the machine level it
+// is just a bare pointer - the same representation as `*u8`. These are pure
+// reinterpretations (no copy), the same way `strlen` already reads a `str`'s
+// bytes. `rt_str_as_bytes` views a `str`'s bytes for reading; `rt_bytes_as_str`
+// hands a byte buffer back as a `str` (the caller guarantees a trailing NUL).
+uint8_t* rt_str_as_bytes(const char* s) { return (uint8_t*)s; }
+const char* rt_bytes_as_str(uint8_t* p) { return (const char*)p; }

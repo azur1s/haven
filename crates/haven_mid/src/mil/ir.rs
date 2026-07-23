@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use haven_common::ast::*;
 
@@ -252,4 +253,11 @@ pub struct Module<'a> {
     /// Interned, escape-resolved string-literal blobs. Index `i` is emitted as
     /// the global `@.str.{i}` and referenced by `Const::GlobalStr(i)`.
     pub strings: Vec<Vec<u8>>,
+    /// Data-enum aggregate name -> its variant payload-struct names (only
+    /// entries with a payload; a unit variant has none). Lets FFI classification
+    /// (`haven_back::abi`) treat an enum's `$payload` byte blob as a real union of
+    /// the variant payload structs - each variant classified independently and
+    /// merged (SysV union rule) - instead of raw bytes, which would wrongly force
+    /// every payload into the INTEGER class regardless of what it actually holds.
+    pub enum_unions: HashMap<&'a str, Vec<&'a str>>,
 }

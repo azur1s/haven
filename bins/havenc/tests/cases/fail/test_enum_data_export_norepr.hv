@@ -1,0 +1,16 @@
+//@ error: needs an explicit `@repr`
+// a data-carrying enum's `{ tag, payload }` layout is identical whether or not
+// `@repr` is written, but crossing @export/extern still requires it - mirroring
+// Rust's `#[repr(C)]` requirement, so the FFI commitment is a deliberate,
+// visible choice rather than an accident of the default.
+enum Msg { Stop, Note(i32) }
+
+@export
+proc take(m: Msg) i32 {
+    return 0;
+}
+
+@export
+proc main() i32 {
+    return 0;
+}
