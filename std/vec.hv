@@ -79,10 +79,10 @@ pub proc vec_set<T>(v: *Vec<T>, i: u64, value: T) {
 /// The pointer is valid until the next push or free.
 pub proc vec_pop<T>(v: *Vec<T>) Option<*T> {
     if (v.len == 0u64) {
-        return Option::None::<T>();
+        return Option::None::<*T>();
     }
     v.len = v.len - 1u64;
-    return Option::Some::<T>(&v.data[v.len]);
+    return Option::Some::<*T>(&v.data[v.len]);
 }
 
 /// Logically empty the Vec without touching its capacity or freeing memory.

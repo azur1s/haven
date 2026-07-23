@@ -444,10 +444,21 @@ impl<'x, 'a> Rewriter<'x, 'a> {
                 self.ty(ty, &empty);
                 self.expr(value, &empty);
             }
-            // field-less enums have nothing to rewrite: the type name is kept
-            // stable (see build_symtab) and variant refs `E::V` pass through the
-            // Var arm untouched, resolved globally in typecheck.
-            TopLevelNode::Enum { .. } => {}
+            // the enum's type name is kept stable (see build_symtab) and variant
+            // refs `E::V` pass through the Var arm untouched, resolved globally in
+            // typecheck - but a data-carrying variant's payload field types are
+            // types like any other and must be rewritten, exactly as struct
+            // fields are above. The enum's own type params shadow module type
+            // names (a payload `T` is a param, not a module type).
+            TopLevelNode::Enum { generics, variants, .. } => {
+                let gparams: HashSet<&str> = generics.iter().filter_map(|g| match g {
+                    GenericParam::Type(n) => Some(*n),
+                    GenericParam::Const(..) => None,
+                }).collect();
+                for (_, _, payload) in variants.iter_mut() {
+                    for (_, ty) in payload.iter_mut() { self.ty(ty, &gparams); }
+                }
+            }
         }
     }
 }

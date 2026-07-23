@@ -566,6 +566,66 @@ impl<'p, 'a> Mono<'p, 'a> {
             tl.span.clone(),
         )
     }
+
+    /// Rebuild a struct with its field types substituted per `b`. A concrete
+    /// generic-instance field (`buf: Vec<u8>`) collapses to its flat instance
+    /// name (`Vec$u8`) and the instance is requested, exactly as it would inside
+    /// a generic struct's own fields. Used for NON-generic structs: they are not
+    /// templates, but a field that names a concrete generic type still has to be
+    /// rewritten and its instance emitted, or downstream passes never see it. For
+    /// a struct with only scalar / plain-struct fields this is a no-op copy.
+    fn rebuild_struct(&mut self, tl: &TopLevel<'a>, b: &Bindings<'a>) -> TopLevel<'a> {
+        let TopLevelNode::Struct { name, is_pub, attributes, fields, .. } = &tl.value
+        else { unreachable!("rebuild_struct called on a non-struct") };
+
+        // instances requested while substituting these fields report against the
+        // struct's own declaration span.
+        self.cur_span = tl.span.clone();
+        let new_fields: Vec<(&'a str, Type<'a>)> = fields.iter()
+            .map(|(fname, fty)| (*fname, self.subst_ty(fty, b)))
+            .collect();
+
+        Metadata::new(
+            TopLevelNode::Struct {
+                name,
+                is_pub: *is_pub,
+                attributes: attributes.clone(),
+                generics: Vec::new(),
+                fields: new_fields,
+            },
+            tl.span.clone(),
+        )
+    }
+
+    /// Rebuild an enum with its variant payload types substituted per `b`, the
+    /// enum analogue of `rebuild_struct`: a non-generic enum carrying a concrete
+    /// generic instance in a payload (`A(Vec<u8>)`) needs that field collapsed to
+    /// its flat instance name and requested. Discriminants and field names pass
+    /// through unchanged.
+    fn rebuild_enum(&mut self, tl: &TopLevel<'a>, b: &Bindings<'a>) -> TopLevel<'a> {
+        let TopLevelNode::Enum { name, is_pub, attributes, variants, .. } = &tl.value
+        else { unreachable!("rebuild_enum called on a non-enum") };
+
+        self.cur_span = tl.span.clone();
+        let new_variants: Vec<(&'a str, Option<i64>, Vec<(&'a str, Type<'a>)>)> = variants.iter()
+            .map(|(vname, disc, payload)| (
+                *vname,
+                *disc,
+                payload.iter().map(|(fname, fty)| (*fname, self.subst_ty(fty, b))).collect(),
+            ))
+            .collect();
+
+        Metadata::new(
+            TopLevelNode::Enum {
+                name,
+                is_pub: *is_pub,
+                attributes: attributes.clone(),
+                generics: Vec::new(),
+                variants: new_variants,
+            },
+            tl.span.clone(),
+        )
+    }
 }
 
 /// Expand every generic function reachable from a concrete call site into
@@ -613,16 +673,29 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
     let empty = Bindings::empty();
 
     // rebuild concrete functions (their call sites seed the queue), keyed by
-    // original position so we can re-emit in source order.
+    // original position so we can re-emit in source order. Non-generic structs
+    // and enums are rebuilt here too (into `concrete_aggregates`): a field that
+    // names a concrete generic instance (`buf: Vec<u8>`) has to be collapsed to
+    // its flat name and requested, and doing it here - before the struct/enum
+    // queues drain below - means those requests are picked up in the same drain.
     let mut concrete: HashMap<usize, TopLevel<'a>> = HashMap::new();
+    let mut concrete_aggregates: HashMap<usize, TopLevel<'a>> = HashMap::new();
     for (i, tl) in program.iter().enumerate() {
         match &tl.value {
             TopLevelNode::Function { generics, .. } if !generics.is_empty() => {} // template
             TopLevelNode::Function { .. } => {
                 concrete.insert(i, m.rebuild_function(tl, &empty, None));
             }
-            TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. }
-            | TopLevelNode::Global { .. } | TopLevelNode::Enum { .. } => {}
+            // generic struct/enum templates are handled by the drain loops below.
+            TopLevelNode::Struct { generics, .. } if !generics.is_empty() => {}
+            TopLevelNode::Enum { generics, .. } if !generics.is_empty() => {}
+            TopLevelNode::Struct { .. } => {
+                concrete_aggregates.insert(i, m.rebuild_struct(tl, &empty));
+            }
+            TopLevelNode::Enum { .. } => {
+                concrete_aggregates.insert(i, m.rebuild_enum(tl, &empty));
+            }
+            TopLevelNode::Extern { .. } | TopLevelNode::Global { .. } => {}
         }
     }
 
@@ -842,8 +915,11 @@ pub fn monomorphize<'a>(program: &[TopLevel<'a>], arena: &'a Bump)
                     output.extend(insts);
                 }
             }
-            TopLevelNode::Extern { .. } | TopLevelNode::Struct { .. }
-            | TopLevelNode::Global { .. } | TopLevelNode::Enum { .. } => output.push(tl.clone()),
+            // a non-generic struct/enum: emit the rebuilt version, whose concrete
+            // generic-instance field types were collapsed and requested up front.
+            TopLevelNode::Struct { .. } | TopLevelNode::Enum { .. } =>
+                output.push(concrete_aggregates.remove(&i).unwrap()),
+            TopLevelNode::Extern { .. } | TopLevelNode::Global { .. } => output.push(tl.clone()),
         }
     }
 

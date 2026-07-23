@@ -1,10 +1,10 @@
 /// std/string: an owned, growable text buffer.
 ///
-/// `String` is a heap-backed, growable string of bytes, the analogue of Rust's
-/// `String`. Build one with `string_new` (or `string_from_str` to seed it from a
-/// literal), append with `string_push_byte`/`string_push_str`, compare with
-/// `string_eq`, and hand a borrowable C string to `print`/`printf` via
-/// `string_as_str`.
+/// `String` is a heap-backed, growable string, a thin wrapper over a `Vec<u8>`
+/// of bytes exactly as Rust's `String` wraps a `Vec<u8>`. Build one with
+/// `string_new` (or `string_from_str` to seed it from a literal), append with
+/// `string_push_byte`/`string_push_str`, compare with `string_eq`, and hand a
+/// borrowable C string to `print`/`printf` via `string_as_str`.
 ///
 /// A `String` owns its heap allocation and does not free itself, call
 /// `string_free` when you are done with it. A fresh `string_new` allocates
@@ -13,55 +13,33 @@
 /// ill-formed sequences, so treat the contents as raw bytes unless you know they
 /// are valid text.
 
-// Layout is a `Vec<u8>` inlined: the same three-word (data/len/cap) triple with
-// the same doubling growth (N pushes cost O(N) total). It is spelled out here
-// rather than holding an actual `Vec<u8>` field because a non-generic struct
-// cannot yet carry a concrete generic instantiation as a field type - once that
-// lands, `String` can become a thin `{ buf: Vec<u8> }` wrapper unchanged.
-//
-// Bytes are stored WITHOUT a trailing NUL - `len` is the exact byte count - and
-// the NUL a C `str` needs is written on demand by `string_as_str`. `str` is
-// haven's own type (not a `*u8`), so it cannot be indexed or `ptr_cast`; the two
-// runtime shims below reinterpret between a `str` and its raw bytes (a no-op at
-// the machine level, both are a bare pointer), and libc `strlen` recovers a
-// `str`'s length.
+// All the growth/allocation machinery is inherited from `Vec<u8>` (see std/vec);
+// this module only adds string-flavored operations, built entirely on Vec's
+// public API. Bytes are stored WITHOUT a trailing NUL - `len` is the exact byte
+// count - and the NUL a C `str` needs is written on demand by `string_as_str`.
+// `str` is haven's own type (not a `*u8`), so it cannot be indexed or `ptr_cast`;
+// the two runtime shims below reinterpret between a `str` and its raw bytes (a
+// no-op at the machine level, both are a bare pointer), and libc `strlen`
+// recovers a `str`'s length.
 
-import std/alloc { realloc, dealloc }
-import std/option { unwrap }
+import std/vec { Vec, vec_new, vec_with_capacity, vec_reserve, vec_push, vec_get, vec_get_ptr, vec_set, vec_len, vec_cap, vec_clear, vec_free }
 
 extern strlen(s: str) u64;
 extern rt_str_as_bytes(s: str) *u8;
 extern rt_bytes_as_str(p: *u8) str;
 
 pub struct String {
-    data: *u8,  /// heap buffer, or null when cap == 0
-    len: u64,   /// number of bytes stored (no trailing NUL)
-    cap: u64,   /// number of bytes the buffer can hold
+    buf: Vec<u8>,  /// the raw bytes, without a trailing NUL
 }
 
 /// An empty String that owns no allocation yet.
 pub proc string_new() String {
-    return String { data: null::<*u8>(), len: 0u64, cap: 0u64 };
-}
-
-/// Ensure the buffer can hold at least `needed` bytes, reallocating (and
-/// doubling) if it currently cannot. Does nothing when there is already room.
-pub proc string_reserve(s: *String, needed: u64) {
-    if (s.cap < needed) {
-        let new_cap: u64 = s.cap;
-        if (new_cap == 0u64) { new_cap = 8u64; }
-        while (new_cap < needed) { new_cap = new_cap * 2u64; }
-        // realloc copies the old bytes over; a null `data` makes this a malloc.
-        s.data = unwrap::<u8>(realloc::<u8>(s.data, new_cap));
-        s.cap = new_cap;
-    }
+    return String { buf: vec_new::<u8>() };
 }
 
 /// An empty String with room for `cap` bytes already reserved.
 pub proc string_with_capacity(cap: u64) String {
-    let s: String = string_new();
-    string_reserve(&s, cap);
-    return s;
+    return String { buf: vec_with_capacity::<u8>(cap) };
 }
 
 /// A String seeded with a copy of the bytes of the `str` `text`.
@@ -72,18 +50,16 @@ pub proc string_from_str(text: str) String {
 }
 
 /// The number of bytes in the String (not counting any scratch NUL).
-pub proc string_len(s: *String) u64 { return s.len; }
+pub proc string_len(s: *String) u64 { return vec_len::<u8>(&s.buf); }
 /// The number of bytes the buffer can hold before it must grow.
-pub proc string_cap(s: *String) u64 { return s.cap; }
+pub proc string_cap(s: *String) u64 { return vec_cap::<u8>(&s.buf); }
 /// Whether the String holds no bytes.
-pub proc string_is_empty(s: *String) bool { return s.len == 0u64; }
+pub proc string_is_empty(s: *String) bool { return vec_len::<u8>(&s.buf) == 0u64; }
 
 /// Append a single raw byte, growing the buffer if it is full. No UTF-8
 /// checking is done.
 pub proc string_push_byte(s: *String, b: u8) {
-    string_reserve(s, s.len + 1u64);
-    s.data[s.len] = b;
-    s.len = s.len + 1u64;
+    vec_push::<u8>(&s.buf, b);
 }
 
 /// Append a copy of the bytes of the `str` `text`.
@@ -91,24 +67,24 @@ pub proc string_push_str(s: *String, text: str) {
     let n: u64 = strlen(text);
     let src: *u8 = rt_str_as_bytes(text);
     // one reserve up front, then fill - avoids re-checking capacity per byte.
-    string_reserve(s, s.len + n);
+    vec_reserve::<u8>(&s.buf, string_len(s) + n);
     let i: u64 = 0u64;
     while (i < n) {
-        s.data[s.len] = src[i];
-        s.len = s.len + 1u64;
+        vec_push::<u8>(&s.buf, src[i]);
         i = i + 1u64;
     }
 }
 
 /// Logically empty the String without freeing or shrinking its buffer.
-pub proc string_clear(s: *String) { s.len = 0u64; }
+pub proc string_clear(s: *String) { vec_clear::<u8>(&s.buf); }
 
 /// Whether two Strings hold exactly the same bytes.
 pub proc string_eq(a: *String, b: *String) bool {
-    if (a.len != b.len) { return false; }
+    if (string_len(a) != string_len(b)) { return false; }
+    let n: u64 = string_len(a);
     let i: u64 = 0u64;
-    while (i < a.len) {
-        if (a.data[i] != b.data[i]) { return false; }
+    while (i < n) {
+        if (vec_get::<u8>(&a.buf, i) != vec_get::<u8>(&b.buf, i)) { return false; }
         i = i + 1u64;
     }
     return true;
@@ -119,17 +95,10 @@ pub proc string_eq(a: *String, b: *String) bool {
 /// buffer if needed) without changing the logical length, so the returned `str`
 /// stops exactly where the String's bytes do.
 pub proc string_as_str(s: *String) str {
-    string_reserve(s, s.len + 1u64);
-    s.data[s.len] = 0u8;
-    return rt_bytes_as_str(s.data);
+    vec_reserve::<u8>(&s.buf, string_len(s) + 1u64);
+    vec_set::<u8>(&s.buf, string_len(s), 0u8);
+    return rt_bytes_as_str(vec_get_ptr::<u8>(&s.buf, 0u64));
 }
 
 /// Release the backing allocation and reset to the empty, unallocated state.
-pub proc string_free(s: *String) {
-    if (s.cap != 0u64) {
-        dealloc::<u8>(s.data);
-    }
-    s.data = null::<*u8>();
-    s.len = 0u64;
-    s.cap = 0u64;
-}
+pub proc string_free(s: *String) { vec_free::<u8>(&s.buf); }
